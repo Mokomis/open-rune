@@ -1,0 +1,26 @@
+/.vs
+/Build
+/build
+*.user
+.vscode
+*.internal
+/.cppbuild
+/*.sln
+.DS_Store
+
+# Local Android toolchains, packaging products and signing keys
+/build-*/
+/deps/
+*.keystore
+*.jks
+*.apk
+__pycache__/
+*.pyc
+/Tools/RuneRecovery/analysis/
+/Tools/RuneRecovery/System/
+/Tools/RuneRecovery/Maps/
+/Tools/RuneRecovery/Meshes/
+/Tools/RuneRecovery/Textures/
+/Tools/RuneRecovery/Sounds/
+/Tools/RuneRecovery/Music/
+/Tools/RuneRecovery/Save/

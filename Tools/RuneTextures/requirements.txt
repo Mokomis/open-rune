@@ -1,0 +1,7 @@
+# Offline asset tooling only; never linked to the game or APK.
+torch==2.14.1
+torchvision==0.29.1
+spandrel==0.4.2
+pillow==13.0.0
+numpy==2.5.4
+scipy==1.18.1

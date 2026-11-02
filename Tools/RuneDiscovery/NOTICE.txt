@@ -1,0 +1,15 @@
+Open Rune discovery integration
+
+HyperDHT 6.35.0 is used for public discovery, Noise-authenticated admission and
+unordered encrypted messages. Bare Kit 2.5.5 embeds the runtime in Android.
+The app never downloads or executes remote JavaScript. Game data and saves are
+not part of these dependencies. This private integration is not endorsed by
+Holepunch or upstream SurrealEngine.
+
+Our integration adds bounded metadata validation, slot admission/credential
+rotation, a loopback UDP adapter, Android lifecycle/UI and a desktop launcher.
+Original dependency notices follow in the runtime/ and npm/ subdirectories.
+Bare native addons are repackaged with Android library names by bare-link.
+The Bare Kit release binary is otherwise unmodified except optional debug-symbol
+stripping during APK packaging. The pinned download and generated hashes are
+recorded by build_android.py in manifest.json.

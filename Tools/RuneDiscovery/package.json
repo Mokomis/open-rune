@@ -1,0 +1,40 @@
+{
+  "name": "open-rune-discovery",
+  "version": "1.0.0",
+  "description": "Open Rune HyperDHT discovery and unordered game datagram transport",
+  "scripts": {
+    "test": "node --test test.cjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "dependencies": {
+    "b4a": "1.9.0",
+    "bare-dgram": "1.1.1",
+    "bare-fs": "4.8.4",
+    "bare-path": "3.1.2",
+    "hypercore-crypto": "3.7.0",
+    "hyperdht": "6.35.0",
+    "sodium-universal": "5.0.1"
+  },
+  "private": true,
+  "devDependencies": {
+    "bare-link": "4.1.0",
+    "bare-pack": "3.0.2"
+  },
+  "imports": {
+    "#fs": {
+      "bare": "bare-fs",
+      "default": "./node-fs.cjs"
+    },
+    "#path": {
+      "bare": "bare-path",
+      "default": "./node-path.cjs"
+    },
+    "#dgram": {
+      "bare": "bare-dgram",
+      "default": "./node-dgram.cjs"
+    }
+  }
+}

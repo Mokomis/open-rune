@@ -1,0 +1,39 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="org.runeclassic.port">
+    <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="35" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-feature android:name="android.hardware.gamepad" android:required="false" />
+    <uses-feature android:glEsVersion="0x00030000" android:required="false" />
+    <uses-feature android:name="android.hardware.vulkan.level" android:version="1" android:required="true" />
+    <application android:appCategory="game" android:label="Open Rune" android:icon="@mipmap/open_rune" android:roundIcon="@mipmap/open_rune" android:hasCode="true" android:debuggable="true" android:extractNativeLibs="true" android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen">
+        <service android:name=".RuneHostService" android:exported="false" android:process=":multiplayer_host" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User-started private multiplayer game server, kept running for connected players" />
+        </service>
+        <service android:name=".RuneBotService$Bot1" android:exported="false" android:process=":multiplayer_bot1" />
+        <service android:name=".RuneBotService$Bot2" android:exported="false" android:process=":multiplayer_bot2" />
+        <service android:name=".RuneBotService$Bot3" android:exported="false" android:process=":multiplayer_bot3" />
+        <service android:name=".RuneBotService$Bot4" android:exported="false" android:process=":multiplayer_bot4" />
+        <service android:name=".RuneBotService$Bot5" android:exported="false" android:process=":multiplayer_bot5" />
+        <service android:name=".RuneBotService$Bot6" android:exported="false" android:process=":multiplayer_bot6" />
+        <service android:name=".RuneBotService$Bot7" android:exported="false" android:process=":multiplayer_bot7" />
+        <service android:name=".RuneBotService$Bot8" android:exported="false" android:process=":multiplayer_bot8" />
+        <service android:name=".RuneBotService$Bot9" android:exported="false" android:process=":multiplayer_bot9" />
+        <service android:name=".RuneBotService$Bot10" android:exported="false" android:process=":multiplayer_bot10" />
+        <service android:name=".RuneBotService$Bot11" android:exported="false" android:process=":multiplayer_bot11" />
+        <service android:name=".RuneBotService$Bot12" android:exported="false" android:process=":multiplayer_bot12" />
+        <service android:name=".RuneBotService$Bot13" android:exported="false" android:process=":multiplayer_bot13" />
+        <service android:name=".RuneBotService$Bot14" android:exported="false" android:process=":multiplayer_bot14" />
+        <service android:name=".RuneBotService$Bot15" android:exported="false" android:process=":multiplayer_bot15" />
+        <provider android:name=".RuneInvitationProvider" android:authorities="org.runeclassic.port.invitations" android:exported="false" android:grantUriPermissions="true" />
+        <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="sensorLandscape" android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|screenLayout|uiMode|navigation|density|fontScale">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

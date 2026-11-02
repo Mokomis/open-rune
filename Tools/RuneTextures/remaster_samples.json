@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "assets": [
+    {"identity":"Players.Ragnarragv_head", "source":"players/Ragnarragv_head.png", "master":"ragnar-head-remaster.png", "material":"skin", "regions":[
+      {"material":"hair", "polygon":[[0,0],[0.9,0],[0.85,0.38],[0.65,0.4],[0.5,0.55],[0.08,0.62],[0,0.45]]},
+      {"material":"hair", "polygon":[[0.87,0.2],[0.98,0.3],[1,0.62],[0.9,0.75],[0.82,0.55]]}
+    ]},
+    {"identity":"weapons.handaxehandaxe", "source":"weapons/handaxehandaxe.png", "master":"handaxe-remaster.png", "material":"metal", "regions":[
+      {"material":"wood", "polygon":[[0.14,0.7],[0.86,0.7],[0.86,1],[0.14,1]]},
+      {"material":"cloth", "polygon":[[0.86,0.68],[1,0.68],[1,1],[0.86,1]]}
+    ]},
+    {"identity":"Brckston.Brck14_d", "source":"Brckston/Brck14_d.png", "master":"stone-wall-remaster.png", "material":"stone", "wrap":true},
+    {"identity":"Village.VArchDoor", "source":"Village/VArchDoor.png", "master":"wooden-door-remaster.png", "material":"stone", "regions":[
+      {"material":"wood", "polygon":[[0.07,1],[0.08,0.56],[0.18,0.3],[0.39,0.08],[0.52,0.02],[0.7,0.17],[0.86,0.4],[0.94,0.67],[0.93,1]]},
+      {"material":"metal", "polygon":[[0.3,0.35],[0.71,0.35],[0.71,0.4],[0.3,0.4]]},
+      {"material":"metal", "polygon":[[0.2,0.86],[0.82,0.86],[0.82,0.92],[0.2,0.92]]}
+    ]}
+  ]
+}

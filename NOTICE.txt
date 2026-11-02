@@ -1,0 +1,55 @@
+Open Rune — modified SurrealEngine fork
+
+This is an independent, modified version of SurrealEngine, not an official
+SurrealEngine or Rune release. Original SurrealEngine copyright:
+Copyright (c) 2021-2026 Magnus Norddahl, Lupert Everett and contributors.
+Original project: https://github.com/dpjudas/SurrealEngine
+Fork: https://github.com/Mokomis/open-rune.
+
+Fork changes include native Android integration, Rune package/gameplay
+compatibility, rendering, input, audio, save handling and validation tools.
+The Android menu artwork and Open Rune logo were generated for this fork. It does not contain extracted Rune game artwork or third-party mod assets.
+The original notices remain in LICENSE.md and the bundled component notices.
+This notice does not replace or modify any component's license.
+
+Optional experimental Android builds can include Mesa Turnip and AdrenoTools
+(Copyright (c) 2021 Billy Laws, BSD-2-Clause), including liblinkernsbypass.
+Their notices are included with such builds. See Docs/RunePort/TURNIP.md for
+the selected external driver build, provenance and private-test scope.
+
+This application uses OpenAL Soft under the GNU Library General Public License
+version 2 or later, and SurrealVideo (derived from FFmpeg) under the GNU Lesser
+General Public License version 2.1 or later. Their full license texts and
+attributions are included. These libraries are separate shared libraries.
+Recipients may modify them and reverse engineer the application to debug those
+modifications as permitted by their licenses. No additional restriction on
+those rights is imposed by this fork.
+
+The distributor must provide the matching lgpl-sources.zip with the APK,
+including library sources, build instructions and replacement instructions.
+The source archive must match the libraries in the distributed build. See DISTRIBUTION.md in this notice bundle.
+
+Additional components include SDL2, SurrealGPU, SurrealWidgets, OpenMPT,
+glslang, Vulkan headers/loader, Vulkan Memory Allocator, resamplers, decoders,
+compression/font utilities, Noto fonts, AndroidX Games Frame Pacing (Swappy),
+Qualcomm Snapdragon GSR and AMD FidelityFX CAS. The licenses directory contains
+their notices; its manifest records the included files and their hashes.
+Some notices cover optional code in bundled dependency source trees.
+
+Swappy 2.1.3: Copyright 2019 The Android Open Source Project; Apache-2.0.
+The official prebuilt Swappy library is unmodified; this fork adds its own
+presentation bridge. See Swappy.txt for the full Apache license.
+Snapdragon GSR: Copyright (c) 2023 Qualcomm Innovation Center, Inc.; BSD-3-Clause.
+FidelityFX CAS: Copyright (c) 2017-2019 Advanced Micro Devices, Inc.; MIT.
+GSR and CAS shader adaptations are documented in the included component READMEs.
+Sample rate converter designed by Aleksey Vaneev of Voxengo.
+
+Optional networking builds include Mbed TLS 3.6.7 under Apache-2.0.
+MbedTLS.txt and MbedTLS-framework.txt preserve the pinned dependency licenses.
+The networking integration is part of this fork.
+
+No endorsement by the original authors or component suppliers is claimed.
+Rune game maps, models, textures, sounds, music and compiled game scripts are
+separately owned proprietary content. They are not licensed by these notices
+and must not be bundled with this engine distribution without permission.
+Users must supply their own lawfully obtained game files.

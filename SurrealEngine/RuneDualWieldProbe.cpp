@@ -1,0 +1,206 @@
+#include "Precomp.h"
+#include "Engine.h"
+#include "Utils/CommandLine.h"
+#include "RuneDualWield.h"
+#include "RuneKick.h"
+#include "RuneBash.h"
+#include "RuneTactics.h"
+#include "Package/PackageManager.h"
+#include "Package/Package.h"
+#include "Packages/Core/UClass.h"
+#include "Packages/Engine/UViewport.h"
+#include "Packages/Engine/Actors/Pawn/UPlayerPawn.h"
+#include "Packages/Engine/Actors/Inventory/UWeapon.h"
+#include "Packages/Engine/Actors/Info/ULevelInfo.h"
+#include "Packages/Engine/Resources/Level/ULevel.h"
+#include "Packages/Engine/Resources/Mesh/USkelModel.h"
+#include "VM/ScriptCall.h"
+#include "VM/Frame.h"
+#include <iostream>
+#include <stdexcept>
+void RunRuneDualWieldProbe(Engine& game) {
+ auto check=[](bool value,const char* why){if(!value)throw std::runtime_error(std::string("dual fixture: ")+why);};
+ RuneDualWield::Enabled=true;RuneTactics::Enabled=false;RuneKick::Enabled=false;RuneBash::Enabled=false;
+ auto url=game.GetDefaultURL("DM-Hildir.run");url.AddOrReplaceOption("game=RuneI.RuneSinglePlayer");
+ game.LoadMap(url);game.LoginPlayer();auto* player=game.viewport->Actor();player->bShowMenu()=false;
+ auto tick=[&](int n){for(int i=0;i<n;++i){constexpr float dt=1.f/120;game.LevelInfo->TimeSeconds()+=dt;game.TotalTime+=dt;game.Level->Tick(dt,false);}};
+ tick(60);auto origin=player->Location();vec3 forward;bool found=false;
+ for(int i=0;i<16&&!found;++i){
+  float a=i*3.14159265f/8;forward={std::cos(a),std::sin(a),0};found=true;
+  for(float distance:{45.f,65.f,85.f,150.f,160.f}) {auto end=origin+forward*distance;auto placement=player->CheckLocation(end,22,42,true);found=found && placement.first && length(placement.second-end)<.5f && player->FastTrace(end,origin);}
+ }
+ check(found,"clear fixture lane");
+ auto* enemy=UObject::TryCast<UPawn>(player->Spawn(game.packages->GetPackage("RuneI")->GetClass("DarkViking"),{},{},origin+forward*150.f,Rotator::FromVector(-forward)));check(enemy,"enemy spawn");tick(60);
+ player->DisableEvent("PlayerTick");enemy->Dual.spawnPending=false;
+ enemy->SetCollision(true,false,false);player->SetCollision(true,false,false);
+ auto give=[&](UPawn* p,const char* name,bool acquire){
+  auto* item=p->Spawn(game.packages->GetPackage("RuneI")->GetClass(name),{},{},p->Location()+vec3(0,0,100),{});check(item,"item spawn");
+  item->SetFloat("RespawnTime",0);
+  auto* copy=CallEvent(item,"SpawnCopy",{ExpressionValue::ObjectValue(p)}).ToObject();check(copy==item,"grant left a respawning world copy");
+  if(acquire)CallEvent(p,"AcquireInventory",{ExpressionValue::ObjectValue(copy)});
+  copy->GotoState("Active","Begin");return UObject::TryCast<UWeapon>(copy);
+ };
+ auto reset=[&](float distance){
+  RuneTactics::Enabled=false;
+  for(auto* p:{static_cast<UPawn*>(player),enemy}) {
+   p->Health()=10000;auto* health=static_cast<int*>(p->GetProperty("BodyPartHealth"));for(int j=0;j<15;++j)health[j]=10000;
+   p->SetBool("bSwingingHigh",false);p->SetBool("bSwingingLow",false);p->RuneKickActive=p->RuneKickPending=false;p->RuneBashPhase=0;p->RuneBashPending=false;
+   p->Dual.lastWholeBody=-1;p->Dual.guard=false;p->Dual.recovery=0;p->Dual.guardBlend=0;p->Tactics={};
+   p->Velocity()=p->Acceleration()=vec3(0);p->SetPhysics(PHYS_Walking);CallEvent(p,"WeaponDeactivate");
+  }
+  player->GotoState("PlayerWalking","Begin");player->SetByte("bAltFire",0);player->SetByte("bFire",0);
+  player->GetUObject("AnimProxy")->GotoState("Idle","Begin");
+  enemy->Enemy()=nullptr;enemy->GotoState("Waiting","Begin");
+  check(player->SetLocation(origin),"player placement");check(enemy->SetLocation(origin+forward*distance),"enemy placement");
+  player->SetRotation(Rotator::FromVector(forward));player->ViewRotation()=player->Rotation();enemy->SetRotation(Rotator::FromVector(-forward));
+ };
+ reset(150);
+ give(player,"VikingShortSword",true);auto* off=give(player,"HandAxe",false);
+ check(RuneDualWield::Equip(player,off),"player equip");
+ give(enemy,"VikingShortSword",true);auto* enemyOff=give(enemy,"HandAxe",false);
+ check(RuneDualWield::Equip(enemy,enemyOff),"Viking equip");
+ check(!RuneDualWield::OneHanded(give(player,"DwarfBattleSword",false)),"two handed exclusion");
+ std::cout<<"DUAL_EQUIPMENT_OK player="<<player->Weapon()->Name.ToString()<<" left="<<off->Name.ToString()<<" enemy="<<enemyOff->Name.ToString()<<std::endl;
+ if(commandline->HasArg("","--probe-dual-motion")) {
+  auto* m=UObject::Cast<USkelModel>(GetRuneDisplayMesh(player));
+  for(auto& j:m->Joints)std::cout<<"DUAL_JOINT name="<<j.Name.ToString()<<" parent="<<j.Parent<<" group="<<j.Group<<" flags="<<j.Flags<<'\n';
+ }
+ // Original proxy attack state supplies speed, frame notifications and real sweeps.
+ int rightDamage=0,leftDamage=0;float maxRecoveryStep=0;
+ for(int attack=0;attack<6;++attack) {
+  reset(45);tick(1);enemy->GotoState("Waiting","Begin");enemy->DisableEvent("FrameNotify");enemy->DisableEvent("SeePlayer");enemy->DisableEvent("HearNoise");enemy->DisableEvent("Bump");enemy->StateFrame->SetLatentState(LatentRunState::Stop);enemy->SetPhysics(PHYS_None);
+  auto* proxy=player->GetUObject("AnimProxy");int before=enemy->Health();
+  CallEvent(proxy,"Attack");
+  Array<mat4> previousBones;
+  for(int frame=0;frame<150;++frame) {enemy->StateFrame->SetLatentState(LatentRunState::Stop);tick(1);
+   {
+    auto* m=UObject::Cast<USkelModel>(GetRuneDisplayMesh(player));auto bones=m->ActorJointMatrices(player);
+    for(size_t j=0;j<bones.size();j++)if(m->Joints[j].Group==0 && !previousBones.empty()) {
+     float delta=length((bones[j]*vec4(0,0,0,1)).xyz()-(previousBones[j]*vec4(0,0,0,1)).xyz());
+     auto name=m->Joints[j].Name;
+     if(frame>80 && (name=="lankle" || name=="rankle" || name=="ltoe" || name=="rtoe"))maxRecoveryStep=std::max(maxRecoveryStep,delta);
+     if(commandline->HasArg("","--probe-dual-motion") && delta>3)std::cout<<"DUAL_LEG_JUMP attack="<<attack<<" frame="<<frame<<" joint="<<m->Joints[j].Name.ToString()<<" delta="<<delta<<" left="<<player->Dual.left<<" body="<<player->AnimSequence().ToString()<<" upper="<<UObject::Cast<UActor>(proxy)->AnimSequence().ToString()<<" phase="<<player->AnimFrame()<<" upperphase="<<UObject::Cast<UActor>(proxy)->AnimFrame()<<'\n';
+    }
+    previousBones=bones;
+   }
+   if(attack<2 && frame%15==0)std::cout<<"DUAL_FRAME "<<frame<<" seq="<<UObject::Cast<UActor>(proxy)->AnimSequence().ToString()<<" phase="<<UObject::Cast<UActor>(proxy)->AnimFrame()<<" left="<<player->Dual.left<<" primary="<<player->Weapon()->GetStateName().ToString()<<" off="<<off->GetStateName().ToString()<<" notifies="<<proxy->GetBool("bFrameNotifies")<<" distance="<<length(enemy->Location()-player->Location())<<" target="<<enemy->GetStateName().ToString()<<" pz="<<player->Location().z<<" ez="<<enemy->Location().z<<std::endl;}
+
+  int damage=before-enemy->Health();if(attack%2)leftDamage+=damage;else rightDamage+=damage;
+  std::cout<<"DUAL_STRIKE n="<<attack<<" damage="<<damage<<" right="<<player->Dual.rightSwings<<" left="<<player->Dual.leftSwings<<" proxy="<<proxy->GetStateName().ToString()<<std::endl;
+ }
+ std::cout<<"DUAL_RECOVERY_STEP max="<<maxRecoveryStep<<'\n';
+ check(maxRecoveryStep<5.f,"feet pop when mirrored return animation meets torso idle");
+ check(player->Dual.rightSwings>=2 && player->Dual.leftSwings>=2,"alternating committed swings");
+ check(rightDamage>0 && leftDamage>0,"both physical weapons must hit");
+ // Both mirrored hands retain fractional animation sampling.
+ reset(150);player->Dual.lastWholeBody=-1;auto* proxyActor=UObject::Cast<UActor>(player->GetUObject("AnimProxy"));
+ auto savedSequence=proxyActor->AnimSequence();float savedFrame=proxyActor->AnimFrame();auto savedBodySequence=player->AnimSequence();float savedBodyFrame=player->AnimFrame();
+ proxyActor->AnimSequence()=player->Weapon()->GetName("A_AttackStandA");proxyActor->bAnimLoop()=false;
+ auto* model=UObject::TryCast<USkelModel>(GetRuneDisplayMesh(player));
+ for(bool left:{false,true}) {
+  player->Dual.left=left;auto* weapon=left?player->Dual.offhand:player->Weapon();
+  auto grip=[&](float phase){proxyActor->AnimFrame()=phase;auto bones=model->ActorJointMatrices(player);return (RuneDualWield::Attachment(*model,player,weapon,bones)*vec4(0,0,0,1)).xyz();};
+  auto a=grip(.30f),b=grip(.31f),mid=grip(.305f);
+  check(length(b-a)>.001f && length(mid-a)>.0001f && length(mid-b)>.0001f,"hand pose snapped to keyframe");
+ }
+ // A whole-body left strike must reflect the hips and torso together, not only the torso.
+ for(auto field:{"A_AttackA","A_AttackB","A_AttackC","A_AttackD","A_AttackStandA"})for(float phase:{.1f,.3f,.5f,.7f,.9f}) {
+  auto seq=player->Weapon()->GetName(field);if(seq.IsNone())continue;
+  proxyActor->AnimSequence()=seq;proxyActor->AnimFrame()=phase;player->AnimSequence()=seq;player->AnimFrame()=phase;
+  player->Dual.left=false;auto right=model->ActorJointMatrices(player);
+  player->Dual.left=true;auto left=model->ActorJointMatrices(player);
+  for(size_t j=0;j<model->Joints.size();++j)if(model->Joints[j].Name=="chest" || model->Joints[j].Name=="pelvis" || model->Joints[j].Name=="neck")
+   {auto reflect=mat4::scale(-1,1,1);auto expected=reflect*right[j]*reflect;for(int k=0;k<16;++k)check(std::abs(left[j][k]-expected[k])<.005f,"left spin torso and hips disagree");}
+ }
+ std::cout<<"DUAL_SPIN_OK authored central skeleton preserved across both hands\n";
+ proxyActor->AnimSequence()=savedSequence;proxyActor->AnimFrame()=savedFrame;player->AnimSequence()=savedBodySequence;player->AnimFrame()=savedBodyFrame;player->Dual.left=false;
+ std::cout<<"DUAL_INTERPOLATION_OK both hands sample fractional frames\n";
+
+ // Directional weak defense, including inherited JointDamaged chains exactly once.
+ auto damage=[&](UPawn* target,UPawn* attacker){int before=target->Health();CallEvent(target,"JointDamaged",{ExpressionValue::IntValue(20),ExpressionValue::ObjectValue(attacker),ExpressionValue::VectorValue(target->Location()),ExpressionValue::VectorValue(vec3(0)),ExpressionValue::NameValue("sever"),ExpressionValue::IntValue(0)});return before-target->Health();};
+ reset(85);tick(1);int full=damage(player,enemy);
+ reset(85);player->SetByte("bAltFire",1);tick(24);check(RuneDualWield::Blocks(player,enemy),"front crossed guard");int chip=damage(player,enemy);
+ check(chip>0 && chip<full,"guard must take chip damage");
+ reset(85);player->SetByte("bAltFire",1);tick(24);player->SetRotation(Rotator::FromVector(-forward));check(!RuneDualWield::Blocks(player,enemy),"rear attack blocked");
+ std::cout<<"DUAL_GUARD_OK full="<<full<<" chip="<<chip<<std::endl;
+ reset(65);player->SetByte("bAltFire",1);tick(24);check(RuneDualWield::Blocks(player,enemy),"kick guard fixture");
+ RuneKick::CommitImpact(enemy,player,false);check(length(player->Velocity().xy())<100 && player->Dual.recovery>0,"crossed kick launches or lacks opening");
+ check(!RuneBash::Start(player),"dual wield must not shield bash");
+ std::cout<<"DUAL_KICK_OK recoil="<<length(player->RuneKickRecoil)<<std::endl;
+ // An intact owned shield is retained, hidden and cold; toggling off restores it.
+ reset(150);give(player,"VikingShield",true);tick(24);auto* shield=UObject::TryCast<UActor>(player->GetUObject("Shield"));
+ check(shield && RuneDualWield::Equipped(player) && shield->bHidden(),"shield not stowed");
+ RuneBash::Enabled=true;player->RuneBashCooldown=0;check(!RuneBash::Start(player),"stowed shield enabled bash");RuneBash::Enabled=false;
+ player->Dual.nextLeft=true;CallEvent(player->GetUObject("AnimProxy"),"Attack");tick(20);
+ check(player->Dual.left && player->Dual.offhand->GetStateName()=="Swinging","toggle fixture not mid left swing");
+ RuneDualWield::Enabled=false;tick(1);check(!player->Dual.offhand && !shield->bHidden(),"shield not restored");
+ check(off->GetStateName()!="Swinging" && player->GetUObject("AnimProxy")->GetStateName()=="Idle","toggle retained pending attack");
+ RuneDualWield::Enabled=true;tick(2);check(RuneDualWield::Equipped(player),"toggle did not re-equip");
+ auto offName=player->Dual.offhand->Name;auto enemyName=enemy->Name;
+ player->Dual.nextLeft=true;CallEvent(player->GetUObject("AnimProxy"),"Attack");tick(20);
+ check(player->Dual.left,"save fixture not left handed");
+ game.SaveGameToSlot(93,"Dual wield isolated fixture");game.LoadFromSaveFile(UnrealURL("?load=93"));game.PossessSavedPlayer();
+ player=game.viewport->Actor();enemy=nullptr;for(auto* a:game.Level->Actors)if(a && a->Name==enemyName)enemy=UObject::TryCast<UPawn>(a);
+ check(enemy,"saved enemy");tick(2);check(RuneDualWield::Equipped(player) && player->Dual.offhand->Name==offName,"offhand save restoration");
+ check(player->Dual.offhand->GetStateName()!="Swinging" && player->GetUObject("AnimProxy")->GetStateName()!="Attacking","save resumed untracked left strike");
+ check(!enemy->Dual.spawnPending,"loading must not create new enemy equipment");
+ std::cout<<"DUAL_SAVE_OK left="<<offName.ToString()<<std::endl;
+ reset(150);auto* thrown=player->Weapon();auto* spare=player->Dual.offhand;CallEvent(player,"Throw");tick(420);
+ check(thrown->GetUObject("AttachParent")!=player && player->Dual.offhand!=thrown,"thrown weapon still attached");
+ check(player->Weapon()==spare && spare->GetUObject("AttachParent")==player,"throw did not draw remaining weapon");
+ check(!RuneDualWield::Equipped(player),"throw retained phantom dual grip");
+ std::cout<<"DUAL_THROW_OK\n";
+ // Exercise a real Viking attack through tactical behavior with both hands.
+ reset(45);player->DisableEvent("PlayerTick");enemy->Enemy()=player;enemy->EnableEvent("SeePlayer");enemy->EnableEvent("FrameNotify");enemy->GotoState("Fighting","Begin");RuneTactics::Enabled=true;
+ int before=player->Health();tick(1600);
+ std::cout<<"DUAL_VIKING right="<<enemy->Dual.rightSwings<<" left="<<enemy->Dual.leftSwings<<" damage="<<before-player->Health()<<std::endl;
+ check(enemy->Dual.rightSwings>0 && enemy->Dual.leftSwings>0,"Viking did not alternate");
+ check(player->Health()<before,"Viking did not hit");
+ auto* loot=enemy->Dual.offhand;auto* mainLoot=enemy->Weapon();check(loot,"Viking offhand missing before death");
+ CallEvent(enemy,"Died",{ExpressionValue::ObjectValue(player),ExpressionValue::NameValue("sever"),ExpressionValue::VectorValue(enemy->Location())});tick(2);
+ check(loot->GetUObject("AttachParent")!=enemy && !enemy->Dual.offhand,"death offhand attachment");
+ for(int frame=0;frame<600;++frame) {
+  tick(1);
+  if(frame%120==0)for(auto* w:{mainLoot,loot})std::cout<<"DUAL_LOOT frame="<<frame<<" name="<<w->Name.ToString()<<" state="<<w->GetStateName().ToString()<<" physics="<<(int)w->Physics()<<" owner="<<(w->Owner()?w->Owner()->Name.ToString():"None")<<" attached="<<(w->GetUObject("AttachParent")!=nullptr)<<" carried="<<(bool)w->bCarriedItem()<<" xyz="<<w->Location().x<<","<<w->Location().y<<","<<w->Location().z<<" rot="<<w->Rotation().Pitch<<","<<w->Rotation().Yaw<<","<<w->Rotation().Roll<<" desired="<<w->DesiredRotation().Pitch<<","<<w->DesiredRotation().Yaw<<","<<w->DesiredRotation().Roll<<" vz="<<w->Velocity().z<<std::endl;
+ }
+ for(auto* w:{mainLoot,loot}) {
+  check(w->GetStateName()=="Pickup" && w->Physics()==PHYS_None,"death loot did not settle");
+  check(w->Rotation()==w->DesiredRotation(),"settled death loot lost its resting rotation");
+  check(!w->Owner() && !w->GetUObject("AttachParent") && !w->bCarriedItem(),"death loot not released");
+ }
+ // Empty the test player's weapon inventory, then use the real pickup animation
+ // on each corpse weapon. Do not confuse duplicate-class rejection with unusable loot.
+ RuneDualWield::Unequip(player);player->Dual.drawAfterRelease=nullptr;
+ for(auto* item=player->Inventory();item;) {
+  auto* next=item->Inventory();
+  if(auto* w=UObject::TryCast<UWeapon>(item)) {
+   if(w->GetUObject("AttachParent")==player)CallEvent(player,"DetachActorFromJoint",{ExpressionValue::IntValue(w->GetByte("AttachParentJoint"))});
+   CallEvent(player,"DeleteInventory",{ExpressionValue::ObjectValue(w)});w->Destroy();
+  }
+  item=next;
+ }
+ for(auto* actor:game.Level->Actors)if(auto* w=UObject::TryCast<UWeapon>(actor);w && w!=loot && w!=mainLoot && !w->Owner())w->Destroy();
+ for(auto* w:{mainLoot,loot}) {
+  w->LifeSpan()=0;
+  player->GotoState("PlayerWalking","Begin");player->GetUObject("AnimProxy")->GotoState("Idle","Begin");
+  player->Velocity()=player->Acceleration()=vec3(0);player->bFire()=player->bAltFire()=0;
+  check(player->SetLocation(w->Location()+vec3(25,0,player->CollisionHeight()-w->CollisionHeight()+1)),"loot pickup position");
+  player->SetPhysics(PHYS_Walking);tick(30);
+  check(CallEvent(w,"CanBeUsed",{ExpressionValue::ObjectValue(player)}).ToBool(),"corpse loot not usable");
+  CallEvent(player,"Use");tick(420);
+  check(w->Owner()==player && w->GetUObject("AttachParent")==player,"Use did not recover corpse weapon");
+  std::cout<<"DUAL_LOOT_PICKUP_OK weapon="<<w->Name.ToString()<<std::endl;
+ }
+ auto* dropped=player->Weapon();auto* remaining=player->Dual.offhand;
+ check(dropped && remaining,"two recovered weapons not equipped");
+ CallEvent(player,"DropWeapon");tick(420);
+ check(player->Weapon()==remaining && dropped->Owner()!=player && !dropped->GetUObject("AttachParent"),"drop did not draw spare or retained ghost attachment");
+ CallEvent(player,"DropWeapon");tick(420);
+ check(!player->Weapon() && !player->Dual.offhand,"last weapon drop left a held weapon");
+ auto** children=static_cast<UObject**>(player->GetProperty("JointChild"));
+ for(int j=0;j<50;++j)check(!UObject::TryCast<UWeapon>(children[j]),"empty inventory retained a belt/back weapon");
+ auto** slots=static_cast<UObject**>(player->GetProperty("StowSpot"));
+ for(int j=0;j<3;++j)check(!slots[j],"empty inventory retained a stow reference");
+ std::cout<<"DUAL_DROP_OK spare drawn; last drop leaves no carried weapons\n";
+ std::cout<<"DUAL_RUNTIME_OK equipment, physical swings, weaker front guard, kick, shield restoration, save/load, throw, Viking, death\n";
+}
