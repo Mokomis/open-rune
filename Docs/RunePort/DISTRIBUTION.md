@@ -20,7 +20,9 @@ location. The archive must match the libraries in that build; a link to the
 latest development sources alone does not replace the matching source archive.
 Recipients retain the rights granted by the library licenses, including further
 redistribution of those libraries and their sources.
-Public Open Rune source: https://github.com/Mokomis/open-rune.
+This is an unreleased v1 development preview. Public source publication is
+planned for release; preview recipients receive the matching library source
+archive with their build.
 No contribution or notification to upstream is required by this packaging process.
 
 The source archive exports only tracked files inside `SurrealVideo/` and

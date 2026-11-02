@@ -1,10 +1,12 @@
 # Open Rune
 
+**Unreleased v1 development preview. This repository stays private until the owner is ready to release v1.**
+
 <img src="Android/res/drawable-nodpi/open_rune_mark.png" alt="Open Rune" width="160">
 
 Open Rune is an independent native adaptation of [SurrealEngine](https://github.com/dpjudas/SurrealEngine) for Rune Classic. It uses the original game data and compiled UnrealScript through an extended engine; it is not a decompilation of the original executable into a complete C++ game project.
 
-**You must provide your own lawfully obtained Rune Classic game files.** Original maps, models, textures, sounds, music and gameplay scripts are not distributed here. This public repository starts with a clean source snapshot; original-game recovery material and the private development history are excluded.
+**You must provide your own lawfully obtained Rune Classic game files.** Original maps, models, textures, sounds, music and gameplay scripts are not distributed here. This clean source mirror starts with a source snapshot; original-game recovery material and the private development history are excluded.
 
 ## Platforms and features
 
@@ -27,7 +29,7 @@ Development has used AI-assisted coding and image tools, automated validation an
 - [Prediction/smoothing and measured limits](Docs/RunePort/NETWORK-PREDICTION-SMOOTHING.md)
 - [Project overview and development history](PROJECT_OVERVIEW.md)
 
-The current source uses protocol/ALPN 22, native rules 20 and snapshot schema 6. Older milestone numbers in the documentation are historical. The source repository is publicly readable and cloneable without an account; local SDKs/toolchains and separately licensed game data are still required to build and play.
+The current source uses protocol/ALPN 22, native rules 20 and snapshot schema 6. Older milestone numbers in the documentation are historical. Public source publication is deferred until v1 is ready. Local SDKs/toolchains and separately licensed game data are required to build and play.
 
 ## Licensing and distribution
 

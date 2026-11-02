@@ -4,7 +4,8 @@ This is an independent, modified version of SurrealEngine, not an official
 SurrealEngine or Rune release. Original SurrealEngine copyright:
 Copyright (c) 2021-2026 Magnus Norddahl, Lupert Everett and contributors.
 Original project: https://github.com/dpjudas/SurrealEngine
-Fork: https://github.com/Mokomis/open-rune.
+Open Rune is an unreleased development preview. Source publication is planned
+for v1. Matching library sources accompany preview distributions as described below.
 
 Fork changes include native Android integration, Rune package/gameplay
 compatibility, rendering, input, audio, save handling and validation tools.
