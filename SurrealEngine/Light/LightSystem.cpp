@@ -1,6 +1,7 @@
 
 #include "Precomp.h"
 #include "LightSystem.h"
+#include "LightingVisibilityBvh.h"
 #include "Packages/Engine/Actors/UActor.h"
 #include "Packages/Engine/Actors/Info/ULevelInfo.h"
 #include "Packages/Engine/Resources/Level/ULevel.h"
@@ -28,6 +29,8 @@ void LightSystem::OnMapLoaded()
 {
 	engine->Level->Light.FogBalls.clear();
 	engine->Level->Light.lmtextures.clear();
+    engine->Level->Light.moverVisibility.clear();
+    engine->Level->Light.visibilityBvh.reset();
 	engine->Level->Light.fogtextures.clear();
 
 	std::set<UActor*> lightset;

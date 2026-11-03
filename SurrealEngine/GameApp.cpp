@@ -5,6 +5,7 @@
 #include "Packages/Engine/Resources/Level/UModel.h"
 #include "RuneDynamicProbe.h"
 #include "RunePolyobjProbe.h"
+#include "RuneLightingVisibilityProbe.h"
 #include "RuneCampaignNativeProbe.h"
 #include "RuneCameraProbe.h"
 #include "RunePolyobjNativeProbe.h"
@@ -23,6 +24,7 @@
 #include "UI/WidgetResourceData.h"
 #include "UI/ErrorWindow/ErrorWindow.h"
 #include "UI/Launcher/LauncherWindow.h"
+#include "UI/Launcher/RuneSetupWindow.h"
 #include "Utils/File.h"
 #include "Package/PackageManager.h"
 #include "Package/Package.h"
@@ -47,6 +49,9 @@
 #include "RuneBash.h"
 void RunRuneTacticsProbe(Engine& game);
 #include "RuneTextureExport.h"
+#include "RuneSoundExport.h"
+#include "RuneSoundPackProbe.h"
+#include "Render/ShadowSettings.h"
 #ifdef OPENRUNE_ENABLE_NETWORK
 #include "RuneNetwork.h"
 #include "RuneMultiplayer.h"
@@ -55,13 +60,31 @@ void RunRuneTacticsProbe(Engine& game);
 int GameApp::main(Array<std::string> args)
 {
 	// A package probe must also run on an Android shell without an Activity.
-	if (std::find(args.begin(),args.end(),"--rune-net-bot")==args.end() && std::none_of(args.begin(),args.end(),[](const std::string& a){return a.starts_with("--rune-tactics-probe");}) && std::find(args.begin(),args.end(),"--rune-probe")==args.end() && std::find(args.begin(),args.end(),"--rune-network-probe")==args.end() && std::none_of(args.begin(),args.end(),[](const std::string& a){return a.starts_with("--rune-network-process-probe") || a.starts_with("--rune-server");}) && std::find(args.begin(),args.end(),"--rune-export-textures")==args.end()) InitWidgetResources("dark");
+	if (std::find(args.begin(),args.end(),"--rune-net-bot")==args.end() && std::none_of(args.begin(),args.end(),[](const std::string& a){return a.starts_with("--rune-tactics-probe");}) && std::find(args.begin(),args.end(),"--rune-probe")==args.end() && std::find(args.begin(),args.end(),"--rune-network-probe")==args.end() && std::none_of(args.begin(),args.end(),[](const std::string& a){return a.starts_with("--rune-network-process-probe") || a.starts_with("--rune-server");}) && std::find(args.begin(),args.end(),"--rune-export-textures")==args.end() && std::find(args.begin(),args.end(),"--rune-export-sounds")==args.end() && std::find(args.begin(),args.end(),"--sound-pack-probe")==args.end()) InitWidgetResources("dark");
 
 	try
 	{
 		CommandLine cmd(args);
 		commandline = &cmd;
         RuneAnimation::Interpolate=commandline->GetArgInt("", "--rune-animation-interpolation", 1)!=0;
+        RuneShadows::RequestedBudget=commandline->GetArgInt("","--shadow-lights",0);
+
+        if(commandline->HasArg("","--sound-pack-probe")){
+            if(!commandline->HasArg("","--save-directory"))throw std::runtime_error("Sound-pack probe requires isolated saves");
+            GameFolderSelection::UpdateList();
+            if(GameFolderSelection::Games.size()!=1||!GameFolderSelection::Games[0].IsRune())throw std::runtime_error("Pass one Rune installation");
+            Engine game(GameFolderSelection::GetLaunchInfo(0),true);
+            ProbeRuneSoundPack(game,commandline->GetArg("","--sound-probe-package",""),commandline->GetArg("","--sound-probe-output",""));return 0;
+        }
+
+        if(commandline->HasArg("", "--rune-export-sounds")) {
+            if(!commandline->HasArg("", "--save-directory"))throw std::runtime_error("Offline sound export requires isolated --save-directory");
+            GameFolderSelection::UpdateList();
+            if(GameFolderSelection::Games.size()!=1||!GameFolderSelection::Games[0].IsRune())throw std::runtime_error("Pass exactly one Rune installation");
+            Engine game(GameFolderSelection::GetLaunchInfo(0),true);
+            ExportRuneSounds(game,commandline->GetArg("","--sound-package",""),commandline->GetArg("","--sound-output",""));
+            return 0;
+        }
 
         if (commandline->HasArg("", "--rune-export-textures"))
         {
@@ -379,6 +402,7 @@ int GameApp::main(Array<std::string> args)
 					if (!level) throw std::runtime_error("Level object not found");
 					std::cout << "RUNE_LEVEL_OK map=" << map << " actors=" << level->Actors.size() << '\n';
 					if(commandline->HasArg("", "--probe-polyobj")) RunRunePolyobjProbe(probe,level);
+                    if(commandline->HasArg("","--probe-lighting-bvh"))RunRuneLightingVisibilityProbe(probe,level);
 					if(commandline->HasArg("", "--probe-particles")) RunRuneParticleProbe(probe,level);
 					if(commandline->HasArg("", "--probe-village-collision")) RunRuneVillageCollisionProbe(probe,level);
                     if(commandline->HasArg("", "--probe-water-surfaces")) for(auto& surface:level->Model->Surfaces) {
@@ -469,7 +493,7 @@ int GameApp::main(Array<std::string> args)
 			return 0;
 		}
 
-		int selectedGameIndex = LauncherWindow::ExecModal();
+		int selectedGameIndex = commandline->HasArg("", "--legacy-launcher") ? LauncherWindow::ExecModal() : RuneSetup::SelectGame();
 		if (selectedGameIndex >= 0)
 		{
 			GameLaunchInfo info = GameFolderSelection::GetLaunchInfo(selectedGameIndex);
@@ -483,7 +507,7 @@ int GameApp::main(Array<std::string> args)
         if (std::any_of(args.begin(),args.end(),[](const std::string& a){return a.starts_with("--rune-server=");}))
             RuneMultiplayer::SetHostFailure(e.what());
 #endif
-		if (std::find(args.begin(), args.end(), "--direct") != args.end() || std::find(args.begin(), args.end(), "--rune-network-probe") != args.end() || std::any_of(args.begin(),args.end(),[](const std::string& a){return a.starts_with("--rune-network-process-probe") || a.starts_with("--rune-tactics-probe");}) || std::find(args.begin(), args.end(), "--rune-export-textures") != args.end())
+		if (std::find(args.begin(), args.end(), "--direct") != args.end() || std::find(args.begin(), args.end(), "--rune-network-probe") != args.end() || std::any_of(args.begin(),args.end(),[](const std::string& a){return a.starts_with("--rune-network-process-probe") || a.starts_with("--rune-tactics-probe");}) || std::find(args.begin(), args.end(), "--rune-export-textures") != args.end() || std::find(args.begin(), args.end(), "--rune-export-sounds") != args.end() || std::find(args.begin(), args.end(), "--sound-pack-probe") != args.end())
 		{
 			std::cerr << "DIRECT_LAUNCH_FAILED: " << e.what() << '\n';
 			return 1;

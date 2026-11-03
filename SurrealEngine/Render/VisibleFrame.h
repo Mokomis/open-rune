@@ -16,6 +16,12 @@ public:
 	void ProcessShadow(const vec3& light, const vec3& target, float radius);
     void DrawShadow();
     bool ShadowView = false;
+    bool FastShadowCulling = false;
+    FrustumPlanes ShadowFrustum;
+    bool IsBoxVisible(const BBox& box)
+    {
+        return FastShadowCulling ? ShadowFrustum.testIntersecting(box) != -1 : Clipper.IsAABBVisible(box);
+    }
     void Draw();
 	void DrawCoronas();
 

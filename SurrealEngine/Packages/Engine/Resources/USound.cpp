@@ -4,6 +4,7 @@
 #include "Engine.h"
 #include "Audio/AudioSource.h"
 #include "Audio/AudioDevice.h"
+#include "Audio/RuneSoundPack.h"
 #include "Packages/Engine/Subsystems/USurrealAudioDevice.h"
 #include "kissfft/kiss_fftr.h"
 
@@ -54,6 +55,8 @@ void USound::GetSound()
 	{
 		Exception::Throw("Unsupported sound format: " + Format.ToString());
 	}
+
+	if(auto replacement=RuneSoundPack::Replacement(this,*source))source=std::move(replacement);
 
 	#define ALIGN(x, a) ((x & ~(a-1)) + a)
 	samples.resize(ALIGN(source->GetSamples(), 4));

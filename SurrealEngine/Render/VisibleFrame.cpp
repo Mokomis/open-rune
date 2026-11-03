@@ -16,6 +16,8 @@
 void VisibleFrame::Process(const vec3& location, const mat4& worldToView, const Coords& viewRotation, bool mirrorFlag, int portalDepth, const Array<PortalSpan>& portalSpans, const vec4& portalPlane)
 {
 	engine->render->Stats.Frames++;
+	ShadowView = false;
+	FastShadowCulling = false;
 
 	Device = engine->render->Device;
 	FrameCounter = engine->render->FrameCounter++;
@@ -109,7 +111,7 @@ void VisibleFrame::ProcessNode(BspNode* node)
 	//	return;
 
 	// Skip node if its AABB is not visible
-	if (node->RenderBound != -1 && !Clipper.IsAABBVisible(engine->Level->Model->Bounds[node->RenderBound]))
+	if (node->RenderBound != -1 && !IsBoxVisible(engine->Level->Model->Bounds[node->RenderBound]))
 	{
 		return;
 	}
@@ -288,8 +290,18 @@ void VisibleFrame::ProcessNodeSurface(BspNode* node, bool front)
 	}
 
 	if (ShadowView && (PolyFlags & (PF_Invisible | PF_FakeBackdrop | PF_Portal | PF_Translucent | PF_Modulated))) return;
-    if (!Clipper.CheckSurface(points, numverts, !ShadowView && (PolyFlags & PF_NoOcclude) == 0))
-		return;
+    if (FastShadowCulling)
+    {
+        BBox bounds(points[0], points[0]);
+        for (int i = 1; i < numverts; ++i)
+            for (int axis = 0; axis < 3; ++axis)
+            {
+                bounds.min[axis] = std::min(bounds.min[axis], points[i][axis]);
+                bounds.max[axis] = std::max(bounds.max[axis], points[i][axis]);
+            }
+        if (ShadowFrustum.testIntersecting(bounds) == -1) return;
+    }
+    else if (!Clipper.CheckSurface(points, numverts, !ShadowView && (PolyFlags & PF_NoOcclude) == 0)) return;
 
 	/*if (PolyFlags & PF_Portal)
 	{
@@ -564,7 +576,14 @@ void VisibleFrame::ProcessShadow(const vec3& light, const vec3& target, float ra
     Frame.WorldToView = Coords::ViewToRenderDev().ToMatrix() * ViewRotation.Inverse().ToMatrix() * Coords::Location(light).ToMatrix();
     const float extent = std::tan(radians(60.0f)) * 2.0f;
     Frame.Projection = mat4::frustum(-extent, extent, -extent, extent, 2.0f, radius, handedness::left, clipzrange::zero_positive_w);
-    Clipper.Setup(Frame.Projection * Frame.WorldToView, {}, vec4(0,0,0,1));
+    // Shadow views have no CPU occlusion intervals. Conservative frustum tests
+    // avoid rasterizing thousands of software spans; Vulkan still clips/tests
+    // the submitted caster geometry. Retain the reference path for comparison.
+#ifdef _WIN32
+    FastShadowCulling = commandline->GetArgInt("", "--shadow-frustum-cull", 1) != 0;
+#endif
+    if (FastShadowCulling) ShadowFrustum = FrustumPlanes(Frame.Projection * Frame.WorldToView);
+    else Clipper.Setup(Frame.Projection * Frame.WorldToView, {}, vec4(0,0,0,1));
     // The light's frustum, not the player's visible set, supplies occluders.
     ProcessNode(&engine->Level->Model->Nodes[0]);
 }

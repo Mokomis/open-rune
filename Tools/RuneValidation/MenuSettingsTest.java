@@ -23,6 +23,23 @@ public final class MenuSettingsTest {
         });
     }
     public static void main(String[] args) {
+        Map<String,Object> shadowDisk=new HashMap<>();
+        RuneSettings shadows=new RuneSettings(memory(shadowDisk),0,4096,false,false);
+        check(shadows.get("shadowLights")==1&&shadows.shadowBudget()==3,"Legacy three-light migration");
+        shadows.set("pixelLighting",2);shadows.set("water",2);shadows.set("ambientOcclusion",2);
+        int otherFeatures=shadows.world()&~4096;
+        for(int choice=0;choice<5;choice++) {
+            shadows.set("shadowLights",choice);
+            int expected=new int[]{1,3,4,6,8}[choice];
+            check(shadows.shadowBudget()==expected,"Shadow budget mapping");
+            check((shadows.world()&~4096)==otherFeatures,"Shadow budget corrupts water/AO bits");
+            RuneSettings reload=new RuneSettings(memory(shadowDisk),0,(Integer)shadowDisk.get("worldFeatures"),false,false);
+            check(reload.get("shadowLights")==choice&&reload.shadowBudget()==expected,"High shadow count lost on restart");
+        }
+        Map<String,Object> shadowBefore=new HashMap<>(shadowDisk);shadows.compare();
+        check(shadows.shadowBudget()==8&&shadowDisk.equals(shadowBefore),"Comparison changed shadow choice");
+        shadows.compare();shadows.set("shadowLights",1);
+        check(new RuneSettings(memory(shadowDisk),0,4096,false,false).shadowBudget()==3,"Existing saved three-light index changed");
         Map<String,Object> effectsDisk=new HashMap<>();
         RuneSettings effects=new RuneSettings(memory(effectsDisk),0,0,false,false);
         check(effects.characterChoice(false)==0 && effects.characterChoice(true)==-1,"separate roster defaults");
@@ -31,6 +48,10 @@ public final class MenuSettingsTest {
         check(restored.characterChoice(false)==267 && restored.characterChoice(true)==35,"roster persistence");
         restored.characterChoice(true,-1,0);check(restored.characterChoice(false)==267 && restored.characterChoice(true)==-1,"original campaign independent");
         effectsDisk.put("multiplayerCharacter",65535);check(restored.characterChoice(false)==0,"invalid roster fallback");
+        check(effects.get("soundRemaster")==0,"Sound effects default original");
+        effects.set("soundRemaster",1);
+        check(new RuneSettings(memory(effectsDisk),0,0,false,false).get("soundRemaster")==1,"Sound effects choice persists");
+        effects.compare();check(effects.get("soundRemaster")==1,"Visual comparison retains sound effects");effects.compare();
         check(effects.get("ambientOcclusion")==0,"Ambient occlusion defaults off");
         check(effects.get("snow")==0,"Snow defaults off");
         check(effects.get("networkDiagnostics")==0,"Diagnostics default off");

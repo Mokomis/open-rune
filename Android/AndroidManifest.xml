@@ -29,7 +29,8 @@
         <service android:name=".RuneBotService$Bot14" android:exported="false" android:process=":multiplayer_bot14" />
         <service android:name=".RuneBotService$Bot15" android:exported="false" android:process=":multiplayer_bot15" />
         <provider android:name=".RuneInvitationProvider" android:authorities="org.runeclassic.port.invitations" android:exported="false" android:grantUriPermissions="true" />
-        <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="sensorLandscape" android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|screenLayout|uiMode|navigation|density|fontScale">
+        <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="sensorLandscape" android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|screenLayout|uiMode|navigation|density|fontScale" />
+        <activity android:name=".RuneSetupActivity" android:exported="true" android:screenOrientation="sensorLandscape" android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|screenLayout|uiMode|navigation|density|fontScale">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

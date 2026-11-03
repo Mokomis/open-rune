@@ -2,7 +2,7 @@
 // Camera-independent caster visibility is supplied by VisibleFrame::ProcessShadow.
 void VulkanRenderDevice::CreateShadowImage()
 {
-    ShadowImage = ImageBuilder().Size(ShadowSize*3, ShadowSize).Format(VK_FORMAT_D32_SFLOAT)
+    ShadowImage = ImageBuilder().Size(ShadowSize*RuneShadows::Columns, ShadowSize*RuneShadows::Rows).Format(VK_FORMAT_D32_SFLOAT)
         .Usage(VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)
         .DebugName("RemasteredShadowDepth").Create(Device.get());
     ShadowView = ImageViewBuilder().Image(ShadowImage.get(), VK_FORMAT_D32_SFLOAT, VK_IMAGE_ASPECT_DEPTH_BIT)
@@ -24,7 +24,7 @@ void VulkanRenderDevice::CreateShadowPass()
             .DebugName("RemasteredShadowPass").Create(Device.get());
     };
     ShadowPass = create(false); ShadowPassContinue = create(true);
-    ShadowFramebuffer = FramebufferBuilder().RenderPass(ShadowPass.get()).Size(ShadowSize*3, ShadowSize)
+    ShadowFramebuffer = FramebufferBuilder().RenderPass(ShadowPass.get()).Size(ShadowSize*RuneShadows::Columns, ShadowSize*RuneShadows::Rows)
         .AddAttachment(ShadowView.get()).DebugName("ShadowFramebuffer").Create(Device.get());
     ShadowPipeline.MinDepth = 0.0f;
     ShadowPipeline.Pipeline = GraphicsPipelineBuilder()
@@ -35,7 +35,7 @@ void VulkanRenderDevice::CreateShadowPass()
         .AddVertexAttribute(2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(SceneVertex, TexCoord))
         .AddVertexAttribute(7, 0, VK_FORMAT_R32G32B32A32_SINT, offsetof(SceneVertex, TextureBinds))
         .Topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST).Cull(VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE)
-        .Viewport(0, 0, ShadowSize, ShadowSize).Scissor(0, 0, ShadowSize*3, ShadowSize)
+        .Viewport(0, 0, ShadowSize, ShadowSize).Scissor(0, 0, ShadowSize*RuneShadows::Columns, ShadowSize*RuneShadows::Rows)
         .AddDynamicState(VK_DYNAMIC_STATE_VIEWPORT).AddDynamicState(VK_DYNAMIC_STATE_BLEND_CONSTANTS)
         .DepthStencilEnable(true, true, false).DepthBias(true, 1.25f, 0.0f, 1.75f)
         .Layout(RenderPasses->Scene.BindlessPipelineLayout.get()).RenderPass(ShadowPass.get())
@@ -52,7 +52,7 @@ void VulkanRenderDevice::BeginShadowPass(bool continuation)
         .Execute(cmd, continuation ? VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
             VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT);
     RenderPassBegin().RenderPass(continuation || ShadowSlot>0 ? ShadowPassContinue.get() : ShadowPass.get())
-        .Framebuffer(ShadowFramebuffer.get()).RenderArea(0, 0, ShadowSize*3, ShadowSize).AddClearDepthStencil(1, 0).Execute(cmd);
+        .Framebuffer(ShadowFramebuffer.get()).RenderArea(0, 0, ShadowSize*RuneShadows::Columns, ShadowSize*RuneShadows::Rows).AddClearDepthStencil(1, 0).Execute(cmd);
     VkBuffer vb[] = { Buffers->SceneVertexBuffer->buffer }; VkDeviceSize offsets[] = {0};
     cmd->bindVertexBuffers(0, 1, vb, offsets);
     cmd->bindIndexBuffer(Buffers->SceneIndexBuffer->buffer, 0, VK_INDEX_TYPE_UINT32);
@@ -61,7 +61,7 @@ void VulkanRenderDevice::BeginShadowPass(bool continuation)
 
 bool VulkanRenderDevice::BeginLightShadow(SceneNode* frame, const vec3& light, const vec3& camera, float radius, int slot)
 {
-    if (!(WorldFeatures & 512) || DrawingShadow || radius < 2.0f || slot < 0 || slot >= 3) return false;
+    if (!(WorldFeatures & 512) || DrawingShadow || radius < 2.0f || slot < 0 || slot >= RuneShadows::Capacity) return false;
     DrawBatch(Commands->GetDrawCommands());
     if (!ScenePassDeferred && !BetweenShadows) Commands->GetDrawCommands()->endRenderPass();
     const bool reusePass=BetweenShadows && GroupShadowPasses;
@@ -69,8 +69,8 @@ bool VulkanRenderDevice::BeginLightShadow(SceneNode* frame, const vec3& light, c
     Buffers->ShadowLighting->Shadows[slot].WorldToShadow = frame->Projection * frame->WorldToView;
     Buffers->ShadowLighting->Shadows[slot].LightPosition = vec4(light, 1.0f);
     Buffers->ShadowLighting->CameraPosition = vec4(camera, 1.0f);
-    viewportdesc = {float(slot*ShadowSize), 0, float(ShadowSize), float(ShadowSize), 0, 1};
-    // All three lights write disjoint atlas tiles before any receiver samples
+    viewportdesc = {float((slot%RuneShadows::Columns)*ShadowSize), float((slot/RuneShadows::Columns)*ShadowSize), float(ShadowSize), float(ShadowSize), 0, 1};
+    // All shadow lights write disjoint atlas tiles before any receiver samples
     // them. Keep the tile memory resident rather than storing/reloading the
     // complete atlas and transitioning it to sampling between every light.
     if(!reusePass) BeginShadowPass(false);

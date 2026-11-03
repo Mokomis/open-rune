@@ -13,7 +13,7 @@ controls shown only where supported:
 | Category | Sections |
 | --- | --- |
 | Video | Display & performance; Camera & field of view; Lighting & shadows; Textures & surfaces; Effects & weather |
-| Audio | Volume; Environmental & headphone audio |
+| Audio | Volume; Sound effects; Environmental & headphone audio |
 | Controls | Look & keyboard; Controller; Vibration; Android touch controls |
 | Interface | HUD & FPS display; Android HUD style/layout editor |
 | Gameplay | Campaign difficulty/character; Combat moves; Enemy behavior |
@@ -21,7 +21,7 @@ controls shown only where supported:
 | Multiplayer connection | Connection smoothing, reached from Multiplayer |
 
 There is no Enhancements tab or shortcut. Each registered setting has one parent
-section: 47 Android settings (including custom-rate backing values), 41 Windows
+section: 48 Android settings (including custom-rate backing values), 42 Windows
 settings. Android has 18 sections including Connection; Windows has 17 because
 touch controls are omitted. The menu preserves the dark stone/amber artwork,
 uses a category sidebar, larger setting rows and a separate explanation area.

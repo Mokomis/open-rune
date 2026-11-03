@@ -4,6 +4,7 @@
 // and screenshot paths at the current native resolution and sample count.
 bool VulkanRenderDevice::Exec(std::string Cmd, OutputDevice& Ar)
 {
+    if(Cmd=="RuneShadowBudgetProbe"){RunShadowBudgetProbe();return true;}
     if(Cmd=="RuneTexturePackProbe")
     {
         Textures->ValidateReplacementUploads();return true;

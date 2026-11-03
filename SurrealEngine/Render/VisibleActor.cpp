@@ -79,7 +79,7 @@ void VisibleActor::Process(VisibleFrame* frame, UActor* actor)
 	if (!behindView && actor == engine->CameraActor) // Hide CameraActor as if bOwnerNoSee was set for it
 		return;
 
-	if (!frame->Clipper.IsAABBVisible(actor->BspInfo.BoundingBox))
+	if (!frame->IsBoxVisible(actor->BspInfo.BoundingBox))
 		return;
 
 	EDrawType dt = (EDrawType)actor->DrawType();

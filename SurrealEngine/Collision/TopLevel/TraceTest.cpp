@@ -105,7 +105,7 @@ CollisionHitList TraceTester::Trace(const vec3& from, const vec3& to, float heig
 	return uniqueHits;
 }
 
-bool TraceTester::TraceAnyHit(vec3 from, vec3 to, UActor* tracingActor, bool traceActors, bool traceWorld, bool visibilityOnly)
+bool TraceTester::TraceAnyHit(vec3 from, vec3 to, UActor* tracingActor, bool traceActors, bool traceWorld, bool visibilityOnly, TraceWorldPart part)
 {
 	if (from == to || (!traceActors && !traceWorld))
 		return false;
@@ -126,7 +126,7 @@ bool TraceTester::TraceAnyHit(vec3 from, vec3 to, UActor* tracingActor, bool tra
 	int checkCounter = NextCheckCounter();
 	ivec3 start = GetRayStartExtents(from, to);
 	ivec3 end = GetRayEndExtents(from, to);
-	if (end.x - start.x < 100 && end.y - start.y < 100 && end.z - start.z < 100)
+	if (part != TraceWorldPart::LevelOnly && end.x - start.x < 100 && end.y - start.y < 100 && end.z - start.z < 100)
 	{
 		for (int z = start.z; z < end.z; z++)
 		{
@@ -152,7 +152,7 @@ bool TraceTester::TraceAnyHit(vec3 from, vec3 to, UActor* tracingActor, bool tra
 		}
 	}
 
-	if (traceWorld)
+	if (traceWorld && part != TraceWorldPart::NonLevel)
 	{
 		TraceRayModel tracemodel;
 		return tracemodel.TraceAnyHit(GetLevelInfo(), GetLevel()->Model, origin, tmin, direction, tmax, visibilityOnly);

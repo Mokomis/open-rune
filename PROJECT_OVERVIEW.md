@@ -180,7 +180,7 @@ References: [lighting](Docs/RunePort/REMASTERED-LIGHTING.md), [materials/water](
 
 ### Modern Android interface
 
-The new interface uses an Open Rune theme with dark panels, gold trim and readable typography. Settings are organized by Video, Audio, Controls, Interface and Gameplay. Each setting has one parent section; diagnostics live under Support and connection smoothing under Multiplayer.
+The new interface uses an Open Rune theme with dark panels, gold trim and readable typography. Settings are organized by Video, Audio, Controls, Gameplay and Enhancements. Enhancements deliberately collects the fork's additions in one place; duplicated settings share one saved value rather than behaving as independent switches.
 
 The menu includes save/load and death recovery, multiplayer status, graphics comparisons, runtime readouts and third-party notices. Open Rune branding and the O/R emblem replace the earlier prototype identity in the current interface; historical artifact names and the stable Android application ID remain where needed for continuity.
 
@@ -270,7 +270,7 @@ The pipeline records source/master hashes, exact generation prompts, review note
 
 The latest prepared pack installed on the tablet contains **151 logical texture entries from 128 approved masters**, including aliases, with both 2× and 4× mip chains. The queue also has 52 held candidates with recorded concerns and 1,490 pending jobs at the paused checkpoint. Those figures describe that checkpoint, not a complete remaster of the game. Generation remains paused.
 
-Video → Textures & surfaces provides **Original / WIP 2× / WIP 4×** artwork choices. The detailed choices are explicitly labeled **WIP 2×** and **WIP 4×**. Missing, unsupported or over-budget replacements fall back to original artwork. The renderer currently has a 128 MiB additional pack-residency budget; it is not yet a comprehensive asynchronous streaming/LRU system.
+Video and Enhancements provide an **Original/WIP texture switch**. The detailed choices are explicitly labeled **WIP 2×** and **WIP 4×**. Missing, unsupported or over-budget replacements fall back to original artwork. The renderer currently has a 128 MiB additional pack-residency budget; it is not yet a comprehensive asynchronous streaming/LRU system.
 
 The four-texture pilot has been preserved separately from the newer installed pack. All derived artwork remains outside Git alongside its provenance. A suspect-texture list retains concerns for later review; cosmetic concerns are not silently erased when acceptance policy changes.
 
@@ -318,13 +318,13 @@ No development of these follow-up items is implied by this documentation update.
 
 Open Rune preserves SurrealEngine's history, credits and license terms. This is an explicitly modified fork. Its AI-authored changes stay here in accordance with the upstream project's [NO-AI Code Rule](NO-AI%20Code%20Rule.md); the fork is not presented as an upstream contribution or endorsed release.
 
-The engine license does not license Rune's maps, models, textures, music, sounds or compiled gameplay. Users must supply their own lawfully obtained Rune Classic installation. Recovered script text and binary pseudocode are private research material, not a newly licensed original-game source release. Original-game recovery material and private development history are excluded from this public source snapshot.
+The engine license does not license Rune's maps, models, textures, music, sounds or compiled gameplay. Users must supply their own lawfully obtained Rune Classic installation. Recovered script text and binary pseudocode are private research material, not a newly licensed original-game source release. The current repository is intended to remain private.
 
 Likewise, generating a texture derivative does not make the underlying game artwork part of the engine's open-source license. Original game binaries/assets, derived texture packs, user saves, personal settings, signing keys and local toolchains stay outside engine-source commits.
 
 Important attributed components include SurrealEngine, SDL2, OpenAL Soft, SurrealVideo/FFmpeg-derived code, SurrealGPU/SurrealWidgets, Vulkan tooling, OpenMPT, Noto fonts, AndroidX Games Frame Pacing, Snapdragon GSR, FidelityFX CAS, the UE Viewer Rune format reference and optional Mbed TLS. This list is explanatory, not a substitute for the actual notices.
 
-Android packaging produces the APK, readable notices, matching LGPL library sources/replacement instructions and a distribution manifest. Recipients need access to the corresponding companion materials; a link to unmatched development sources is insufficient. There is no blanket claim that adding a notice file makes every possible platform/store distribution ready.
+Android packaging produces the APK, readable notices, matching LGPL library sources/replacement instructions and a distribution manifest. Recipients need access to the corresponding companion materials; a private source link they cannot open is insufficient. There is no blanket claim that adding a notice file makes every possible platform/store distribution ready.
 
 Authoritative repository materials: [LICENSE.md](LICENSE.md), [NOTICE.txt](NOTICE.txt), [model attribution](Docs/RuneModel-THIRD-PARTY.txt), [distribution instructions](Docs/RunePort/DISTRIBUTION.md).
 

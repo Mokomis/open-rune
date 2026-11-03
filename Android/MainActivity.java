@@ -130,6 +130,7 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
     private static native void nativeSetClarity(int settings);
     private static native int nativeGetClarity();
     private static native void nativeSetWorldFeatures(int settings);
+    private static native void nativeSetShadowBudget(int budget);
     private static native void nativeSetTexturePack(int quality);
     static native String nativeTexturePackStatus();
     private static native int nativeGetWorldFeatures();
@@ -184,6 +185,9 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
     private final HashSet<Integer> heldKeys=new HashSet<>();
     private int initialWorldFeatures() {
         return getIntent().hasExtra("worldFeatures")?getIntent().getIntExtra("worldFeatures",1):getPreferences(MODE_PRIVATE).getInt("worldFeatures",1);
+    }
+    private int initialShadowBudget() {
+        return Math.max(1,Math.min(8,getIntent().getIntExtra("shadowLights",options.shadowBudget())));
     }
     private int initialTexturePack() {
         return Math.max(0,Math.min(2,getIntent().getIntExtra("texturePack",getPreferences(MODE_PRIVATE).getInt("menu.texturePack",0))));
@@ -247,11 +251,13 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
         else if(heldKeys.remove(code)&&!controllerKeys.contains(code))onNativeKeyUp(code);
     }
     private void applySettings(String changed) {
+        if(changed.equals("soundRemaster")&&menu!=null)menu.setNotice("Restart Open Rune to apply the sound effects setting.");
         // Comparison is temporary. Never overwrite saved effect selections.
         boolean original=options.comparing;
         nativeSetEnhanced(!original&&options.get("bloom")!=0);
         nativeSetClarity(original?0:options.clarity());
         nativeSetWorldFeatures(original?(options.world()&9):options.world());
+        nativeSetShadowBudget(changed.equals("initial")?initialShadowBudget():options.shadowBudget());
         nativeSetTexturePack(original?0:options.get("texturePack"));
         if(changed.equals("initial")||changed.equals("resolution")||changed.equals("scalingMethod")) {
             nativeSetUpscaleMode(gsrMode());
@@ -551,6 +557,7 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
     @Override protected String[] getArguments() {
         ArrayList<String> args=new ArrayList<>();
         args.add("--direct");
+        args.add("--sound-remaster="+getIntent().getIntExtra("soundRemaster",options==null?0:options.get("soundRemaster")));
         args.add("--snow="+(options!=null&&!options.comparing?options.get("snow"):0));
         args.add("--rune-effects="+(options!=null?options.get("fireEffects"):1));
         if(getIntent().getBooleanExtra("effectsProbe",false)&&getIntent().hasExtra("saveTest"))args.add("--probe-effects");
@@ -568,6 +575,7 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
         args.add("--visual-enhanced="+(initialEnhanced()?1:0));
         args.add("--clarity="+initialClarity());
         args.add("--world-features="+initialWorldFeatures());
+        args.add("--shadow-lights="+initialShadowBudget());
         args.add("--texture-pack="+initialTexturePack());
         args.add("--upscale="+gsrMode());
         args.add("--frame-pacing="+1);
@@ -615,6 +623,8 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
         if(getIntent().getBooleanExtra("textureProbe",false)) args.add("--probe-texture-pack");
         if(getIntent().getBooleanExtra("textureCompare",false)) args.add("--capture-texture-comparison");
         if(getIntent().getBooleanExtra("vulkanProbe",false)) args.add("--probe-vulkan");
+        if(getIntent().getBooleanExtra("shadowBudgetProbe",false)) args.add("--probe-shadow-budget");
+        if(getIntent().getBooleanExtra("traceShadows",false)) args.add("--trace-shadows");
         if(getIntent().hasExtra("opaqueEarlyDepth")) args.add("--render-opaque-early-depth="+getIntent().getIntExtra("opaqueEarlyDepth",1));
         if(getIntent().hasExtra("fullPrecisionLighting")) args.add("--render-full-precision-lighting="+getIntent().getIntExtra("fullPrecisionLighting",0));
         if(getIntent().hasExtra("shadowReceivers")) args.add("--render-shadow-receivers="+getIntent().getIntExtra("shadowReceivers",1));
@@ -622,6 +632,9 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
         if(getIntent().hasExtra("groupShadows")) args.add("--render-group-shadows="+getIntent().getIntExtra("groupShadows",0));
         if(getIntent().hasExtra("packedHdr")) args.add("--render-packed-hdr="+getIntent().getIntExtra("packedHdr",0));
         if(getIntent().hasExtra("uniformShadowData")) args.add("--render-uniform-shadow-data="+getIntent().getIntExtra("uniformShadowData",0));
+        if(getIntent().hasExtra("moverVisibilityCache")&&getIntent().hasExtra("saveTest")) args.add("--render-mover-visibility-cache="+getIntent().getIntExtra("moverVisibilityCache",1));
+        if(getIntent().hasExtra("fastWorldVisibility")&&getIntent().hasExtra("saveTest")) args.add("--render-fast-world-visibility="+getIntent().getIntExtra("fastWorldVisibility",1));
+        if(getIntent().hasExtra("liftProbe")&&getIntent().hasExtra("saveTest")) args.add("--probe-lift="+getIntent().getStringExtra("liftProbe"));
         if(getIntent().hasExtra("omitHit")) args.add("--render-omit-hit="+getIntent().getIntExtra("omitHit",0));
         if(getIntent().hasExtra("inpassResolve")) args.add("--render-inpass-resolve="+getIntent().getIntExtra("inpassResolve",0));
         if(getIntent().hasExtra("discardHit")) args.add("--render-discard-hit="+getIntent().getIntExtra("discardHit",1));

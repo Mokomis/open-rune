@@ -10,6 +10,7 @@
 #include "Packages/Engine/Resources/Level/UPolys.h"
 #include "VM/Frame.h"
 #include "VM/ScriptCall.h"
+#include "Light/WorldVisibilityCache.h"
 #include <iostream>
 #include <stdexcept>
 
@@ -73,8 +74,19 @@ inline void RunRunePolyobjProbe(Engine& game, ULevel* level)
     } cleanup{fixture};
     auto contains = [](const auto& hits, UActor* actor)
     { for (const auto& hit : hits) if (hit.Actor == actor) return true; return false; };
+    WorldVisibilityCache visibilityCache;
+    int visibilityChecks=0, worldChecks=0;
+    auto visibility = [&](const vec3& start, const vec3& end) {
+        bool reference=level->Collision.TraceAnyHit(start,end,nullptr,false,true,true);
+        visibilityCache.Begin();
+        bool cached=visibilityCache.Trace(start,end,
+            [&] { ++worldChecks;return level->Collision.TraceAnyHit(start,end,nullptr,false,true,true,TraceWorldPart::LevelOnly); },
+            [&] { return level->Collision.TraceAnyHit(start,end,nullptr,false,true,true,TraceWorldPart::NonLevel); });
+        visibilityCache.End();++visibilityChecks;
+        if(reference!=cached)throw std::runtime_error("Cached world/mover visibility differs from complete ray");
+    };
     auto ray = [&](const vec3& start, const vec3& end, float height = 0, float radius = 0)
-    { return level->Collision.Trace(start, end, height, radius, true, true, false); };
+    { visibility(start,end);return level->Collision.Trace(start, end, height, radius, true, true, false); };
 
     vec3 faceCenter, faceNormal;
     bool foundFace = false;
@@ -168,6 +180,15 @@ inline void RunRunePolyobjProbe(Engine& game, ULevel* level)
         length(fixture->BspInfo.BoundingBox.center() - expected.center()) > 0.02f)
         throw std::runtime_error("Moving Polyobj left stale render/collision bounds");
     std::cout << "RUNE_POLYOBJ_GLIDE_OK smooth_quarter=1 stale_collision=0 moved_bounds=1\n";
+    // Repeat fixed endpoints through both occupied and vacated positions. The
+    // immutable BSP memo must not conceal a moving occluder's current state.
+    for(int i=0;i<12;++i) {
+        level->Collision.RemoveFromCollision(fixture);
+        fixture->Location()=i%2 ? start : destination;
+        level->Collision.AddToCollision(fixture);
+        visibility(faceCenter+faceNormal*64.f,faceCenter-faceNormal*64.f);
+    }
+    std::cout<<"RUNE_VISIBILITY_SPLIT_OK checks="<<visibilityChecks<<" static_traces="<<worldChecks<<" moving_occluder_updates=1\n";
 
     auto* legacy = UObject::Cast<UMover>(transient->NewObject("RuneLegacyMoverControl",
         game.packages->GetPackage("Engine")->GetClass("Mover"), ObjectFlags::Transient));
@@ -191,4 +212,61 @@ inline void RunRunePolyobjProbe(Engine& game, ULevel* level)
         legacy->PrevKeyNum()!=1 || length(legacy->GetVector("RealPosition")-legacy->Location())>0.02f)
         throw std::runtime_error("Legacy Mover completion changed");
     std::cout << "RUNE_POLYOBJ_LEGACY_MOVER_OK keys=8 quarter=1 endpoint=1\n";
+
+    // Original Engine.dll's physMovingBrush commits alpha only after movement,
+    // completes at exactly 1 (not just overshoot), and clears interpolation
+    // before calling the script. The original InterpolateEnd may start another
+    // leg immediately; that new state must survive and receive the spare time.
+    // Exercise the real recovered script on both brush classes, without saves.
+    auto completionContract = [&](UBrush* brush) {
+        auto* positions = static_cast<vec3*>(brush->GetProperty("KeyPos"));
+        auto* rotations = static_cast<Rotator*>(brush->GetProperty("KeyRot"));
+        auto* times = static_cast<float*>(brush->GetProperty("MoveTime"));
+        const vec3 origin = brush->Location();
+        const Rotator rotation = brush->Rotation();
+        auto* function = FindEventFunction(brush, "InterpolateTo");
+        auto begin = [&](int keys) {
+            brush->Location() = origin; brush->Rotation() = rotation;
+            brush->SetVector("BasePos", origin); brush->SetRotator("BaseRot", rotation);
+            brush->SetByte("KeyNum", 0); brush->SetByte("PrevKeyNum", 0);
+            brush->SetByte("NumKeys", keys); brush->SetInt("ClientUpdate", 0);
+            brush->SetByte(IsRunePolyobj(brush) ? "PolyObjGlideType" : "MoverGlideType", 0);
+            positions[0] = vec3(0); positions[1] = vec3(40,20,10); positions[2] = vec3(80,40,20);
+            for (int i=0; i<3; ++i) { rotations[i]=Rotator(0,0,0); times[i]=2.0f; }
+            Array<ExpressionValue> parameters = {ExpressionValue::IntValue(1), ExpressionValue::FloatValue(1.0f)};
+            Frame::Call(function, brush, {parameters.data(), parameters.size()});
+        };
+        begin(2);
+        brush->TickMovingBrush(0.0f);
+        if (brush->PhysAlpha()!=0 || length(brush->Location()-origin)>0.02f || !brush->bInterpolating())
+            throw std::runtime_error("Moving brush consumed a zero-length tick");
+        brush->TickMovingBrush(1.0f);
+        if (brush->bInterpolating() || brush->GetByte("PrevKeyNum")!=1 ||
+            brush->GetInt("ClientUpdate")!=0 || brush->PhysAlpha()!=0 ||
+            length(brush->Location()-(origin+positions[1]))>0.02f)
+            throw std::runtime_error("Exact endpoint failed to dispatch moving-brush completion");
+        brush->TickMovingBrush(0.25f);
+        if (brush->GetInt("ClientUpdate")!=0 || length(brush->Location()-(origin+positions[1]))>0.02f)
+            throw std::runtime_error("Completed moving brush dispatched twice or kept moving");
+
+        begin(3);
+        brush->TickMovingBrush(1.0f);
+        if (!brush->bInterpolating() || brush->GetByte("KeyNum")!=2 || brush->GetByte("PrevKeyNum")!=1 ||
+            brush->PhysAlpha()!=0 || brush->GetInt("ClientUpdate")!=1 ||
+            length(brush->Location()-(origin+positions[1]))>0.02f)
+            throw std::runtime_error("Completion overwrote the next leg started by the script");
+
+        begin(3);
+        brush->TickMovingBrush(1.25f);
+        if (!brush->bInterpolating() || brush->GetByte("KeyNum")!=2 || brush->GetByte("PrevKeyNum")!=1 ||
+            std::abs(brush->PhysAlpha()-0.125f)>0.00001f || brush->GetInt("ClientUpdate")!=1)
+            throw std::runtime_error("Moving brush lost leftover time or reused the previous leg rate");
+        brush->TickMovingBrush(1.75f);
+        if (brush->bInterpolating() || brush->GetByte("PrevKeyNum")!=2 || brush->GetInt("ClientUpdate")!=0 ||
+            length(brush->Location()-(origin+positions[2]))>0.02f)
+            throw std::runtime_error("Chained moving brush failed to complete its final leg");
+    };
+    completionContract(fixture);
+    completionContract(legacy);
+    std::cout << "RUNE_MOVING_BRUSH_COMPLETION_OK classes=2 zero_tick=1 exact_endpoint=1 callback_reentry=1 leftover_rate=1 terminal_once=1\n";
 }

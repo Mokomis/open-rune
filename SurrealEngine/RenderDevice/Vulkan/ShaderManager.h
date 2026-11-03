@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <surrealgpu/vulkanobjects.h>
 #include "Math/mat.h"
+#include "Render/ShadowSettings.h"
 
 class VulkanRenderDevice;
 
@@ -37,19 +38,19 @@ static_assert(sizeof(MeshLightPacket) == 416, "Mesh light buffer layout");
 // Only mat4/vec4 members: identical std140 uniform and std430 storage layouts.
 struct ShadowLightingPacket
 {
-    struct { mat4 WorldToShadow; vec4 LightPosition; } Shadows[3];
+    struct { mat4 WorldToShadow; vec4 LightPosition; } Shadows[RuneShadows::Capacity];
     vec4 CameraPosition; // w: remastered mode
     mat4 WaterWorldToClip;
     vec4 WaterParameters; // time, plane height, valid reflection, reserved
     vec4 ContactCenters[4]; // xyz ground hit, w inverse squared footprint radius
     vec4 ContactPlanes[4]; // xyz ground normal, w strength (zero disables)
 };
-static_assert(sizeof(ShadowLightingPacket) == 464, "Shadow uniform layout");
-static_assert(offsetof(ShadowLightingPacket, CameraPosition) == 240, "Shadow camera offset");
-static_assert(offsetof(ShadowLightingPacket, WaterWorldToClip) == 256, "Water transform offset");
-static_assert(offsetof(ShadowLightingPacket, WaterParameters) == 320, "Water parameters offset");
-static_assert(offsetof(ShadowLightingPacket, ContactCenters) == 336, "Contact centers offset");
-static_assert(offsetof(ShadowLightingPacket, ContactPlanes) == 400, "Contact planes offset");
+static_assert(sizeof(ShadowLightingPacket) == 80*RuneShadows::Capacity+224, "Shadow uniform layout");
+static_assert(offsetof(ShadowLightingPacket, CameraPosition) == 80*RuneShadows::Capacity, "Shadow camera offset");
+static_assert(offsetof(ShadowLightingPacket, WaterWorldToClip) == 80*RuneShadows::Capacity+16, "Water transform offset");
+static_assert(offsetof(ShadowLightingPacket, WaterParameters) == 80*RuneShadows::Capacity+80, "Water parameters offset");
+static_assert(offsetof(ShadowLightingPacket, ContactCenters) == 80*RuneShadows::Capacity+96, "Contact centers offset");
+static_assert(offsetof(ShadowLightingPacket, ContactPlanes) == 80*RuneShadows::Capacity+160, "Contact planes offset");
 
 struct ScenePushConstants
 {

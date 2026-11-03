@@ -16,10 +16,11 @@ add("pixelLighting","Lighting mode","Remastered adds nearby moving shadows, stro
 add("materialMaps","Material maps","Generated normal and roughness detail for Remastered lighting.",{"Original","Enhanced"},0,0,1);
 add("texturePack","Texture artwork","Work-in-progress remastered artwork. Unfinished or unavailable textures keep their original artwork.",{"Original","WIP 2×","WIP 4×"},0,0,2);
 add("water","Water reflections","Approximate adds ripples and an environment sheen. Full scene reflects nearby scenery at higher cost.",{"Original","Approximate","Full scene"},0,0,2);
-add("shadowLights","Shadow-casting lights","Remastered lighting: one or three nearby lights cast moving shadows.",{"One nearby","Three nearby"},0,0,1);
+add("shadowLights","Shadow-casting lights","Maximum nearby shadow-casting lights. Higher counts cost more rendering time. Requires Remastered lighting.",{"One nearby","Three nearby","Four nearby","Six nearby","Eight nearby"},0,0,4);
 add("ambientOcclusion","Ambient occlusion","Experimental contact shading around corners and objects. Off is recommended at native resolution until this effect is faster.",{"Off","Low","Medium","High"},0,0,3);
 add("detail","Surface detail","Generated relief on stone and wood. High strengthens shading.",{"Off","Low","Medium","High"},0,0,3);
 add("depth","Surface depth","Parallax on stone and wood. High uses 16 steps and costs more GPU time.",{"Off","Low","Medium","High"},0,0,3);
+add("soundRemaster","Sound effects","Layered gameplay sounds (WIP). Restart Open Rune to apply. Missing or incompatible replacements use the original sound.",{"Original","Remastered (WIP)"},0,0,1);
 add("environment","Environmental sound","Room reverb and sound muffling through walls.",{"Off","On"},1,0,1);
 add("hrtf","Headphone spatial audio","Directional binaural audio; best with stereo headphones.",{"Off","On"},0,0,1);
 add("master","Master volume","Overall game volume.",{},100,0,100);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "VisibleFrame.h"
+#include "ShadowSettings.h"
 
 class RenderDevice;
 class UWindow;
@@ -84,7 +85,7 @@ public:
 	} Stats;
 
 	VisibleFrame MainFrame;
-    UActor* ShadowLights[3] = {};
+    UActor* ShadowLights[RuneShadows::Capacity] = {};
     std::unordered_map<UTexture*,int> WaterMaterialKinds;
 
 private:

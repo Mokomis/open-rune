@@ -40,10 +40,11 @@ final class RuneSettings {
         add("materialMaps","Material maps","Generated normal and roughness detail for Remastered lighting.",new String[]{"Original","Enhanced"},0);
         add("texturePack","Texture artwork","Work-in-progress remastered artwork. Unfinished or unavailable textures keep their original artwork.",new String[]{"Original","WIP 2×","WIP 4×"},0);
         add("water","Water reflections","Approximate adds ripples and an environment sheen. Full scene reflects nearby scenery at higher cost.",new String[]{"Original","Approximate","Full scene"},0);
-        add("shadowLights","Shadow-casting lights","Remastered lighting: one or three nearby lights cast moving shadows.",new String[]{"One nearby","Three nearby"},0);
+        add("shadowLights","Shadow-casting lights","Maximum nearby shadow-casting lights. Higher counts cost more rendering time. Requires Remastered lighting.",new String[]{"One nearby","Three nearby","Four nearby","Six nearby","Eight nearby"},0);
         add("ambientOcclusion","Ambient occlusion","Experimental contact shading around corners and objects. Off is recommended at native resolution until this effect is faster.",LEVELS,0);
         add("detail","Surface detail","Generated relief on stone and wood. High strengthens shading.",LEVELS,0);
         add("depth","Surface depth","Parallax on stone and wood. High uses 16 steps and costs more GPU time.",LEVELS,0);
+        add("soundRemaster","Sound effects","Layered gameplay sounds (WIP). Restart Open Rune to apply. Missing or incompatible replacements use the original sound.",new String[]{"Original","Remastered (WIP)"},0);
         add("environment","Environmental sound","Room reverb and sound muffling through walls.",SWITCH,1);
         add("hrtf","Headphone spatial audio","Directional binaural audio; best with stereo headphones.",SWITCH,0);
         add("master","Master volume","Overall game volume.",null,100);
@@ -79,7 +80,8 @@ final class RuneSettings {
         items.get("pixelLighting").value=(world&512)!=0?2:(world>>8)&1;
         items.get("materialMaps").value=(world>>10)&1;
         items.get("water").value=(world&2048)==0?0:(world&8192)!=0?2:1;
-        items.get("shadowLights").value=(world>>12)&1;
+        Item shadowLights=items.get("shadowLights");
+        shadowLights.value=bounded(shadowLights,prefs.getInt("menu.shadowLights",(world>>12)&1));
         items.get("ambientOcclusion").value=(world>>14)&3;
         items.get("environment").value=world&1;
         items.get("hrtf").value=(world>>3)&1;
@@ -159,7 +161,8 @@ final class RuneSettings {
     int clarity() { return get("sharp")|(get("filter")<<2)|(get("shadow")<<3); }
     int lightingBits() { return get("pixelLighting")==2?768:get("pixelLighting")<<8; }
     int waterBits() { return get("water")==0?0:2048|(get("water")==2?8192:0); }
-    int world() { return get("environment")|(get("hrtf")<<3)|(get("detail")>0?2:0)|(get("depth")>0?4:0)|(get("detail")<<4)|(get("depth")<<6)|lightingBits()|(get("materialMaps")<<10)|waterBits()|(get("shadowLights")<<12)|(get("ambientOcclusion")<<14); }
+    int shadowBudget() { return new int[]{1,3,4,6,8}[get("shadowLights")]; }
+    int world() { return get("environment")|(get("hrtf")<<3)|(get("detail")>0?2:0)|(get("depth")>0?4:0)|(get("detail")<<4)|(get("depth")<<6)|lightingBits()|(get("materialMaps")<<10)|waterBits()|(get("shadowLights")>0?4096:0)|(get("ambientOcclusion")<<14); }
     void compare() { comparing=!comparing; if(listener!=null) listener.changed("compare"); }
     void reset(String[] keys) {
         for(String key:keys) { Item i=items.get(key); set(key,i.defaultValue); }

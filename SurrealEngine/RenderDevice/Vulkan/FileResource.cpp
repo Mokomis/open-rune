@@ -1,6 +1,7 @@
 
 #include "Precomp.h"
 #include "FileResource.h"
+#include "Render/ShadowSettings.h"
 #include "sgsr/SGSRShader.h"
 #include "cas/CASShader.h"
 
@@ -91,7 +92,7 @@ std::string FileResource::readAllText(const std::string& filename)
     }
 	else if (filename == "shaders/Scene.frag")
 	{
-		return R"(
+		return std::string("#define SHADOW_CAPACITY ")+std::to_string(RuneShadows::Capacity)+"\n#define SHADOW_COLUMNS "+std::to_string(RuneShadows::Columns)+"\n#define SHADOW_ROWS "+std::to_string(RuneShadows::Rows)+"\n#define SHADOW_SLOT_BITS "+std::to_string(RuneShadows::Slots::Bits)+"\n#define SHADOW_SLOT_MASK "+std::to_string(RuneShadows::Slots::Mask)+"u\n"+R"(
 			layout(binding = 0) uniform sampler2D textures[];
 
 			layout(location = 0) flat in uint flags;
@@ -117,7 +118,7 @@ std::string FileResource::readAllText(const std::string& filename)
             #else
             layout(std430, set=1, binding=1) readonly buffer ShadowLightingBuffer {
             #endif
-                ShadowLight shadowLights[3]; vec4 lightingCamera; mat4 waterWorldToClip; vec4 waterParameters;
+                ShadowLight shadowLights[SHADOW_CAPACITY]; vec4 lightingCamera; mat4 waterWorldToClip; vec4 waterParameters;
                 vec4 contactCenters[4]; vec4 contactPlanes[4];
             };
             layout(set=1, binding=2) uniform sampler2D dynamicShadow;
@@ -159,7 +160,7 @@ std::string FileResource::readAllText(const std::string& filename)
 
             float movingShadow(int slot, vec3 position, vec3 N, vec3 lightDirection)
             {
-                if(slot<0 || shadowLights[slot].position.w<0.5) return 1.0;
+                if(slot<0 || slot>=SHADOW_CAPACITY || shadowLights[slot].position.w<0.5) return 1.0;
                 vec3 lightPosition=shadowLights[slot].position.xyz;
                 #ifdef CULL_LIGHTING
                 vec3 L=lightDirection;
@@ -173,7 +174,7 @@ std::string FileResource::readAllText(const std::string& filename)
                 vec3 q=projected.xyz/projected.w;
                 if(q.z<=0.0 || q.z>=1.0 || max(abs(q.x),abs(q.y))>=1.0) return 1.0;
                 vec2 uv=q.xy*0.5+0.5;
-                uv.x=(uv.x+float(slot))/3.0;
+                uv=(uv+vec2(float(slot%SHADOW_COLUMNS),float(slot/SHADOW_COLUMNS)))/vec2(SHADOW_COLUMNS,SHADOW_ROWS);
                 // Gather the adjacent depth texels in one texture instruction,
                 // then bilinearly filter the comparisons (portable D32 PCF).
                 vec2 f=fract(uv*vec2(textureSize(dynamicShadow,0))-0.5);
@@ -262,7 +263,7 @@ std::string FileResource::readAllText(const std::string& filename)
                         if(remastered())
                         {
                             LIGHTP vec3 lightDir=L*inversesqrt(max(lensqr,1e-12));
-                            int slot=((shadowIndex>>(i*2))&3)-1;
+                            int slot=int((uint(shadowIndex)>>(i*SHADOW_SLOT_BITS))&SHADOW_SLOT_MASK)-1;
                             LIGHTP float visibility=movingShadow(slot,meshPosition,N,lightDir);
                             LIGHTP vec3 energy=light*falloff*visibility;
                             total+=energy*((flags & 131072u)!=0u ? abs(d) : max(d,0.0))*localLightBoost(v);
@@ -365,7 +366,7 @@ std::string FileResource::readAllText(const std::string& filename)
                         LIGHTP float wave = lightColor.w == 0.0 ? 1.0 : 0.6+0.4*sin(distance*0.04+time*lightColor.w);
                         if(remastered())
                         {
-                            int slot=((meta.w>>(i*2))&3)-1;
+                            int slot=int((uint(meta.w)>>(i*SHADOW_SLOT_BITS))&SHADOW_SLOT_MASK)-1;
                             LIGHTP float visibility=movingShadow(slot,position,N,L/distance);
                             LIGHTP vec3 energy=lightColor.rgb*falloff*wave*shadow*visibility;
                             total+=energy*angle*localLightBoost(unitDistance);

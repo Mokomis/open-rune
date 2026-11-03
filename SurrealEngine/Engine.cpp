@@ -13,6 +13,7 @@
 #include "RuneKick.h"
 #include "RuneBash.h"
 #include "RuneBloodlust.h"
+#include "RuneLiftProbe.h"
 #ifdef OPENRUNE_ENABLE_NETWORK
 #include "RuneMultiplayer.h"
 #endif
@@ -227,6 +228,7 @@ void Engine::Run()
 	vec3 forwardProbeStart(0.0f);
 	int fireProbeFrame=commandline->GetArgInt("", "--probe-fire-frame", 0);
 	int probeFrame=0;
+    RuneLiftProbe liftProbe;
 	int profileFrames=commandline->GetArgInt("", "--profile-frames", 0);
 	RuneParticleProfile::Milliseconds = {};
 	std::vector<double> profileTimes;
@@ -267,7 +269,10 @@ void Engine::Run()
         RuneDesktopMenu::Start(*this,titleIdle);
     }
 #endif
-	int menuMetadataFrame=0;
+	// Publish the save directory on the first frame, before Combat::Ready is
+	// exposed to the menu. Covered title screens run at 10 Hz, so waiting sixty
+	// frames allowed an enabled Load page to cache six seconds of empty metadata.
+	int menuMetadataFrame=59;
 	int menuTargetFps=120;
 	bool menuPacing=true;
 	int fireHoldFrames=commandline->GetArgInt("", "--probe-fire-hold", 60);
@@ -639,6 +644,7 @@ void Engine::Run()
 		UpdateAudio();
 
 		viewport->SetViewportRect(0, 0, engine->window->GetPixelWidth(), engine->window->GetPixelHeight());
+        liftProbe.Tick(*this,probeFrame);
 		auto profileDrawStart=std::chrono::steady_clock::now();
 		render->DrawGame(levelElapsed);
 		auto profileDrawEnd=std::chrono::steady_clock::now();
@@ -687,10 +693,11 @@ void Engine::Run()
             OutputDevice output;
             if(!window->GetRenderDevice()->Exec("RuneTexturePackProbe",output)) Exception::Throw("Texture probe requires Vulkan");
         }
-		if (probeFrame == 120 && commandline->HasArg("", "--probe-vulkan"))
+		if (probeFrame == 120 && (commandline->HasArg("", "--probe-vulkan")||commandline->HasArg("","--probe-shadow-budget")))
 		{
+			if(!commandline->HasArg("","--save-directory"))Exception::Throw("GPU probe requires isolated saves");
 			OutputDevice output;
-			if (!window->GetRenderDevice()->Exec("RuneVulkanProbe", output))
+			if (!window->GetRenderDevice()->Exec(commandline->HasArg("","--probe-shadow-budget")?"RuneShadowBudgetProbe":"RuneVulkanProbe", output))
 				Exception::Throw("Vulkan probe requires Vulkan renderer");
 		}
 		if (commandline->HasArg("", "--probe-camera") && LaunchInfo.IsRune() && viewport->Actor() && probeFrame%60==0)

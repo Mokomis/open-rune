@@ -40,10 +40,12 @@ void RenderSubsystem::DrawScene()
         {
             engine->Level->Light.UpdateLightList(player);
             std::vector<std::pair<float,UActor*>> candidates;
+            const int budget=RuneShadows::Budget(Device->WorldFeatures);
+            const int candidateLimit=budget>3?32:8;
             int count=0;
             for(UActor* light:player->TouchingLights.List)
             {
-                if(++count>8) break;
+                if(++count>candidateLimit) break;
                 float radius=light->WorldLightRadius();
                 vec3 delta=light->Location()-player->Location(); float dist2=dot(delta,delta);
                 if(radius<8 || dist2<64 || dist2>900.0f*900.0f) continue;
@@ -54,8 +56,9 @@ void RenderSubsystem::DrawScene()
                 if(score>0.005f) candidates.emplace_back(score,light);
             }
             std::stable_sort(candidates.begin(),candidates.end(),[](const auto& a,const auto& b){return a.first>b.first;});
-            int limit=std::min(int(candidates.size()),(Device->WorldFeatures&4096)?3:1);
-            for(int slot=0;slot<3;++slot)
+            int limit=std::min(int(candidates.size()),budget);
+            if(commandline->HasArg("","--trace-shadows")){static int lastBudget=-1,lastLimit=-1;if(lastBudget!=budget||lastLimit!=limit){LogMessage("RUNE_SHADOW_BUDGET requested="+std::to_string(budget)+" candidates="+std::to_string(candidates.size())+" active="+std::to_string(limit));lastBudget=budget;lastLimit=limit;}}
+            for(int slot=0;slot<RuneShadows::Capacity;++slot)
             {
                 UActor* light=slot<limit?candidates[slot].second:nullptr;
                 bool changed=ShadowLights[slot]!=light; ShadowLights[slot]=light;

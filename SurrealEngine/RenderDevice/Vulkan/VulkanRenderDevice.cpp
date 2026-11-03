@@ -17,6 +17,7 @@
 #include <stdexcept>
 #include "Package/Package.h"
 #include <cctype>
+#include <bit>
 
 VulkanRenderDevice::VulkanRenderDevice(Widget* InViewport)
 {
@@ -714,12 +715,12 @@ void VulkanRenderDevice::DrawComplexSurface(SceneNode* Frame, SurfaceInfo& Surfa
                 const auto& light = surfaceLight->Lights[i];
                 packet.Lights[i].PositionRadius = vec4(light.Position, light.InvRadiusSquared);
                 packet.Lights[i].Color = vec4(light.Color, light.WaveSpeed);
-                for(int slot=0;slot<3;++slot) {
+                for(int slot=0;slot<RuneShadows::Capacity;++slot) {
                     const auto& shadow=Buffers->ShadowLighting->Shadows[slot];
                     vec3 delta=light.Position-shadow.LightPosition.xyz();
                     if(shadow.LightPosition.w>0 && dot(delta,delta)<0.25f &&
                         (!CullShadowReceivers || ShadowReceiverMayIntersect(shadow.WorldToShadow,boundsMin,boundsMax)))
-                        packet.Meta.w|=(slot+1)<<(i*2);
+                        { packet.Meta.w|=std::bit_cast<int32_t>(RuneShadows::Slots::Encode(i,slot)); break; }
                 }
             }
             int index = Buffers->MeshLightCount++;
@@ -813,10 +814,10 @@ void VulkanRenderDevice::DrawGouraudPolygon(SceneNode* Frame, TextureInfo& Info,
 		{
 			packet.Lights[i].PositionRadius = vec4(src.Lights[i].Location, src.Lights[i].InvRadiusSquared);
 			packet.Lights[i].Color = vec4(src.Lights[i].Color, 0.0f);
-            for(int slot=0;slot<3;++slot) {
+            for(int slot=0;slot<RuneShadows::Capacity;++slot) {
                 const auto& shadow=Buffers->ShadowLighting->Shadows[slot];
                 vec3 delta=src.Lights[i].Location-shadow.LightPosition.xyz();
-                if(shadow.LightPosition.w>0 && dot(delta,delta)<0.25f) packet.Meta.w|=(slot+1)<<(i*2);
+                if(shadow.LightPosition.w>0 && dot(delta,delta)<0.25f) { packet.Meta.w|=std::bit_cast<int32_t>(RuneShadows::Slots::Encode(i,slot)); break; }
             }
 		}
 		int index = Buffers->MeshLightCount - 1;
@@ -1330,8 +1331,8 @@ void VulkanRenderDevice::SetSceneNode(SceneNode* Frame)
 	RFY2 = 2.0f * RProjZ * Aspect / Frame->FY;
 
 	viewportdesc = {};
-	viewportdesc.x = DrawingShadow ? float(ShadowSlot*ShadowSize) : (float)Frame->XB;
-	viewportdesc.y = (float)Frame->YB;
+	viewportdesc.x = DrawingShadow ? float((ShadowSlot%RuneShadows::Columns)*ShadowSize) : (float)Frame->XB;
+	viewportdesc.y = DrawingShadow ? float((ShadowSlot/RuneShadows::Columns)*ShadowSize) : (float)Frame->YB;
 	viewportdesc.width = (float)Frame->X;
 	viewportdesc.height = (float)Frame->Y;
 	if(WaterReflectionActive) { viewportdesc.x=viewportdesc.y=0;viewportdesc.width=viewportdesc.height=WaterSize; }
@@ -1859,6 +1860,7 @@ void VulkanRenderDevice::DrawPresentTexture(int width, int height)
 }
 
 #include "VulkanValidationProbe.h"
+#include "ShadowBudgetProbe.h"
 
 #include "LightShadowPass.h"
 #include "WaterReflectionPass.h"

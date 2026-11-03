@@ -28,10 +28,10 @@ CollisionHitList CollisionSystem::OverlapTest(const vec3& location, float height
 	return overlap.TestOverlap(location, height, radius, testActors, testWorld, visibilityOnly);
 }
 
-bool CollisionSystem::TraceAnyHit(vec3 from, vec3 to, UActor* tracingActor, bool traceActors, bool traceWorld, bool visibilityOnly)
+bool CollisionSystem::TraceAnyHit(vec3 from, vec3 to, UActor* tracingActor, bool traceActors, bool traceWorld, bool visibilityOnly, TraceWorldPart part)
 {
 	TraceTester trace(this);
-	return trace.TraceAnyHit(from, to, tracingActor, traceActors, traceWorld, visibilityOnly);
+	return trace.TraceAnyHit(from, to, tracingActor, traceActors, traceWorld, visibilityOnly, part);
 }
 
 CollisionHitList CollisionSystem::Trace(const vec3& from, const vec3& to, float height, float radius, bool traceActors, bool traceWorld, bool visibilityOnly)

@@ -4,6 +4,7 @@
 #include "Math/coords.h"
 #include "LightActorTree.h"
 #include "LightmapBuilder.h"
+#include "WorldVisibilityCache.h"
 #include "Packages/Engine/Resources/Textures/UBitmap.h"
 #include <unordered_map>
 #include <list>
@@ -18,6 +19,7 @@ class CollisionHitList;
 class CollisionHit;
 struct TextureInfo;
 class UBrush;
+class LightingVisibilityBvh;
 
 struct LightmapTexture
 {
@@ -208,12 +210,15 @@ private:
 	TextureInfo GetLightmap(UModel* model, int lightmapIndex, const Coords& coords, UZoneInfo* zoneActor, const vec3& worldLocation, float radius, UBrush* mover, bool specialLit, const Array<vec3>* moverSamples = nullptr);
 	TextureInfo GetFogmap(UModel* model, int lightmapIndex, const Coords& coords, UZoneInfo* zoneActor);
 	void CheckLight(UActor* light);
+    bool TraceLevelVisibility(const vec3& from,const vec3& to,UActor* ignored);
 	void UpdateFogmapTexture(uint32_t* texels, UModel* model, const Coords& mapCoords, int lightMap, UZoneInfo* zoneActor);
 
 	ULevel* Level = nullptr;
 
 	LightmapBuilder Builder;
 	std::map<uint64_t, std::unique_ptr<LightmapTexture>> lmtextures;
+    std::map<uint64_t, WorldVisibilityCache> moverVisibility;
+    std::unique_ptr<LightingVisibilityBvh> visibilityBvh;
 	std::map<uint64_t, std::pair<int, std::unique_ptr<LightmapTexture>>> fogtextures;
 	Array<UActor*> FogBalls;
 	int FrameCounter = 0;

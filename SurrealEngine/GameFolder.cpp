@@ -35,6 +35,13 @@ void GameFolderSelection::UpdateList()
 
 	if (Games.empty())
 	{
+		auto managed = Directory::localAppData() / "OpenRune" / "game";
+		auto game = ExamineFolder(managed.string());
+		if (game.IsRune()) Games.push_back(game);
+	}
+
+	if (Games.empty())
+	{
 		for (const std::string& folder : FindGameFolders())
 		{
 			GameLaunchInfo game = ExamineFolder(folder);

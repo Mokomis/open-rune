@@ -11,8 +11,15 @@ The Windows menu uses the Android menu artwork and Open Rune mark, clean Noto
 fonts, a shared settings model, animated character cards and enlarged rotatable
 previews. Karl/Jarl skin selection and campaign character overrides use the same
 native character implementation. Multiplayer character changes apply next join.
-Video, Audio, Controls, Gameplay and Enhancements share the same saved values;
-features repeated under Enhancements are not independent copies.
+Settings are grouped under Video, Audio, Controls, Interface and Gameplay.
+Each option has one parent; the old Enhancements duplicate page is removed.
+
+Video -> Lighting & shadows -> Shadow-casting lights offers One, Three, Four,
+Six or Eight nearby lights on Windows. Requires Remastered lighting. The saved
+One/Three choices keep their original meaning. Higher values are maximums,
+not additional light sources; only eligible nearby authored lights cast shadows.
+Android and Mac retain their three-light capacity. See
+Docs/RunePort/WINDOWS-SHADOW-LIGHTS.md for costs and validation limits.
 
 Scaling: Native, 75%, 50%, 25%. Below native, the existing portable GSR shader
 runs on the Windows GPU. Android compositor/hardware scaling is not offered.

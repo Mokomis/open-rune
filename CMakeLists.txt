@@ -844,6 +844,7 @@ set(SURREALCOMMON_SOURCES
 	SurrealEngine/UI/Launcher/LauncherButtonbar.cpp
 	SurrealEngine/UI/Launcher/LauncherButtonbar.h
 	SurrealEngine/UI/Launcher/LauncherWindow.cpp
+	SurrealEngine/UI/Launcher/RuneSetupWindow.cpp
 	SurrealEngine/UI/Launcher/LauncherWindow.h
 	SurrealEngine/UI/Launcher/PlayGamePage.cpp
 	SurrealEngine/UI/Launcher/PlayGamePage.h

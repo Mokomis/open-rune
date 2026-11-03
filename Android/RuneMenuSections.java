@@ -4,7 +4,7 @@ package org.runeclassic.port;
 final class RuneMenuSections {
     static String[] sections(String category){switch(category){
     case "Video":return new String[]{"display","camera","lighting","textures","effects"};
-    case "Audio":return new String[]{"volume","spatial"};
+    case "Audio":return new String[]{"volume","soundEffects","spatial"};
     case "Controls":return new String[]{"input","touch","gamepad","vibration"};
     case "Interface":return new String[]{"hud"};
     case "Gameplay":return new String[]{"campaign","combat","enemies"};
@@ -14,7 +14,7 @@ final class RuneMenuSections {
     case "display":return "Display & performance";case "camera":return "Camera & field of view";
     case "lighting":return "Lighting & shadows";case "textures":return "Textures & surfaces";
     case "effects":return "Effects & weather";case "volume":return "Volume";
-    case "spatial":return "Environmental & headphone audio";case "input":return "Look & keyboard";
+    case "soundEffects":return "Sound effects";case "spatial":return "Environmental & headphone audio";case "input":return "Look & keyboard";
     case "touch":return "Touch controls";case "gamepad":return "Controller";
     case "vibration":return "Vibration";case "hud":return "HUD & FPS display";
     case "campaign":return "Campaign";case "combat":return "Combat moves";
@@ -27,6 +27,7 @@ final class RuneMenuSections {
     case "textures":return new String[]{"texturePack","filter","materialMaps","detail","depth"};
     case "effects":return new String[]{"bloom","sharp","shadow","fireEffects","snow","water"};
     case "volume":return new String[]{"master","music","effects"};
+    case "soundEffects":return new String[]{"soundRemaster"};
     case "spatial":return new String[]{"environment","hrtf"};
     case "input":return new String[]{"sensitivity","invert"};
     case "touch":return new String[]{"touch","opacity"};
@@ -40,6 +41,7 @@ final class RuneMenuSections {
     default:return new String[0];}}
     static String help(String page){switch(page){
     case "display":return "Changes apply immediately.\n\nRendering resolution changes the 3D scene. Menus and HUD stay sharp.\n\nFrame rate target and display refresh are separate controls.";
+    case "soundEffects":return "Layered gameplay sounds are WIP and require the optional sound pack.\n\nRestart Open Rune after changing this setting. Music and dialogue keep their original recordings. Missing or incompatible effects use the original sound.";
     case "lighting":return "Lighting mode sets the overall style.\n\nAmbient occlusion is Experimental.\n\nAdditional shadow lights require Remastered lighting.";
     case "textures":return "WIP artwork is unfinished; missing textures stay original.\n\n2× and 4× describe texture size, not display scaling.\n\nMaterial maps require Remastered lighting.";
     case "effects":return "Visual changes only.\n\nCompare original visuals temporarily restores original presentation without overwriting your choices.\n\nFull scene water reflections cost more GPU time.";

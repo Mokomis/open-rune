@@ -32,11 +32,11 @@ class GameFolderSelection
 public:
 	static void UpdateList();
 	static GameLaunchInfo GetLaunchInfo(int selectedGame);
+	static GameLaunchInfo ExamineFolder(const std::string& path);
 
 	static Array<GameLaunchInfo> Games;
 
 private:
-	static GameLaunchInfo ExamineFolder(const std::string& path);
 	static Array<std::string> FindGameFolders();
 	static std::string GetExePath();
 };

@@ -1,6 +1,8 @@
 
 #include "Precomp.h"
 #include "LightSystem.h"
+#include "LightingVisibilityBvh.h"
+#include "BuildLightingVisibilityBvh.h"
 #include "RenderDevice/RenderDevice.h"
 #include "Engine.h"
 #include "Packages/Engine/Actors/Pawn/UPawn.h"
@@ -13,6 +15,14 @@
 #include "Packages/Engine/Actors/Info/UZoneInfo.h"
 #include "Packages/Engine/Resources/Level/UPolys.h"
 #include "Packages/Engine/Resources/Level/UModel.h"
+
+bool LightSystem::TraceLevelVisibility(const vec3& from,const vec3& to,UActor* ignored)
+{
+    if(commandline->GetArgInt("","--render-fast-world-visibility",1)==0)
+        return Level->Collision.TraceAnyHit(from,to,ignored,false,true,true,TraceWorldPart::LevelOnly);
+    if(!visibilityBvh)visibilityBvh=BuildLightingVisibilityBvh(Level->Model);
+    return visibilityBvh->Trace(from,to);
+}
 
 TextureInfo LightSystem::GetMoverLightmap(UBrush* mover, const Poly& poly, UZoneInfo* zoneActor, UModel* model)
 {
@@ -144,6 +154,15 @@ TextureInfo LightSystem::GetLightmap(UModel* model, int lightmapIndex, const Coo
         lastDynamicUpdate = pixelLighting ? -100 : FrameCounter;
 
         if(pixelLighting) {
+            WorldVisibilityCache* visibility = commandline->GetArgInt("", "--render-mover-visibility-cache", 1) != 0
+                ? &moverVisibility[cacheID] : nullptr;
+            if (visibility) visibility->Begin();
+            auto blocked = [&](const vec3& from, const vec3& to) {
+                if (!visibility) return Level->Collision.TraceAnyHit(from,to,dynamicMover,false,true,true);
+                return visibility->Trace(from,to,
+                    [&] { return TraceLevelVisibility(from,to,dynamicMover); },
+                    [&] { return Level->Collision.TraceAnyHit(from,to,dynamicMover,false,true,true,TraceWorldPart::NonLevel); });
+            };
             LightTree.CollectLights(worldLocation,radius);
             const vec3 normal=normalize(coords.ZAxis);
             for(auto* light:LightTree.CollectedLights) {
@@ -152,16 +171,17 @@ TextureInfo LightSystem::GetLightmap(UModel* model, int lightmapIndex, const Coo
                 const float reach=light->WorldLightRadius()+radius;
                 if(dot(delta,delta)>reach*reach || dot(delta,normal)<=0)continue;
                 // Test the actual face, not a pivot buried inside the wall.
-                bool visible=!Level->Collision.TraceAnyHit(worldLocation+normal,light->Location(),dynamicMover,false,true,true);
+                bool visible=!blocked(worldLocation+normal,light->Location());
                 // A retracting hatch can have its center inside a wall while
                 // its exposed edge still receives light. Keep that light if
                 // any inset corner sees it; GPU shadows resolve the coverage.
                 if(!visible && moverSamples)for(const auto& sample:*moverSamples)
-                    if(!Level->Collision.TraceAnyHit(sample+normal,light->Location(),dynamicMover,false,true,true)) {visible=true;break;}
+                    if(!blocked(sample+normal,light->Location())) {visible=true;break;}
                 if(!visible)continue;
                 CheckLight(light);lastDynamicUpdate=std::max(lastDynamicUpdate,light->Light.LastUpdate);
                 TempDynLightList.push_back(light);
             }
+            if (visibility) visibility->End();
         } else for (UActor* light : dynamicMover->TouchingLights.List) {
             CheckLight(light);lastDynamicUpdate=std::max(lastDynamicUpdate,light->Light.LastUpdate);
             TempDynLightList.push_back(light);

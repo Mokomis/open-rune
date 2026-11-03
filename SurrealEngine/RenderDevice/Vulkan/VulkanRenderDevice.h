@@ -49,7 +49,7 @@ public:
     static constexpr int WaterSize = 512;
     std::unique_ptr<VulkanImage> WaterImage;
     std::unique_ptr<VulkanImageView> WaterView;
-    static constexpr int ShadowSize = 1024;
+    static constexpr int ShadowSize = RuneShadows::TileSize;
     std::unique_ptr<VulkanImage> ShadowImage;
     std::unique_ptr<VulkanImageView> ShadowView;
     std::unique_ptr<VulkanSampler> ShadowSampler;
@@ -155,6 +155,7 @@ private:
     PipelineState ShadowPipeline;
     void ClearTextureCache();
 	void RunValidationProbe();
+	void RunShadowBudgetProbe();
 	void PrepareResolveTarget(VulkanCommandBuffer* commands, bool continuation);
 	bool InPassResolve = false;
 	bool OmitUnusedHit = false;

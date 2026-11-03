@@ -11,6 +11,7 @@ inline const std::vector<MenuSection>& RuneMenuSections(){
   {"textures","Textures & surfaces","Video",{"texturePack","filter","materialMaps","detail","depth"},"WIP artwork is unfinished; missing textures stay original. 2× and 4× describe texture size, not display scaling. Material maps require Remastered lighting."},
   {"effects","Effects & weather","Video",{"bloom","sharp","shadow","fireEffects","snow","water"},"Visual changes only. Compare original visuals temporarily restores original presentation, retaining your choices and audio settings. Full scene water reflections cost more GPU time."},
   {"volume","Volume","Audio",{"master","music","effects"},"Changes apply immediately. Master affects all sound. Music and effects can be adjusted separately."},
+  {"soundEffects","Sound effects","Audio",{"soundRemaster"},"WIP layered sounds require the optional sound pack. Restart Open Rune after changing this setting. Dialogue and music keep their original recordings; missing or incompatible effects use their originals."},
   {"spatial","Environmental & headphone audio","Audio",{"environment","hrtf"},"Environmental sound adds room reverb and muffling. Headphone spatial audio is intended for stereo headphones."},
   {"input","Look & keyboard","Controls",{"sensitivity","invert"},"Mouse and right-stick sensitivity and vertical inversion. The current keyboard bindings appear below."},
   {"gamepad","Controller","Controls",{},"The detected controller and bindings appear here. Feedback settings are under Controls → Vibration."},

@@ -1,5 +1,56 @@
 # Focused native regressions
 
+## Moving-lift visibility
+
+`lighting_visibility_bvh.cpp` checks the accelerated world query against an
+independent analytic shape and BSP ancestry cases. Build with UBSan and `-I SurrealEngine`.
+`--rune-probe --probe-map=MAP --probe-lighting-bvh` compares 6,000 actual level rays
+against the original visibility implementation. `android_moving_lift.py --device DEVICE --output PATH`
+runs matched native/4× original lift interpolation on LostCrypt and HelLift and
+checks exact images/motion while preserving normal data. `--maps DM-LostCrypt.run`
+limits it to the one map. It finishes with a normal LostCrypt launch, not an isolated
+test session. See [measured results and scope](../../Docs/RunePort/LIFT-PERFORMANCE.md).
+
+## Mover lighting visibility
+
+`world_visibility_cache.cpp` exercises fixed-world memoization with independently
+changing moving occluders and ray endpoints; compile with UBSan and `-I SurrealEngine`.
+The existing `--rune-probe --probe-map=MAP --probe-polyobj` fixture also compares
+the split cached visibility against the complete production query on actual brush
+geometry. `android_mover_visibility.py --device DEVICE --output PATH` performs the
+matched native/4× LostCrypt comparison, checks exact captures/player state, preserves
+normal data and finishes in LostCrypt without diagnostic save overrides. See
+[the measured change and limits](../../Docs/RunePort/LOSTCRYPT-PERFORMANCE.md).
+
+## Normal Android save-menu startup
+
+`android_save_menu.py --device DEVICE --output PATH` cold-launches the normal client
+without diagnostic save overrides and opens Load game as soon as it is available.
+It checks existing quick/checkpoint/first-manual slots against actual save files,
+verifies their buttons are enabled and confirms every original save hash remains
+unchanged. It never loads or writes a save and leaves the normal Load page open.
+This covers the first-frame metadata regression and diagnostic handoff boundary.
+
+## Windows shadow budgets
+
+`shadow_settings.cpp` checks both three/eight-slot receiver layouts, all lanes,
+unsigned high-bit behavior, legacy saved choices and the platform capacity clamp.
+Build with `c++ -std=c++20 -I . -fsanitize=undefined Tools/RuneValidation/shadow_settings.cpp -o /tmp/open-rune-shadow-settings`.
+`menu_structure.cpp` additionally checks the five Windows shadow choices.
+The real Vulkan `--probe-shadow-budget` fixture requires native rendering,
+4× MSAA and `--save-directory` isolation. See
+[Windows shadow lights](../../Docs/RunePort/WINDOWS-SHADOW-LIGHTS.md) for the
+68-case GPU coverage, authored-scene checks and performance limitations.
+
+Android now shares the eight-slot layout. `android_shadow_lights.py --device DEVICE --output PATH`
+runs actual native/4× GPU checks and authored DM-Hildir PlayerStart4 comparisons.
+Use `--cases map-three map-eight` for only the map comparison. It restarts Open Rune,
+uses isolated saves and records/restores normal preferences if needed. See
+[Android shadow lights](../../Docs/RunePort/ANDROID-SHADOW-LIGHTS.md).
+
+
+## BSP spans
+
 `bsp_spans.cpp` drives the actual production `BspClipper::DrawSpan` against an independent per-pixel coverage oracle. It checks returned visibility, exact newly visible portal gaps, and accumulated coverage through 100,000 deterministic operations, including empty spans, overlaps, fragmented rows and complete coverage. It does not rely on a copy of the optimized interval algorithm.
 
 Run from the repository root on the existing macOS host:

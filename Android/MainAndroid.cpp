@@ -11,6 +11,7 @@
 #include "GameApp.h"
 #include "Utils/File.h"
 #include "RenderDevice/VisualComparison.h"
+#include "Render/ShadowSettings.h"
 #include "RuneCombat.h"
 #include "RuneMenu.h"
 #include "RuneCharacters.h"
@@ -53,6 +54,11 @@ extern "C" JNIEXPORT void JNICALL Java_org_runeclassic_port_MainActivity_nativeS
 extern "C" JNIEXPORT jint JNICALL Java_org_runeclassic_port_MainActivity_nativeGetWorldFeatures(JNIEnv*, jclass)
 {
     return VisualComparison::AppliedWorldFeatures.load();
+}
+
+extern "C" JNIEXPORT void JNICALL Java_org_runeclassic_port_MainActivity_nativeSetShadowBudget(JNIEnv*, jclass, jint budget)
+{
+    RuneShadows::RequestedBudget.store(std::clamp(int(budget), 1, RuneShadows::Capacity));
 }
 
 extern "C" JNIEXPORT void JNICALL Java_org_runeclassic_port_MainActivity_nativeSetTexturePack(JNIEnv*, jclass, jint quality)

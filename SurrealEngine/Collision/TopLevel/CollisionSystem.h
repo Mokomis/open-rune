@@ -10,6 +10,9 @@ class UActor;
 class CollisionHitList;
 class CollisionHit;
 
+// Split only the geometry visited, retaining identical ray margins and flags.
+enum class TraceWorldPart { All, LevelOnly, NonLevel };
+
 struct TraceFlags
 {
 	bool pawns = false;
@@ -30,7 +33,7 @@ public:
 	CollisionHitList OverlapTest(UActor* actor);
 	CollisionHitList OverlapTest(const vec3& location, float height, float radius, bool testActors, bool testWorld, bool visibilityOnly);
 
-	bool TraceAnyHit(vec3 from, vec3 to, UActor* tracingActor, bool traceActors, bool traceWorld, bool visibilityOnly);
+	bool TraceAnyHit(vec3 from, vec3 to, UActor* tracingActor, bool traceActors, bool traceWorld, bool visibilityOnly, TraceWorldPart part = TraceWorldPart::All);
 	CollisionHitList Trace(const vec3& from, const vec3& to, float height, float radius, bool traceActors, bool traceWorld, bool visibilityOnly);
 	CollisionHitList TraceDecal(const dvec3& origin, double tmin, const dvec3& dirNormalized, double tmax, bool visibilityOnly);
 	CollisionHit TraceFirstHit(const vec3& from, const vec3& to, UActor* tracingActor, const vec3& extents, const TraceFlags& flags);
