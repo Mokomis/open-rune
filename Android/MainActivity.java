@@ -290,6 +290,7 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
         nativeMenuSetting(15,options.get("bloodlustMoves"));nativeMenuSetting(21,options.get("normalBloodlust"));
         nativeMenuSetting(16,original?0:options.get("fireEffects"));
         nativeMenuSetting(18,original?0:options.get("snow"));
+        nativeMenuSetting(24,original?0:options.get("gore"));
         if(hud!=null){hud.modern=options.get("hud")!=0;hud.canvas.invalidate();}
         if(rumble!=null&&(changed.equals("initial")||changed.startsWith("rumble")))rumble.configure(options.get("rumble")!=0,options.get("rumbleStrength"),options.get("rumbleOutput"));
         syncFeedback();

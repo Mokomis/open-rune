@@ -44,6 +44,32 @@ std::string FileResource::readAllText(const std::string& filename)
             layout(location = 8) out vec3 reliefViewPosition;
             layout(location = 9) out vec3 meshPosition;
             layout(location = 10) out vec3 meshNormal;
+            layout(location = 11) out vec3 environmentDiffuse;
+            layout(location = 12) out vec3 environmentSpecular;
+            struct MeshLight { vec4 positionRadius; vec4 color; };
+            struct MeshLighting { vec4 ambientScale; ivec4 meta; MeshLight lights[8]; vec4 surfaceOrigin; vec4 surfaceU; vec4 surfaceV; vec4 material; ivec4 materialMaps; vec4 viewCamera; vec4 surfaceTangent; vec4 surfaceBitangent; vec4 environment[6]; };
+            layout(std430, set = 1, binding = 0) readonly buffer MeshLightBuffer { MeshLighting meshLights[]; };
+            void vertexEnvironment(int index,vec3 position,vec3 N)
+            {
+                if(meshLights[index].environment[0].w<0.5)return;
+                vec3 V=normalize(meshLights[index].viewCamera.xyz-position);
+                if(dot(N,V)<0.0)N=-N;
+                vec3 R=reflect(-V,N);
+                vec3 xp=meshLights[index].environment[0].rgb,xn=meshLights[index].environment[1].rgb;
+                vec3 yp=meshLights[index].environment[2].rgb,yn=meshLights[index].environment[3].rgb;
+                vec3 zp=meshLights[index].environment[4].rgb,zn=meshLights[index].environment[5].rgb;
+                vec3 mean=(xp+xn+yp+yn+zp+zn)*(1.0/6.0),n2=N*N,r2=R*R;
+                vec3 diffuse=(N.x>=0.0?xp:xn)*n2.x+(N.y>=0.0?yp:yn)*n2.y+(N.z>=0.0?zp:zn)*n2.z;
+                vec3 reflected=(R.x>=0.0?xp:xn)*r2.x+(R.y>=0.0?yp:yn)*r2.y+(R.z>=0.0?zp:zn)*r2.z;
+                vec4 material=meshLights[index].material;
+                float rough=material.w>0.5?material.y:sqrt(sqrt(2.0/(material.y+2.0)));
+                // These probes contain only broad room color, so evaluate their
+                // smooth direction weights per vertex. Direct lights and normal
+                // maps still use per-fragment shading and actual roughness.
+                environmentDiffuse=mix(mean,diffuse,0.5)*0.32;
+                environmentSpecular=mix(mean,reflected,(1.0-rough)*0.9)*(1.0-rough*0.5)*0.85;
+            }
+
 
 			void main()
 			{
@@ -52,6 +78,14 @@ std::string FileResource::readAllText(const std::string& filename)
 				flags = aFlags;
                 meshPosition = (aFlags & (65536u|524288u))!=0u ? aPosition : vec3(0.0);
                 meshNormal = (aFlags & 65536u)!=0u ? aNormal : vec3(0.0);
+                environmentDiffuse=environmentSpecular=vec3(0);
+                if((aFlags&65536u)!=0u)vertexEnvironment(aTextureBinds.y,aPosition,normalize(aNormal));
+                else if((aFlags&262144u)!=0u) {
+                    int index=int(aFlags>>20);
+                    vec4 origin=meshLights[index].surfaceOrigin,u=meshLights[index].surfaceU,v=meshLights[index].surfaceV;
+                    vertexEnvironment(index,origin.xyz+u.xyz*aTexCoord2.x+v.xyz*aTexCoord2.y,vec3(origin.w,u.w,v.w));
+                }
+
                 reliefViewPosition = (objectToView * vec4(aPosition,1.0)).xyz;
 				texCoord = aTexCoord;
 				texCoord2 = aTexCoord2;
@@ -108,8 +142,10 @@ std::string FileResource::readAllText(const std::string& filename)
             layout(location = 8) in vec3 reliefViewPosition;
             layout(location = 9) centroid in vec3 meshPosition;
             layout(location = 10) centroid in vec3 meshNormal;
+            layout(location = 11) in vec3 environmentDiffuse;
+            layout(location = 12) in vec3 environmentSpecular;
             struct MeshLight { vec4 positionRadius; vec4 color; };
-            struct MeshLighting { vec4 ambientScale; ivec4 meta; MeshLight lights[8]; vec4 surfaceOrigin; vec4 surfaceU; vec4 surfaceV; vec4 material; ivec4 materialMaps; vec4 viewCamera; vec4 surfaceTangent; vec4 surfaceBitangent; };
+            struct MeshLighting { vec4 ambientScale; ivec4 meta; MeshLight lights[8]; vec4 surfaceOrigin; vec4 surfaceU; vec4 surfaceV; vec4 material; ivec4 materialMaps; vec4 viewCamera; vec4 surfaceTangent; vec4 surfaceBitangent; vec4 environment[6]; };
             layout(std430, set = 1, binding = 0) readonly buffer MeshLightBuffer { MeshLighting meshLights[]; };
 
             struct ShadowLight { mat4 worldToShadow; vec4 position; };
@@ -186,8 +222,29 @@ std::string FileResource::readAllText(const std::string& filename)
 
             LIGHTP vec3 materialHighlight(LIGHTP vec3 V,LIGHTP vec3 N,LIGHTP vec3 L,LIGHTP vec3 light,LIGHTP vec4 material,LIGHTP vec3 albedo)
             {
-                vec3 H=L+V;
-                H*=inversesqrt(max(dot(H,H),1e-12));
+                if(material.w>0.5) {
+                    if(dot(N,L)<=0.0 || dot(N,V)<=0.0)return vec3(0);
+                    // GGX distribution, Schlick Fresnel and separable Smith
+                    // visibility. High precision prevents half-float overflow
+                    // at grazing angles. Roughness floor limits specular aliasing.
+                    float rough=max(material.y,0.28),a=rough*rough,a2=a*a;
+                    // Very rough dielectrics have a broad, weak specular lobe.
+                    // Its bounded diffuse-limit approximation saves the full
+                    // microfacet evaluation on stone/cloth, without losing it
+                    // on metal, wet materials or smoother skin/armor regions.
+                    if(rough>=0.65 && material.z<0.05)return light*vec3(0.0125)*mix(0.5,1.0,clamp(material.x,0.0,1.0));
+                    vec3 H=L+V;H*=inversesqrt(max(dot(H,H),1e-12));
+                    float nh=max(dot(N,H),0.0),nv=max(dot(N,V),0.001),nl=max(dot(N,L),0.001);
+                    float denominator=nh*nh*(a2-1.0)+1.0;
+                    float distribution=a2/(3.14159265*denominator*denominator);
+                    float k=(rough+1.0)*(rough+1.0)*0.125;
+                    float visibility=0.25/((nv*(1.0-k)+k)*(nl*(1.0-k)+k));
+                    vec3 f0=mix(vec3(0.04),clamp(albedo,0.0,0.85),clamp(material.z*2.0,0.0,1.0));
+                    float vh=clamp(dot(V,H),0.0,1.0),f=1.0-vh,f2=f*f;
+                    vec3 fresnel=f0+(1.0-f0)*f2*f2*f;
+                    return light*min(distribution*visibility*fresnel,vec3(2.0))*mix(0.5,1.0,clamp(material.x,0.0,1.0));
+                }
+                vec3 H=L+V;H*=inversesqrt(max(dot(H,H),1e-12));
                 LIGHTP float spec=pow(max(dot(N,H),0.0),material.y)*material.x;
                 return light*spec*mix(vec3(1),albedo,material.z);
             }
@@ -219,7 +276,7 @@ std::string FileResource::readAllText(const std::string& filename)
                 }
                 }
                 LIGHTP float rough=clamp(packed.a,0.18,0.98);
-                material.y=clamp(2.0/(rough*rough*rough*rough)-2.0,4.0,128.0);
+                material.y=material.w>0.5?rough:clamp(2.0/(rough*rough*rough*rough)-2.0,4.0,128.0);
                 material.x*=mix(1.7,0.55,rough);
                 if(meshLights[index].materialMaps.w!=0) {
                     LIGHTP vec2 response=texture(textures[nonuniformEXT(meshLights[index].materialMaps.z)],uv).rg;
@@ -227,6 +284,17 @@ std::string FileResource::readAllText(const std::string& filename)
                     material.z=response.g;
                 }
                 return N;
+            }
+
+            LIGHTP vec3 environmentLighting(int index,vec3 N,vec3 V,vec4 material,vec3 albedo,inout LIGHTP vec3 highlights)
+            {
+                if(meshLights[index].environment[0].w<0.5)return vec3(0);
+                LIGHTP float metal=clamp(material.z*2.0,0.0,1.0);
+                LIGHTP vec3 f0=mix(vec3(0.04),clamp(albedo,0.0,0.85),metal);
+                LIGHTP float f=1.0-clamp(abs(dot(N,V)),0.0,1.0),f2=f*f;
+                LIGHTP vec3 fresnel=f0+(1.0-f0)*f2*f2*f;
+                highlights+=environmentSpecular*fresnel;
+                return environmentDiffuse*(1.0-metal*0.85);
             }
 
             LIGHTP vec3 pixelLighting(LIGHTP vec3 albedo, out LIGHTP vec3 highlights)
@@ -274,7 +342,10 @@ std::string FileResource::readAllText(const std::string& filename)
                 }
                 // Bound diffuse illumination like the original; specular
                 // highlights retain their separate headroom and shadowing.
-                if(remastered()) return clamp((ambientScale.rgb*0.72+total*ambientScale.a)*3.0,0.0,1.0);
+                if(remastered()) {
+                    vec3 bounce=environmentLighting(index,N,viewDirection,material,albedo,highlights);
+                    return clamp((ambientScale.rgb*0.72+total*ambientScale.a)*3.0+bounce,0.0,1.0);
+                }
                 return min((ambientScale.rgb + total*ambientScale.a)*3.0, vec3(1.0));
             }
 
@@ -320,13 +391,13 @@ std::string FileResource::readAllText(const std::string& filename)
                 highlights=vec3(0);
                 // Ambient-only floors also receive contact shadows, retaining
                 // their existing baked brightness everywhere outside the feet.
-                if(meta.x==0) return baseLight*contact;
+                if(meta.x==0 && meshLights[index].environment[0].w<0.5) return baseLight*contact;
                 LIGHTP vec4 shadow0 = texture(textures[nonuniformEXT(meta.y)], texCoord2);
                 LIGHTP vec4 shadow1 = meta.x > 4 ? texture(textures[nonuniformEXT(meta.z)], texCoord2) : vec4(0);
                 #ifdef CULL_LIGHTING
                 // Fully occluded baked light masks cannot contribute diffuse or
                 // specular lighting. Avoid normal/response maps and the light loop.
-                if(all(lessThanEqual(shadow0,vec4(0))) && all(lessThanEqual(shadow1,vec4(0))))
+                if(meshLights[index].environment[0].w<0.5 && all(lessThanEqual(shadow0,vec4(0))) && all(lessThanEqual(shadow1,vec4(0))))
                     return baseLight*(remastered()?0.72:1.0)*contact;
                 #endif
                 if(remastered() && (flags & 1024u)!=0u && meshLights[index].materialMaps.y==0)
@@ -338,7 +409,7 @@ std::string FileResource::readAllText(const std::string& filename)
                     N=normalize(N+strength*(T*packed.x+B*packed.y));
                 }
                 float time = meshLights[index].ambientScale.w;
-                LIGHTP vec3 total = baseLight*(remastered()?0.72:1.0);
+                LIGHTP vec3 total = baseLight*(remastered() && meta.x>0?0.72:1.0);
                 LIGHTP vec3 viewDirection=normalize(meshLights[index].viewCamera.xyz-position);
                 LIGHTP vec4 material=meshLights[index].material;
                 N=mappedNormal(index,position,materialUV,N,material);
@@ -370,12 +441,13 @@ std::string FileResource::readAllText(const std::string& filename)
                             LIGHTP float visibility=movingShadow(slot,position,N,L/distance);
                             LIGHTP vec3 energy=lightColor.rgb*falloff*wave*shadow*visibility;
                             total+=energy*angle*localLightBoost(unitDistance);
-                            LIGHTP vec3 facingN=dot(N,L)>=0.0?N:-N;
+                            LIGHTP vec3 facingN=dot(N,material.w>0.5?viewDirection:L)>=0.0?N:-N;
                             highlights+=materialHighlight(viewDirection,facingN,L/distance,energy*2.0,material,albedo)*angle;
                         }
                         else total += min(lightColor.rgb * falloff * angle * wave * shadow,vec3(1.0));
                     }
                 }
+                if(remastered())total+=environmentLighting(index,N,viewDirection,material,albedo,highlights);
                 highlights*=contact;
                 return clamp(total,0.0,1.0)*contact;
             }
@@ -384,7 +456,7 @@ std::string FileResource::readAllText(const std::string& filename)
 			{
 				float actorXBlending = (flags & 32) != 0 ? 1.5 : 1.0;
 				float oneXBlending = (flags & 64) != 0 ? 1.0 : 2.0;
-                bool remasteredSurface=(flags & 262144u)!=0u && meshLights[int(flags>>20)].meta.x>0;
+                bool remasteredSurface=(flags & 262144u)!=0u && (meshLights[int(flags>>20)].meta.x>0 || meshLights[int(flags>>20)].environment[0].w>0.5);
                 bool remasteredShading=remastered() && ((flags & 65536u)!=0u || remasteredSurface);
 
 				#ifdef WATER_SURFACE

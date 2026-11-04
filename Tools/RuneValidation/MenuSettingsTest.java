@@ -23,6 +23,25 @@ public final class MenuSettingsTest {
         });
     }
     public static void main(String[] args) {
+        Map<String,Object> goreDisk=new HashMap<>();
+        RuneSettings gore=new RuneSettings(memory(goreDisk),0,0,false,false);
+        check(gore.get("gore")==1,"Enhanced gore default");
+        gore.set("gore",0);gore=new RuneSettings(memory(goreDisk),0,0,false,false);
+        check(gore.get("gore")==0,"Original gore persists");
+        gore.compare();gore.set("gore",1);check(!gore.comparing,"Gore leaves visual comparison");
+        gore.set("fireEffects",0);check(gore.get("gore")==1,"Gore independent of fire effects");
+        Map<String,Object> materialDisk=new HashMap<>();
+        RuneSettings materials=new RuneSettings(memory(materialDisk),0,20399,false,false);
+        check(materials.get("materialLighting")==0&&materials.get("environmentProbes")==0,"Existing lighting stays unchanged");
+        int retained=materials.world();
+        materials.set("materialLighting",1);materials.set("environmentProbes",1);
+        check(materials.world()==(retained|196608),"New lighting bits preserve existing effects");
+        RuneSettings materialReload=new RuneSettings(memory(materialDisk),0,(Integer)materialDisk.get("worldFeatures"),false,false);
+        check(materialReload.get("materialLighting")==1&&materialReload.get("environmentProbes")==1,"Lighting choices persist");
+        materialReload.compare();materialReload.set("materialLighting",0);
+        check(!materialReload.comparing&&materialReload.get("environmentProbes")==1,"Independent toggles leave comparison");
+        materialReload.set("master",50);
+        check(((Integer)materialDisk.get("worldFeatures")&131072)!=0,"Volume retains environment choice");
         Map<String,Object> shadowDisk=new HashMap<>();
         RuneSettings shadows=new RuneSettings(memory(shadowDisk),0,4096,false,false);
         check(shadows.get("shadowLights")==1&&shadows.shadowBudget()==3,"Legacy three-light migration");

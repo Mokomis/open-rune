@@ -58,7 +58,7 @@ bool ShieldBlocks(UPawn* target,UPawn* attacker){
     return length(d)>.01f && dot(Forward(target),normalize(d))>=.25f;
 }
 bool Start(UPawn* p){
-    if(RuneBloodlust::Busy(p) || !Enabled.load() || !Compatible(p) || p->RuneKickActive || p->RuneKickCooldown>0 || p->Physics()!=PHYS_Walking)return false;
+    if(RuneCorpse::Busy(p) || RuneBloodlust::Busy(p) || !Enabled.load() || !Compatible(p) || p->RuneKickActive || p->RuneKickCooldown>0 || p->Physics()!=PHYS_Walking)return false;
     bool player=UObject::TryCast<UPlayerPawn>(p)!=nullptr;
     if(player){auto* pp=UObject::Cast<UPlayerPawn>(p);if(pp->ViewTarget() || p->GetStateName()!="PlayerWalking")return false;}
     else if(p->GetStateName()!="Fighting")return false;

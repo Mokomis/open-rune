@@ -27,13 +27,14 @@ struct MeshLightPacket
 	ivec4 Meta;
 	struct { vec4 PositionRadius; vec4 Color; } Lights[8];
     vec4 SurfaceOrigin, SurfaceU, SurfaceV; // xyz mapping; w lanes hold surface normal
-    vec4 Material; // specular strength, exponent, reserved
+    vec4 Material; // specular strength, exponent, metal response, physical-lighting toggle
     ivec4 MaterialMaps; // normal/roughness descriptor, enabled
     vec4 ViewCamera;
     vec4 SurfaceTangent; // xyz geometric texture tangent, w conservative contact mask
     vec4 SurfaceBitangent; // xyz geometric texture bitangent, w basis valid
+    vec4 Environment[6]; // directional radiance; first w enables the probe
 };
-static_assert(sizeof(MeshLightPacket) == 416, "Mesh light buffer layout");
+static_assert(sizeof(MeshLightPacket) == 512, "Mesh light buffer layout");
 
 // Only mat4/vec4 members: identical std140 uniform and std430 storage layouts.
 struct ShadowLightingPacket

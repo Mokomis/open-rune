@@ -1,4 +1,5 @@
 #include "Precomp.h"
+#include "RuneCorpse.h"
 #include "RuneBot.h"
 #ifdef OPENRUNE_ENABLE_NETWORK
 #include "RuneTacticsPolicy.h"
@@ -616,6 +617,36 @@ Decision Brain::think(Engine& game,RuneNetworkReplica& replica,const World& worl
             float distance=length(actor->Location()-here);
             if(distance<100 || (rejectedAt(actor->Location(),now)))continue;
             if(distance<nearest){nearest=distance;goal=actor->Location();goalSet=true;}
+        }
+    }
+    // A visible, nearby body is an opportunistic ranged attack, never an
+    // objective detour or an attack through a teammate. Only authenticated
+    // Use/Throw intents are emitted; the host revalidates the complete pickup.
+    const Entity* heldBody=nullptr;
+    for(const auto& e:world)if(e.kind==EntityKind::Corpse && e.owner==own && e.attachmentJoint!=255){heldBody=&e;break;}
+    if(heldBody) {
+        if(carriedBody!=heldBody->ref){carriedBody=heldBody->ref;carrySince=now;}
+        if(foe) {
+            auto delta=position(*foe)-here;float distance=flat(delta);aim(position(*foe));
+            bool clearLane=true;
+            if(status.mode!=GameMode::Deathmatch)for(const auto& ally:world)if(ally.kind==EntityKind::Pawn && ally.health>0 && ally.ref!=own && !enemy(status,own,ally.ref)) {
+                auto d=position(ally)-here;float along=dot(d,direction(delta));
+                if(along>0 && along<distance && flat(d-direction(delta)*along)<60)clearLane=false;
+            }
+            if(clearLane && distance>140 && distance<550 && now-carrySince>650 &&
+               dot(yawDirection(out.input.yaw),direction(delta))>.985f && act(ActionKind::Throw,1100)){corpseAt=now+10000;++specials;}
+            else if(now-carrySince>3500)act(ActionKind::Use,500);
+            return finish();
+        }
+        if(now-carrySince>1500)act(ActionKind::Use,500);
+        return finish();
+    }
+    carriedBody={};carrySince=0;
+    if(!goalSet && foe && now>=corpseAt && now>=readyAt && RuneCorpse::Eligible(p)) {
+        float distance=flat(position(*foe)-here);
+        if(distance>180 && distance<500)for(const auto& e:world)if(e.kind==EntityKind::Corpse && !e.owner.id && !(e.flags&32) && length(position(e)-here)<100) {
+            auto* body=replica.actor(e.ref);
+            if(body && RuneCorpse::Throwable(body) && p->FastTrace(position(e),here) && act(ActionKind::Use,700)){corpseAt=now+3500;return finish();}
         }
     }
     if(!goalSet && foe){

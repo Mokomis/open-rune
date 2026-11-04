@@ -8,11 +8,14 @@ add("fov","Field of view","Base horizontal view at 4:3. Wider screens expand the
 add("wideView","Widescreen framing","Automatic preserves vertical visibility as the screen gets wider.",{"Original","Automatic"},1,0,1);
 add("bloom","Bloom & color","Subtle highlight glow and warmer color tuning.",{"Original","Enhanced"},0,0,1);
 add("fireEffects","Fire & combat effects","Fuller flames, rising embers and motion-aligned sparks, debris and blood droplets. Cosmetic only, with a shared particle budget.",{"Original","Enhanced"},1,0,1);
+add("gore","Gore presentation","Enhanced adds cosmetic tumbling fragments, wound shading, impact blood and corpse settling. Pickupable limbs and match rules stay unchanged.",{"Original","Enhanced"},1,0,1);
 add("snow","Snow","Off keeps original map weather. Light and Heavy add drifting snow beneath open sky, with roof shelter. Cosmetic only.",{"Off","Light","Heavy"},0,0,2);
 add("sharp","Adaptive sharpening","Restores fine contrast while limiting bright edge halos.",{"Off","Low","Medium","High"},1,0,3);
 add("filter","Texture filtering","Keeps angled textures clear; limited by GPU support.",{"8×","16×"},1,0,1);
 add("shadow","Shadow / midtone lift","Reveals dark detail while preserving deep blacks.",{"Off","Low","Medium","High"},1,0,3);
 add("pixelLighting","Lighting mode","Remastered adds nearby moving shadows, stronger light and material highlights.",{"Original","Per-pixel","Remastered"},0,0,2);
+add("materialLighting","Material lighting","Physical adds roughness-aware GGX highlights and metal response. Requires Remastered lighting.",{"Classic","Physical"},0,0,1);
+add("environmentProbes","Local environment lighting","Baked room color and broad reflections. Static scenery only; prepared when first enabled. Requires Remastered lighting.",{"Off","On"},0,0,1);
 add("materialMaps","Material maps","Generated normal and roughness detail for Remastered lighting.",{"Original","Enhanced"},0,0,1);
 add("texturePack","Texture artwork","Work-in-progress remastered artwork. Unfinished or unavailable textures keep their original artwork.",{"Original","WIP 2×","WIP 4×"},0,0,2);
 add("water","Water reflections","Approximate adds ripples and an environment sheen. Full scene reflects nearby scenery at higher cost.",{"Original","Approximate","Full scene"},0,0,2);

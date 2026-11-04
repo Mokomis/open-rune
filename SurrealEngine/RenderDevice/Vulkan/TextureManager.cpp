@@ -385,6 +385,7 @@ void TextureManager::CreateDitherTexture()
 
 CachedTexture* TextureManager::GetMaterialMap(TextureInfo* info)
 {
+    if(info && info->WetGore)return nullptr; // Wet cut surfaces keep their dedicated roughness.
     if(!info || !info->Texture || !info->Texture->package || info->Format!=TextureFormat::P8 || !info->Palette ||
         info->NumMips<1 || info->USize<4 || info->VSize<4 || info->USize>1024 || info->VSize>1024 ||
         info->Texture->bRealtime() || info->Texture->AnimNext()) return nullptr;

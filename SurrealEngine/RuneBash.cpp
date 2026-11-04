@@ -112,6 +112,7 @@ bool Compatible(UPawn* p) {
     return engine->LaunchInfo.IsRune() && Alive(p) && (p->IsA("RunePlayer") || p->IsA("ScriptPawn")) && Sequence(p,Strike);
 }
 bool Start(UPawn* p) {
+    if(RuneCorpse::Busy(p))return false;
     if(RuneBloodlust::Busy(p) || !Enabled.load() || !Compatible(p) || !Shield(p) || p->RuneBashPhase || p->RuneKickActive || p->RuneBashCooldown>0 || p->Physics()!=PHYS_Walking || !CombatState(p))return false;
     if(p->GetBool("bSwingingHigh") || p->GetBool("bSwingingLow"))return false;
     auto* proxy=UObject::TryCast<UActor>(p->GetUObject("AnimProxy"));

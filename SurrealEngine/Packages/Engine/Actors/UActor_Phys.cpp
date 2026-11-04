@@ -6,6 +6,9 @@
 #include "Packages/Engine/Actors/Brush/MovingBrush.h"
 #include "VM/ScriptCall.h"
 #include "Engine.h"
+#include "Utils/CommandLine.h"
+#include "Utils/Logger.h"
+#include "Packages/Core/UClass.h"
 #include "Packages/Engine/Actors/UProjectile.h"
 #include "Packages/Engine/Actors/Pawn/UPlayerPawn.h"
 #include "Packages/Engine/Actors/Info/ULevelInfo.h"
@@ -68,9 +71,31 @@ bool UActor::SetLocation(const vec3& newLocation)
 	if (!result.first)
 		return false;
 
+	// Original FarMoveActor (Engine.dll 0x1038dcc0) clears every direct rider's
+	// base after a successful relocation. Riders stay where they are; joint
+	// attachments are not physics bases and are unaffected.
+	if (engine->LaunchInfo.IsRune())
+	{
+		Array<UActor*> riders = BasedActors;
+		for (UActor* rider : riders)
+		{
+			if (rider && rider->ActorBase() == this)
+				rider->SetBase(nullptr, true);
+		}
+	}
+
 	XLevel()->Collision.RemoveFromCollision(this);
 	Location() = result.second;
 	XLevel()->Collision.AddToCollision(this);
+
+	// FarMoveActor also marks the actor teleported (Actor flag word 0x208, bit
+	// 0x2000) and moves OldLocation, so physics that relocates mid-move, such
+	// as a Teleporter touch, keeps its velocity instead of distance / tick.
+	if (engine->LaunchInfo.IsRune())
+	{
+		bJustTeleported() = true;
+		OldLocation() = Location();
+	}
 
 	if (Level()->bBegunPlay())
 	{
@@ -105,6 +130,19 @@ bool UActor::SetLocation(const vec3& newLocation)
 	return true;
 }
 
+// Original FarMoveActor as reached from script SetLocation (bTest and
+// bNoCheck zero): find a spot, then CheckEncroachment at it, which lets the
+// mover's EncroachingOn refuse the move and blocked actors see EncroachedBy.
+bool UActor::RuneFarMove(const vec3& newLocation)
+{
+	auto spot = CheckLocation(newLocation, CollisionRadius(), CollisionHeight(), bCollideWorld() || bCollideWhenPlacing());
+	if (!spot.first)
+		return false;
+	if (RuneCheckEncroachment(spot.second, Rotation()) || bDeleteMe())
+		return false;
+	return SetLocation(spot.second);
+}
+
 bool UActor::SetRotation(const Rotator& newRotation)
 {
 	// To do: return false if there isn't room
@@ -123,10 +161,15 @@ bool UActor::SetRotation(const Rotator& newRotation)
 // carried items and actors on movers should rotate with the actor their based on
 void UActor::TurnBasedActors(const Rotator& deltaRotation)
 {
+	TurnBasedActors(deltaRotation, Location());
+}
+
+void UActor::TurnBasedActors(const Rotator& deltaRotation, const vec3& pivot)
+{
 	if ((deltaRotation.Yaw & 0xffff) == 0)
 		return;
 	Coords yawRot = Coords::YawRotation(deltaRotation.YawRadians());
-	vec3 baseLoc = Location();
+	vec3 baseLoc = pivot;
 	for (size_t i = 0; i < BasedActors.size(); )
 	{
 		UActor* basedActor = BasedActors[i];
@@ -399,6 +442,9 @@ CollisionHit UActor::TryMove(const vec3& delta, bool dryRun, bool isOwnBaseBlock
 		return hit;
 	}
 
+	if (engine->LaunchInfo.IsRune() && Brush())
+		return dryRun ? CollisionHit() : TryMoveRuneBrush(delta, Rotation());
+
 	// Avoid moving if movement is too small as the physics code doesn't like very small numbers
 	if (dot(delta, delta) < 0.00000001f)
 		return {};
@@ -417,7 +463,11 @@ CollisionHit UActor::TryMove(const vec3& delta, bool dryRun, bool isOwnBaseBlock
 				if (hit.Actor != Level())
 				{
 					bool isBlocking;
-					if (useBlockPlayers || UObject::TryCast<UPlayerPawn>(hit.Actor) || UObject::TryCast<UProjectile>(hit.Actor))
+					// Original MoveActor applies IsBlockedBy: a brush stops any
+					// world-colliding actor, whatever that actor's own block flags.
+					if (engine->LaunchInfo.IsRune() && hit.Actor->Brush())
+						isBlocking = IsBlockedBy(hit.Actor);
+					else if (useBlockPlayers || UObject::TryCast<UPlayerPawn>(hit.Actor) || UObject::TryCast<UProjectile>(hit.Actor))
 						isBlocking = hit.Actor->bBlockPlayers() && bBlockPlayers();
 					else
 						isBlocking = hit.Actor->bBlockActors() && bBlockActors();
@@ -550,6 +600,220 @@ CollisionHit UActor::TryMove(const vec3& delta, bool dryRun, bool isOwnBaseBlock
 	UpdateActorZone();
 
 	return blockingHit;
+}
+
+// Original AActor::IsBlockedBy (Engine.dll 0x10329b70). Bit 1 of the flag
+// word is bCollideWorld, bit 2 bBlockActors, bit 3 bBlockPlayers. The original
+// player test is GetPlayerPawn; the port keeps its existing PlayerPawn cast.
+bool UActor::IsBlockedBy(UActor* other)
+{
+	auto isBrush = [](UActor* actor) { return actor->Brush() && UObject::TryCast<UBrush>(actor); };
+	if (other == Level())
+		return bCollideWorld();
+	if (isBrush(other))
+		return bCollideWorld() && (UObject::TryCast<UPlayerPawn>(this) ? other->bBlockPlayers() : other->bBlockActors());
+	if (isBrush(this))
+		return other->bCollideWorld() && (UObject::TryCast<UPlayerPawn>(other) ? bBlockPlayers() : bBlockActors());
+	bool selfUsesPlayers = UObject::TryCast<UPlayerPawn>(this) || UObject::TryCast<UProjectile>(this);
+	bool otherUsesPlayers = UObject::TryCast<UPlayerPawn>(other) || UObject::TryCast<UProjectile>(other);
+	return (selfUsesPlayers ? other->bBlockPlayers() : other->bBlockActors()) && (otherUsesPlayers ? bBlockPlayers() : bBlockActors());
+}
+
+// Original ULevel::CheckEncroachment (Engine.dll 0x1038eca0) as called by
+// MoveActor: bTouchNotify is zero. Returns true when the move is rejected.
+bool UActor::RuneCheckEncroachment(const vec3& testLocation, const Rotator& testRotation)
+{
+	UBrush* movingBrush = GetMovingBrush(this);
+	if (!bCollideActors() && !bBlockActors() && !bBlockPlayers() && !movingBrush)
+		return false;
+
+	auto encroachedAt = [&]() {
+		vec3 location = Location();
+		Rotator rotation = Rotation();
+		Location() = testLocation;
+		Rotation() = testRotation;
+		Array<UActor*> actors = XLevel()->Collision.EncroachingActors(this);
+		Location() = location;
+		Rotation() = rotation;
+		return actors;
+	};
+	auto contains = [](const Array<UActor*>& actors, UActor* actor) {
+		for (UActor* candidate : actors)
+		{
+			if (candidate == actor)
+				return true;
+		}
+		return false;
+	};
+
+	// The rotation part of the push carries the actor rigidly about this
+	// brush's origin. The original masks each component to 0xfffc first.
+	vec3 rotationPivot = Location();
+	Rotator deltaRotation(
+		(testRotation.Pitch & 0xfffc) - (Rotation().Pitch & 0xfffc),
+		(testRotation.Yaw & 0xfffc) - (Rotation().Yaw & 0xfffc),
+		(testRotation.Roll & 0xfffc) - (Rotation().Roll & 0xfffc));
+	bool rotates = testRotation != Rotation();
+	mat4 rotationPush = Coords::Rotation(deltaRotation).ToMatrix();
+
+	Array<UActor*> candidates = encroachedAt();
+	for (UActor* other : candidates)
+	{
+		if (!other || other == this || other == Level() || other->bDeleteMe() || !IsBlockedBy(other))
+			continue;
+
+		// A moving brush first tries to push a non-brush actor out of the way
+		// and only asks EncroachingOn if the actor is still in the test pose.
+		if (movingBrush && !GetMovingBrush(other))
+		{
+			vec3 offset = other->Location() - rotationPivot;
+			vec3 push = testLocation - Location();
+			if (rotates)
+				push += (rotationPush * vec4(offset, 0.0f)).xyz() - offset;
+
+			other->RuneMoveSmooth(push);
+			if (other->bDeleteMe())
+				continue;
+			if (!contains(encroachedAt(), other))
+				continue;
+
+			// Undo the failed push with this brush at its test location,
+			// as the original does, then restore the real location.
+			vec3 location = Location();
+			XLevel()->Collision.RemoveFromCollision(this);
+			Location() = testLocation;
+			XLevel()->Collision.AddToCollision(this);
+			other->RuneMoveSmooth(-push);
+			XLevel()->Collision.RemoveFromCollision(this);
+			Location() = location;
+			XLevel()->Collision.AddToCollision(this);
+			if (other->bDeleteMe())
+				continue;
+		}
+
+		if (CallEvent(this, EventName::EncroachingOn, { ExpressionValue::ObjectValue(other) }).ToBool())
+		{
+			if (commandline->HasArg("", "--trace-encroachment"))
+				LogMessage("RUNE_ENCROACH_REJECT brush=" + Name.ToString() + " other=" + other->Name.ToString() + " class=" + other->Class->Name.ToString() +
+					" static=" + std::to_string((bool)other->bStatic()) + " movable=" + std::to_string((bool)other->bMovable()) +
+					" base=" + (other->ActorBase() ? other->ActorBase()->Name.ToString() : std::string("None")));
+			return true;
+		}
+		if (bDeleteMe())
+			return true;
+	}
+
+	// The original notifies every blocked candidate from the first query,
+	// including actors that were successfully pushed away.
+	for (UActor* other : candidates)
+	{
+		if (other && other != this && other != Level() && !other->bDeleteMe() && IsBlockedBy(other))
+			CallEvent(other, EventName::EncroachedBy, { ExpressionValue::ObjectValue(this) });
+	}
+	return false;
+}
+
+CollisionHit UActor::TryMoveRuneBrush(const vec3& delta, const Rotator& newRotation)
+{
+	if (bStatic() || !bMovable())
+	{
+		CollisionHit hit;
+		hit.Fraction = 0.0f;
+		return hit;
+	}
+
+	bool translates = dot(delta, delta) >= 0.00000001f;
+	bool rotates = newRotation != Rotation();
+	if (!translates && !rotates)
+		return {};
+
+	// Original MoveActor carries direct riders before it checks encroachment,
+	// so a rider is only encroached if something stopped it from following.
+	vec3 newLocation = Location() + (translates ? delta : vec3(0.0f));
+	if (translates)
+	{
+		for (size_t i = 0; i < BasedActors.size(); )
+		{
+			UActor* basedActor = BasedActors[i];
+			basedActor->TryMove(delta, false, false);
+			// UnrealScript events triggered in TryMove can call methods such as SetBase or Destroy, so need to guard while iterating.
+			if (i < BasedActors.size() && BasedActors[i] == basedActor)
+				i++;
+		}
+	}
+	if (rotates)
+		TurnBasedActors(newRotation - Rotation(), newLocation);
+
+	if (RuneCheckEncroachment(newLocation, newRotation) || bDeleteMe())
+	{
+		CollisionHit hit;
+		hit.Fraction = 0.0f;
+		return hit;
+	}
+
+	XLevel()->Collision.RemoveFromCollision(this);
+	Location() = newLocation;
+	Rotation() = newRotation;
+	XLevel()->Collision.AddToCollision(this);
+
+	for (const auto actor : Touching())
+	{
+		if (actor && !IsOverlapping(actor))
+			UnTouch(actor);
+	}
+
+	UpdateActorZone();
+	return {};
+}
+
+// Original AActor::TwoWallAdjust (Engine.dll 0x1030cef0).
+static void TwoWallAdjust(const vec3& desiredDir, vec3& delta, const vec3& hitNormal, const vec3& oldHitNormal, float hitTime)
+{
+	if (dot(oldHitNormal, hitNormal) <= 0.0f)
+	{
+		// 90 degree or sharper corner: follow the crease between the walls.
+		vec3 newDir = cross(hitNormal, oldHitNormal);
+		float lengthSquared = dot(newDir, newDir);
+		newDir = lengthSquared < 1e-8f ? vec3(0.0f) : newDir / std::sqrt(lengthSquared);
+		delta = newDir * (dot(delta, newDir) * (1.0f - hitTime));
+		if (dot(desiredDir, delta) < 0.0f)
+			delta = delta * -1.0f;
+	}
+	else
+	{
+		delta = (delta - hitNormal * dot(delta, hitNormal)) * (1.0f - hitTime);
+		if (dot(delta, desiredDir) <= 0.0f)
+			delta = vec3(0.0f);
+	}
+}
+
+// Original AActor::moveSmooth (Engine.dll 0x103b7b70): returns the first
+// move's MoveActor result (any progress), not whether something was hit.
+bool UActor::RuneMoveSmooth(const vec3& delta)
+{
+	CollisionHit hit = TryMove(delta);
+	bool moved = hit.Fraction > 0.0f;
+	if (hit.Fraction < 1.0f && !bDeleteMe())
+	{
+		vec3 adjusted = (delta - hit.Normal * dot(delta, hit.Normal)) * (1.0f - hit.Fraction);
+		if (dot(delta, adjusted) >= 0.0f)
+		{
+			vec3 oldHitNormal = hit.Normal;
+			float lengthSquared = dot(delta, delta);
+			vec3 desiredDir = lengthSquared < 1e-8f ? vec3(0.0f) : delta / std::sqrt(lengthSquared);
+			hit = TryMove(adjusted);
+			if (hit.Fraction < 1.0f && !bDeleteMe())
+			{
+				FireHitWall(hit);
+				if (!bDeleteMe())
+				{
+					TwoWallAdjust(desiredDir, adjusted, hit.Normal, oldHitNormal, hit.Fraction);
+					TryMove(adjusted);
+				}
+			}
+		}
+	}
+	return moved;
 }
 
 CollisionHit UActor::TryMoveSmooth(const vec3& delta)

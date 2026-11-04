@@ -1,10 +1,14 @@
 
 #include "Precomp.h"
+#ifdef OPENRUNE_ENABLE_NETWORK
+void RunRuneCorpseProbe(class Engine&);
+#endif
 #include "Render/VisibleSnow.h"
 #include "Render/VisibleRuneEffects.h"
 #include "Packages/Engine/Resources/Level/UModel.h"
 #include "RuneDynamicProbe.h"
 #include "RunePolyobjProbe.h"
+#include "RuneMoverEncroachProbe.h"
 #include "RuneLightingVisibilityProbe.h"
 #include "RuneCampaignNativeProbe.h"
 #include "RuneCameraProbe.h"
@@ -137,7 +141,7 @@ int GameApp::main(Array<std::string> args)
             GameFolderSelection::UpdateList();
             if(GameFolderSelection::Games.size()!=1 || !GameFolderSelection::Games[0].IsRune()) throw std::runtime_error("Pass one Rune installation");
             Engine game(GameFolderSelection::GetLaunchInfo(0));
-            if(commandline->HasArg("","--rune-net-native-combat"))RunRuneNetworkNativeProbe(game);else RunRuneNetworkProbe(game); return 0;
+            if(commandline->HasArg("","--rune-corpse-probe"))RunRuneCorpseProbe(game);else if(commandline->HasArg("","--rune-net-native-combat"))RunRuneNetworkNativeProbe(game);else RunRuneNetworkProbe(game); return 0;
         }
 #endif
         if(commandline->HasArg("","--snow-probe")) {
@@ -402,6 +406,7 @@ int GameApp::main(Array<std::string> args)
 					if (!level) throw std::runtime_error("Level object not found");
 					std::cout << "RUNE_LEVEL_OK map=" << map << " actors=" << level->Actors.size() << '\n';
 					if(commandline->HasArg("", "--probe-polyobj")) RunRunePolyobjProbe(probe,level);
+					if(commandline->HasArg("", "--probe-mover-encroach")) RunRuneMoverEncroachProbe(probe,level);
                     if(commandline->HasArg("","--probe-lighting-bvh"))RunRuneLightingVisibilityProbe(probe,level);
 					if(commandline->HasArg("", "--probe-particles")) RunRuneParticleProbe(probe,level);
 					if(commandline->HasArg("", "--probe-village-collision")) RunRuneVillageCollisionProbe(probe,level);

@@ -140,7 +140,7 @@ bool Eligible(UPawn* p){
 bool Busy(UPawn* p){return p && p->Bloodlust.phase!=0;}
 bool Active(UPawn* p){return Alive(p) && (p->NetworkReplica?p->Bloodlust.active:Eligible(p) && (Player(p)?p->GetBool("bBloodLust"):p->Bloodlust.active));}
 unsigned Readiness(UPawn* p){
-    if(!p || p->NetworkReplica)return 0;
+    if(!p || p->NetworkReplica || RuneCorpse::Busy(p))return 0;
     if(!Enabled.load() || !Eligible(p) || (!AllowNormal.load() && (!Active(p) || Meter(p)<50)) || Busy(p) || p->Bloodlust.cooldown>0 || !StateAllows(p) || !Idle(p))return 0;
     unsigned mask=(p->Physics()==PHYS_Walking || (p->Physics()==PHYS_Falling && p->Bloodlust.tap>=0 && engine->LevelInfo->TimeSeconds()-p->Bloodlust.tap<=.32f))?1:0;
     if(p->Physics()==PHYS_Walking && Shield(p) && RuneRushPose::Supported(p))mask|=2;

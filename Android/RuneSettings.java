@@ -32,11 +32,14 @@ final class RuneSettings {
         add("wideView","Widescreen framing","Automatic preserves vertical visibility as the screen gets wider.",new String[]{"Original","Automatic"},1);
         add("bloom","Bloom & color","Subtle highlight glow and warmer color tuning.",new String[]{"Original","Enhanced"},0);
         add("fireEffects","Fire & combat effects","Fuller flames, rising embers and motion-aligned sparks, debris and blood droplets. Cosmetic only, with a shared particle budget.",new String[]{"Original","Enhanced"},1);
+        add("gore","Gore presentation","Enhanced adds cosmetic tumbling fragments, wound shading, impact blood and corpse settling. Pickupable limbs and match rules stay unchanged.",new String[]{"Original","Enhanced"},1);
         add("snow","Snow","Off keeps original map weather. Light and Heavy add drifting snow beneath open sky, with roof shelter. Cosmetic only.",new String[]{"Off","Light","Heavy"},0);
         add("sharp","Adaptive sharpening","Restores fine contrast while limiting bright edge halos.",LEVELS,1);
         add("filter","Texture filtering","Keeps angled textures clear; limited by GPU support.",new String[]{"8×","16×"},1);
         add("shadow","Shadow / midtone lift","Reveals dark detail while preserving deep blacks.",LEVELS,1);
         add("pixelLighting","Lighting mode","Remastered adds nearby moving shadows, stronger light and material highlights.",new String[]{"Original","Per-pixel","Remastered"},0);
+        add("materialLighting","Material lighting","Physical adds roughness-aware GGX highlights and metal response. Requires Remastered lighting.",new String[]{"Classic","Physical"},0);
+        add("environmentProbes","Local environment lighting","Baked room color and broad reflections. Static scenery only; prepared when first enabled. Requires Remastered lighting.",SWITCH,0);
         add("materialMaps","Material maps","Generated normal and roughness detail for Remastered lighting.",new String[]{"Original","Enhanced"},0);
         add("texturePack","Texture artwork","Work-in-progress remastered artwork. Unfinished or unavailable textures keep their original artwork.",new String[]{"Original","WIP 2×","WIP 4×"},0);
         add("water","Water reflections","Approximate adds ripples and an environment sheen. Full scene reflects nearby scenery at higher cost.",new String[]{"Original","Approximate","Full scene"},0);
@@ -79,6 +82,8 @@ final class RuneSettings {
         items.get("shadow").value=(clarity>>3)&3;
         items.get("pixelLighting").value=(world&512)!=0?2:(world>>8)&1;
         items.get("materialMaps").value=(world>>10)&1;
+        items.get("materialLighting").value=(world>>16)&1;
+        items.get("environmentProbes").value=(world>>17)&1;
         items.get("water").value=(world&2048)==0?0:(world&8192)!=0?2:1;
         Item shadowLights=items.get("shadowLights");
         shadowLights.value=bounded(shadowLights,prefs.getInt("menu.shadowLights",(world>>12)&1));
@@ -145,7 +150,7 @@ final class RuneSettings {
             legacy.putInt("worldFeatures",(prefs.getInt("worldFeatures",world())&~768)|lightingBits());
         if(key.equals("detail")||key.equals("depth")||key.equals("environment")||key.equals("hrtf"))
             legacy.putInt("worldFeatures",world());
-        int featureBit=key.equals("materialMaps")?1024:key.equals("shadowLights")?4096:0;
+        int featureBit=key.equals("materialMaps")?1024:key.equals("shadowLights")?4096:key.equals("materialLighting")?65536:key.equals("environmentProbes")?131072:0;
         if(featureBit!=0) {legacy.putInt("worldFeatures",(prefs.getInt("worldFeatures",world())&~featureBit)|(item.value!=0?featureBit:0));comparing=false;}
         if(key.equals("ambientOcclusion")) {legacy.putInt("worldFeatures",(prefs.getInt("worldFeatures",world())&~49152)|(item.value<<14));comparing=false;}
         if(key.equals("water")) {legacy.putInt("worldFeatures",(prefs.getInt("worldFeatures",world())&~10240)|waterBits());comparing=false;}
@@ -154,7 +159,7 @@ final class RuneSettings {
             comparing=false;
             if(item.value>0)prefs.edit().putInt("menu.textureWipQuality",item.value).apply();
         }
-        if(key.equals("fireEffects")||key.equals("snow"))comparing=false;
+        if(key.equals("fireEffects")||key.equals("snow")||key.equals("gore"))comparing=false;
         if(key.equals("bloom")||key.equals("sharp")||key.equals("filter")||key.equals("shadow")||key.equals("pixelLighting")||key.equals("detail")||key.equals("depth")||key.equals("environment")||key.equals("hrtf"))comparing=false;
         if(listener!=null) listener.changed(key);
     }
@@ -162,7 +167,7 @@ final class RuneSettings {
     int lightingBits() { return get("pixelLighting")==2?768:get("pixelLighting")<<8; }
     int waterBits() { return get("water")==0?0:2048|(get("water")==2?8192:0); }
     int shadowBudget() { return new int[]{1,3,4,6,8}[get("shadowLights")]; }
-    int world() { return get("environment")|(get("hrtf")<<3)|(get("detail")>0?2:0)|(get("depth")>0?4:0)|(get("detail")<<4)|(get("depth")<<6)|lightingBits()|(get("materialMaps")<<10)|waterBits()|(get("shadowLights")>0?4096:0)|(get("ambientOcclusion")<<14); }
+    int world() { return get("environment")|(get("hrtf")<<3)|(get("detail")>0?2:0)|(get("depth")>0?4:0)|(get("detail")<<4)|(get("depth")<<6)|lightingBits()|(get("materialMaps")<<10)|waterBits()|(get("shadowLights")>0?4096:0)|(get("ambientOcclusion")<<14)|(get("materialLighting")<<16)|(get("environmentProbes")<<17); }
     void compare() { comparing=!comparing; if(listener!=null) listener.changed("compare"); }
     void reset(String[] keys) {
         for(String key:keys) { Item i=items.get(key); set(key,i.defaultValue); }

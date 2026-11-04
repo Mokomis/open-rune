@@ -229,6 +229,7 @@ mat4 GetRuneActorToWorld(UActor* actor,int depth)
 
 mat4 GetRuneMeshToWorld(UActor* actor,int depth)
 {
+    if(engine->LaunchInfo.IsRune() && RuneCorpse::CustomTransform(actor))return RuneCorpse::MeshToWorld(actor);
 	auto* mesh=GetRuneDisplayMesh(actor);
 	mat4 actorToWorld=GetRuneActorToWorld(actor,depth);
 	if (!mesh) return actorToWorld;
@@ -260,6 +261,7 @@ void UpdateRuneAttachments(UActor* actor)
 		auto* child=UObject::TryCast<UActor>(children[j]);
 		if(!child || child->bDeleteMe() || child->GetUObject("AttachParent")!=actor) continue;
 		vec3 position=(world*RuneDualWield::Attachment(*model,actor,child,bones)*vec4(0,0,0,1)).xyz();
+        if(RuneCorpse::CustomTransform(child))position=(RuneCorpse::MeshToWorld(child)*vec4(child->CorpseBody.center,1)).xyz();
 		// TickSkeleton uses FarMoveActor with collision placement checks disabled.
 		child->XLevel()->Collision.RemoveFromCollision(child);
 		child->Location()=position;
@@ -388,6 +390,7 @@ Array<RuneJointPose> USkelModel::DecodeFrame(size_t sequence, int frame, bool va
 		ApplyDynamicPose(actor,result);
 		for (size_t i=0;i<result.size() && i<50;i++) result[i].Rotation+=actor->RuneJointOffsets[i];
         RuneRushPose::Apply(*this,actor,result);
+        RuneCorpse::ApplyPose(*this,actor,result);
 	}
 	return result;
 }
@@ -452,6 +455,7 @@ Array<RuneJointPose> USkelModel::ActorPose(UActor* actor) const
     ApplyDynamicPose(actor,pose);
     for(size_t j=0;j<pose.size() && j<50;j++) pose[j].Rotation+=actor->RuneJointOffsets[j];
     RuneRushPose::Apply(*this,actor,pose);
+    RuneCorpse::ApplyPose(*this,actor,pose);
     return pose;
 }
 

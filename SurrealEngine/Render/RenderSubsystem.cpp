@@ -1,4 +1,5 @@
 #include "RuneDesktopMenu.h"
+#include "RuneGore.h"
 
 #include "Precomp.h"
 #include "VisibleRuneEffects.h"
@@ -31,6 +32,8 @@ void RenderSubsystem::DrawGame(float levelTimeElapsed)
 	LevelTimeElapsed = levelTimeElapsed;
 	AutoUV += levelTimeElapsed * 64.0f;
 	engine->Level->Light.Tick(levelTimeElapsed);
+    engine->Level->Light.PrepareEnvironmentProbes();
+    RuneGore::Tick(levelTimeElapsed);
 
 	Stats.Frames = 0;
 	Stats.Surfaces = 0;
@@ -173,6 +176,7 @@ void RenderSubsystem::OnMapLoaded()
 {
     RuneSnow::Reset();
     RuneBloodPresentation::Reset();
+    RuneGore::Reset();
     // Build the small shared sprite atlases during loading, not on the first hit.
     if(engine->LaunchInfo.IsRune() && RuneVisualEffects::Enabled.load()) {
         RuneEffects::Texture(0,false);RuneEffects::Texture(0,true);RuneEffects::Texture(0,true,true);

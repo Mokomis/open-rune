@@ -27,6 +27,7 @@ void LightSystem::Tick(float levelTimeElapsed)
 
 void LightSystem::OnMapLoaded()
 {
+    Environment.Clear();
 	engine->Level->Light.FogBalls.clear();
 	engine->Level->Light.lmtextures.clear();
     engine->Level->Light.moverVisibility.clear();

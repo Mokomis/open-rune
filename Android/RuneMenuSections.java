@@ -23,9 +23,9 @@ final class RuneMenuSections {
     static String[] keys(String page){switch(page){
     case "display":return new String[]{"resolution","scalingMethod","aa","fps","refresh","pacing","fpsManual","refreshManual"};
     case "camera":return new String[]{"fov","wideView"};
-    case "lighting":return new String[]{"pixelLighting","ambientOcclusion","shadowLights"};
+    case "lighting":return new String[]{"pixelLighting","materialLighting","environmentProbes","ambientOcclusion","shadowLights"};
     case "textures":return new String[]{"texturePack","filter","materialMaps","detail","depth"};
-    case "effects":return new String[]{"bloom","sharp","shadow","fireEffects","snow","water"};
+    case "effects":return new String[]{"bloom","sharp","shadow","fireEffects","gore","snow","water"};
     case "volume":return new String[]{"master","music","effects"};
     case "soundEffects":return new String[]{"soundRemaster"};
     case "spatial":return new String[]{"environment","hrtf"};

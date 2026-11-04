@@ -4,6 +4,7 @@
 // and screenshot paths at the current native resolution and sample count.
 bool VulkanRenderDevice::Exec(std::string Cmd, OutputDevice& Ar)
 {
+    if(Cmd=="RuneMaterialLightingProbe"){RunMaterialLightingProbe();return true;}
     if(Cmd=="RuneShadowBudgetProbe"){RunShadowBudgetProbe();return true;}
     if(Cmd=="RuneTexturePackProbe")
     {
@@ -394,6 +395,7 @@ void VulkanRenderDevice::RunValidationProbe()
         if(!mapped)materialBaseline=value;else if(mapped<3)require(std::abs(value-materialBaseline)>10,"normal and roughness affect actual pixel lighting");
     }
     LogMessage("RUNE_MATERIAL_MAPS_GPU_OK native=1 samples=4 tangent_normal=1 roughness=1 planar_basis=1 mirrored_basis=1");
+    RunMaterialLightingProbe();
     // Offscreen reflection, clipping, continuation and transparent underwater
     // visibility use the production 4x pass and production water material.
     for(int split=0;split<3;++split) {
@@ -524,4 +526,65 @@ void VulkanRenderDevice::RunValidationProbe()
 	HitX = savedHitX; HitY = savedHitY; HitWidth = savedHitWidth; HitHeight = savedHitHeight;
 	CurrentFrame = nullptr;
 	LogMessage("RUNE_VULKAN_PROBE_OK native=1 samples=4 resolve_paths=" + std::to_string(savedResolve ? 2 : 1) + " frames=" + std::to_string(savedResolve ? 48 : 24) + " continuation=2 depth=1 alpha=1 hit_before=1 hit_after=1 hit_miss=1 original=1 enhanced=1 capture_pixels=1");
+}
+
+
+void VulkanRenderDevice::RunMaterialLightingProbe()
+{
+    if(IsLocked || GetSettingsMultisample()!=4 || ResolutionScale!=1.0f)
+        throw std::runtime_error("Material GPU probe requires unlocked native 4x renderer");
+    auto require=[](bool ok,const char* message){if(!ok)throw std::runtime_error(std::string("Material probe: ")+message);};
+    int savedWorld=WorldFeatures;bool savedGamma=GammaCorrectScreenshots,savedBloom=Bloom;
+    float savedSharp=AdaptiveSharpness,savedLift=ShadowLift;
+    Bloom=false;AdaptiveSharpness=ShadowLift=0;GammaCorrectScreenshots=false;
+    int w=GetRenderWidth(),h=GetRenderHeight();
+    SceneNode frame{};frame.X=w;frame.Y=h;frame.FX=float(w);frame.FY=float(h);frame.FX2=w*.5f;frame.FY2=h*.5f;frame.FovAngle=90;
+    frame.ObjectToWorld=frame.WorldToView=mat4::identity();
+    UnrealMipmap whiteMip;whiteMip.Width=whiteMip.Height=1;whiteMip.Data.resize(4);std::fill(whiteMip.Data.begin(),whiteMip.Data.end(),255);
+    TextureInfo whiteInfo;whiteInfo.CacheID=0xfedcba9876543299ull;whiteInfo.Format=TextureFormat::BGRA8;whiteInfo.NumMips=1;whiteInfo.Mips=&whiteMip;
+    std::vector<TextureColor> pixels(size_t(w)*h);
+    // Exercise the real native/4x draw path, including roughness, independent
+    // environment toggle, no direct lights, and an explicitly unlit receiver.
+    for(int worldReceiver=0;worldReceiver<2;++worldReceiver) {
+    int physicalPixels[6]{};
+    for(int mode=0;mode<6;++mode) {
+        WorldFeatures=768|(mode?65536:0)|(mode>=3?131072:0);
+        Lock(vec4(.5f),vec4(0),vec4(0),nullptr,nullptr);
+        SetLightingCamera(vec3(0,0,-100));SetSceneNode(&frame);
+        pushconstants.objectToProjection=mat4::scale(.01f);pushconstants.nearClip=vec4(0,0,0,1);
+        VertexLight lighting{};lighting.NumLights=mode==4?0:1;lighting.ScaleGlow=1;lighting.AmbientColor=vec3(.01f);
+        lighting.Lights[0]={vec3(0,0,-20),1.0f/(250*250),vec3(.12f)};
+        GouraudVertex verts[4];vec3 points[]={{-80,-80,60},{80,-80,60},{80,80,60},{-80,80,60}};
+        for(int i=0;i<4;++i){verts[i].Point=points[i];verts[i].Normal=vec3(0,0,-1);verts[i].Lighting=&lighting;verts[i].Light=vec3(.1f);verts[i].Fog=vec4(0);verts[i].UV=vec2(points[i].x/160+.5f,points[i].y/160+.5f);}
+        if(!worldReceiver || mode==5)DrawGouraudPolygon(&frame,whiteInfo,verts,4,PF_Occlude|(mode==5?PF_Unlit:0));
+        else {
+            SurfaceLight light{};light.Count=lighting.NumLights;
+            light.Origin=vec3(-100,-100,60);light.U=vec3(200,0,0);light.V=vec3(0,200,0);light.Normal=vec3(0,0,-1);
+            light.Lights[0]={vec3(0,0,-20),vec3(.12f),1.0f/(250*250),0};
+            for(auto& mask:light.Shadows){mask.Width=mask.Height=1;mask.Data.resize(sizeof(vec4));vec4 visible(1);std::memcpy(mask.Data.data(),&visible,sizeof(visible));}
+            UnrealMipmap mip;mip.Width=mip.Height=1;mip.Data.resize(sizeof(vec4));vec4 ambient(.01f);std::memcpy(mip.Data.data(),&ambient,sizeof(ambient));
+            TextureInfo map;map.CacheID=0xfedcba9876544800ull;map.Format=TextureFormat::RGBA32_F;map.Mips=&mip;map.NumMips=1;map.UScale=map.VScale=200;map.bRealtimeChanged=true;map.PixelLighting=&light;
+            SurfaceInfo surface;surface.Texture=&whiteInfo;surface.LightMap=&map;surface.PolyFlags=PF_Occlude;
+            SurfaceFacet facet{};facet.Vertices=points;facet.VertexCount=4;facet.MapCoords.Origin=vec3(0,0,60);facet.MapCoords.XAxis=vec3(1,0,0);facet.MapCoords.YAxis=vec3(0,1,0);
+            DrawComplexSurface(&frame,surface,facet);
+        }
+        if(mode!=5) {
+            auto& packet=Buffers->MeshLights[Buffers->MeshLightCount-1];
+            packet.Material=vec4(.7f,mode==0?48.0f:mode==2?.9f:.32f,.45f,mode==0?0.0f:1.0f);
+            for(auto& lobe:packet.Environment)lobe=vec4(0);
+            if(mode>=3) {packet.Environment[0].w=1;packet.Environment[5]=vec4(.8f,.12f,.04f,1);}
+        }
+        Unlock(false);ReadPixels(pixels.data());
+        auto color=pixels[(size_t)(h/2)*w+w/2];physicalPixels[mode]=color.R;
+        LogMessage("RUNE_PHYSICAL_MATERIAL_PIXEL world="+std::to_string(worldReceiver)+" mode="+std::to_string(mode)+" r="+std::to_string(color.R)+" b="+std::to_string(color.B));
+        if(mode==4)require(color.R>color.B+10,"environment reflection supplies directional room color without a direct light");
+        if(mode==5)require(std::abs(int(color.R)-int(color.B))<=1,"unlit effects bypass material/probe lighting");
+    }
+    require(std::abs(physicalPixels[0]-physicalPixels[1])>3,"physical material toggle changes real GPU shading");
+    require(std::abs(physicalPixels[1]-physicalPixels[2])>3,"roughness changes physical highlights");
+    require(physicalPixels[3]>physicalPixels[1]+3,"independent environment toggle adds room reflection");
+    }
+    LogMessage("RUNE_PHYSICAL_MATERIAL_GPU_OK native=1 samples=4 ggx=1 roughness=1 environment=1 no_direct_lights=1 unlit_bypass=1 mesh=1 bsp=1");
+
+    WorldFeatures=savedWorld;Bloom=savedBloom;GammaCorrectScreenshots=savedGamma;AdaptiveSharpness=savedSharp;ShadowLift=savedLift;
 }

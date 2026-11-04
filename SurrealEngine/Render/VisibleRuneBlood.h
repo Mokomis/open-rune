@@ -77,7 +77,7 @@ inline void Draw(VisibleFrame* frame) {
         float opacity=std::clamp((1.5f-d.age)*4,0.f,1.f);
         vec3 side=frame->ViewRotation.YAxis*d.radius;
         vec3 up=frame->ViewRotation.ZAxis*d.radius*2.f;
-        RuneEffects::Quad(frame,tex,d.p,side,up,vec3(.48f,.060f,.035f),opacity*.85f,PF_Highlighted);
+        RuneEffects::Quad(frame,tex,d.p,side,up,BloodColor(),opacity*.85f,PF_Highlighted);
     }
     // Map-local history: fixed storage, oldest landing replaced on overflow.
     // Draw only the nearest visible 96; distant stains remain in the history.
@@ -91,7 +91,7 @@ inline void Draw(VisibleFrame* frame) {
     for(const auto& entry:visible) {
         if(count++>=96 || frame->EffectQuadBudget<=0)break;
         const auto& stain=*entry.second;
-        RuneEffects::Quad(frame,tex,stain.p,vec3(stain.radius,0,0),vec3(0,stain.radius,0),vec3(.48f,.060f,.035f),.85f,PF_Highlighted);
+        RuneEffects::Quad(frame,tex,stain.p,vec3(stain.radius,0,0),vec3(0,stain.radius,0),BloodColor(),.85f,PF_Highlighted);
     }
 }
 }

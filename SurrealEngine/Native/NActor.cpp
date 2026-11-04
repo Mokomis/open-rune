@@ -628,7 +628,8 @@ void NActor::SetCollisionSize(UObject* Self, float NewRadius, float NewHeight, B
 
 void NActor::SetLocation(UObject* Self, const vec3& NewLocation, BitfieldBool& ReturnValue)
 {
-	ReturnValue = UObject::Cast<UActor>(Self)->SetLocation(NewLocation);
+	UActor* actor = UObject::Cast<UActor>(Self);
+	ReturnValue = engine->LaunchInfo.IsRune() ? actor->RuneFarMove(NewLocation) : actor->SetLocation(NewLocation);
 }
 
 void NActor::SetOwner(UObject* Self, UObject* NewOwner)

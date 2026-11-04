@@ -3,6 +3,7 @@
 #include "Packages/Core/UObject.h"
 #include "Math/bbox.h"
 #include "RunePose.h"
+#include "RuneCorpse.h"
 
 class UZoneInfo;
 class UTexture;
@@ -433,6 +434,7 @@ public:
 	std::pair<bool, vec3> CheckLocation(vec3 location, float radius, float height, bool check);
 
 	bool SetLocation(const vec3& newLocation);
+	bool RuneFarMove(const vec3& newLocation);
 	bool SetRotation(const Rotator& newRotation);
 	bool SetCollisionSize(float newRadius, float newHeight);
 
@@ -447,6 +449,12 @@ public:
 
 	CollisionHit TryMove(const vec3& delta, bool dryRun = false, bool isOwnBaseBlocking = true);
 	CollisionHit TryMoveSmooth(const vec3& delta);
+	// Rune moving-brush step: riders first, then original encroachment at the
+	// test pose (push, recheck, reverse push, EncroachingOn), then commit.
+	CollisionHit TryMoveRuneBrush(const vec3& delta, const Rotator& newRotation);
+	bool RuneCheckEncroachment(const vec3& testLocation, const Rotator& testRotation);
+	bool RuneMoveSmooth(const vec3& delta);
+	bool IsBlockedBy(UActor* other);
 	bool Move(const vec3& delta);
 	bool MoveSmooth(const vec3& delta);
 
@@ -609,6 +617,7 @@ public:
 	int Index = -1;
 
 	// Child actor tracking
+    RuneCorpse::BodyState CorpseBody;
 	bool NetworkReplica = false; // Presentation-only; no local script/physics authority.
 	float NetworkStairOffset = 0; // Local replica mesh/joints only; never serialized or used by collision.
 	Array<UActor*> ChildActors;
@@ -896,6 +905,7 @@ private:
 	void AddBasedActor(UActor* actor);
 	void RemoveBasedActor(UActor* actor);
 	void TurnBasedActors(const Rotator& deltaRotation);
+	void TurnBasedActors(const Rotator& deltaRotation, const vec3& pivot);
 
 	// TODO: Compare behavior more closely with original engine. Might differ depending on game.
 };

@@ -323,6 +323,9 @@ static float LightDistanceFalloff(float distsqr)
 
 void LightSystem::InitVertexLight(VertexLight& out, UActor* actor, UZoneInfo* zoneActor)
 {
+    out.Environment={};
+    if(engine->LaunchInfo.IsRune() && (engine->render->Device->WorldFeatures&(512|131072))==(512|131072))
+        out.Environment=SampleEnvironment(actor->Location());
 	// AmbientGlow value 255 is a special pulsating effect used for powerups
 	float ambientGlow = actor->AmbientGlow() == 255 ? AmbientGlowAmount : actor->AmbientGlow() * (1.0f / 255.0f);
 	out.AmbientColor = ambientGlow + hsbtorgb(zoneActor->AmbientHue(), zoneActor->AmbientSaturation(), zoneActor->AmbientBrightness());

@@ -13,6 +13,8 @@
 #include <cmath>
 #include "ShadowReceiverBounds.h"
 #include "Light/LightSystem.h"
+#include "Engine.h"
+#include "Packages/Engine/Resources/Level/ULevel.h"
 #include <cstring>
 #include <stdexcept>
 #include "Package/Package.h"
@@ -652,6 +654,8 @@ void VulkanRenderDevice::DrawComplexSurface(SceneNode* Frame, SurfaceInfo& Surfa
         {
             MeshLightPacket packet{};
             packet.Material = GetMaterialResponse(Surface.Texture);
+            packet.Material.w=(WorldFeatures&65536)?1.0f:0.0f;
+        if(packet.Material.w>0)packet.Material.y=std::sqrt(std::sqrt(2.0f/(packet.Material.y+2.0f)));
             packet.MaterialMaps=ivec4(materialMap,materialMap?1:0,responseMap,responseMap?1:0);
             packet.ViewCamera=vec4(CurrentLightingCamera,1);
             packet.AmbientScale = vec4(0, 0, 0, surfaceLight->Time);
@@ -710,6 +714,11 @@ void VulkanRenderDevice::DrawComplexSurface(SceneNode* Frame, SurfaceInfo& Surfa
                 contactMask|=1<<c;
             }
             packet.SurfaceTangent.w=float(contactMask);
+            if((WorldFeatures&(512|131072))==(512|131072) && engine && engine->Level) {
+                vec3 center=(boundsMin+boundsMax)*.5f+normal*4.0f;
+                auto environment=engine->Level->Light.SampleEnvironment(center);
+                std::copy(environment.Lobes.begin(),environment.Lobes.end(),packet.Environment);
+            }
             for (int i = 0; i < surfaceLight->Count; i++)
             {
                 const auto& light = surfaceLight->Lights[i];
@@ -806,6 +815,10 @@ void VulkanRenderDevice::DrawGouraudPolygon(SceneNode* Frame, TextureInfo& Info,
 		const auto& src = *Pts[0].Lighting;
 		MeshLightPacket packet{};
 		packet.Material = GetMaterialResponse(&Info);
+        packet.Material.w=(WorldFeatures&65536)?1.0f:0.0f;
+        if(packet.Material.w>0)packet.Material.y=std::sqrt(std::sqrt(2.0f/(packet.Material.y+2.0f)));
+        if((WorldFeatures&(512|131072))==(512|131072))
+            std::copy(src.Environment.Lobes.begin(),src.Environment.Lobes.end(),packet.Environment);
         packet.MaterialMaps=ivec4(materialMap,materialMap?1:0,responseMap,responseMap?1:0);
         packet.ViewCamera=vec4(CurrentLightingCamera,1);
         packet.AmbientScale = vec4(src.AmbientColor, src.ScaleGlow);

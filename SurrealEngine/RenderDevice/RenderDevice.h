@@ -66,6 +66,7 @@ enum class TextureFormat : uint32_t;
 
 struct TextureInfo
 {
+    bool WetGore = false; // Presentation-only wound material; never serialized.
     SurfaceLight* PixelLighting = nullptr;
 	uint64_t CacheID = 0;
 	bool bRealtimeChanged = false;

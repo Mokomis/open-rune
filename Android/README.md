@@ -1,4 +1,16 @@
+# Current deployment — November 3, 2026
+
+The [matching client update](../Docs/RunePort/CLIENT-SYNC-20261103.md) is installed on OPD2515 with the existing signing key. It includes the mover fixes, material lighting/probes, enhanced gore and proportion-preserving corpse carry/throw poses. Protocol/ALPN and native rules are 22. Saved graphics/audio choices and original saves were preserved; no new texture or sound pack was deployed. Older not-built/not-installed statements below describe earlier checkpoints.
+
+November 3 source follow-up: [corpse carrying/throwing](../Docs/RunePort/CORPSE-THROWING.md) uses existing Use, Attack and Throw controls, with slower carry movement and eligible bot support. Native match rules 22; wire/ALPN 22 unchanged. Carried corpses now use proportion-preserving relaxed poses and matching visibility bounds. Mac validation only for this change; Android has not been rebuilt/installed.
+
 # Open Rune — Android build and device guide
+
+November 3 gore: [Original / Enhanced gore presentation](../Docs/RunePort/ENHANCED-GORE.md). Independent Video → Effects & weather setting; local 3D fragments, tumbling, wet wound materials, aligned trails/impact marks/pools and bounded post-animation corpse settling. Original actor physics, pickup limbs, damage, callbacks, protocol and saves are retained. Mac native 2816×1762/4× rendered on/off checks preserve 3,540 actor poses per run; existing 24 gib cases and native multiplayer sever/corpse regression (430 snapshots / 4,093 ticks) pass. Frozen same-scene render cost ~0.35 ms plus ~0.02 ms average update, separate measurements rather than an Android FPS claim. Windows/Android menus/JNI wired, not deployed. No tablet access, Windows update, commit or push.
+
+
+November 3 material lighting: [GGX highlights and local environment probes](../Docs/RunePort/MATERIAL-LIGHTING-PROBES.md). Independent Video → Lighting & shadows controls, retained defaults, shared Vulkan implementation. Mac native 2816×1762/4× focused GPU, field/preference and active-combat checks pass. Alternating Hildir/village blocks add about 0.62/0.22 ms (4.3%/1.6% engine FPS); one-time map bake is separate. Broad reflections use static scenery and vertex-weighted radiance; this is not full PBR/GI. Older full hit-buffer GPU tests hit a Mac resolve limitation; the lift camera is unsuitable for a representative visual benchmark. No Android/Windows deployment, commit or push.
+
 
 November 2 moving lifts: [fast fixed-world visibility](../Docs/RunePort/LIFT-PERFORMANCE.md) is installed. Moving-lift native 2520×1680/4× fixtures improve LostCrypt ~30.5→75.2 and HelLift ~100.9→116.5 engine FPS with identical captures/motion. This accelerates lighting queries without changing collision or reducing settings. Diagnostic `fastWorldVisibility` and `liftProbe` extras require isolated `saveTest` runs; ordinary sessions do not activate the automated lift/camera fixture.
 

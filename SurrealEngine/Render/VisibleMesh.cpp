@@ -1,5 +1,6 @@
 
 #include "Precomp.h"
+#include "RuneGore.h"
 #include "VisibleMesh.h"
 #include "VisibleFrame.h"
 #include "RenderSubsystem.h"
@@ -48,10 +49,14 @@ bool VisibleMesh::DrawMesh(VisibleFrame* frame, UActor* actor, bool wireframe, b
 	// DrawDebugInfo(frame, actor);
 
 	mat4 meshToWorld = GetRuneMeshToWorld(actor);
+    auto originalToWorld=meshToWorld;
+    meshToWorld=RuneGore::MeshTransform(actor,mesh,meshToWorld);
 
 	// Note: using transpose seems to be wrong here
 	mat3 meshNormalToWorld = mat3(Coords::Rotation(actor->Rotation()).ToMatrix() * Coords::Rotation(mesh->RotOrigin).ToMatrix());
 	if (engine->LaunchInfo.IsRune() && actor->bCarriedItem()) meshNormalToWorld=mat3(meshToWorld);
+    else if(std::memcmp(meshToWorld.matrix,originalToWorld.matrix,sizeof(meshToWorld.matrix))!=0)
+        meshNormalToWorld=mat3(meshToWorld)*mat3::inverse(mat3(originalToWorld))*meshNormalToWorld;
 
 	bool needsTranslucentPass = DrawMeshAtLocation(frame, actor, actor, mesh, meshToWorld, meshNormalToWorld, translucentPass);
 
@@ -237,6 +242,7 @@ bool VisibleMesh::DrawMesh(VisibleFrame* frame, UActor* actor, UActor* lightLoca
 
 		TextureInfo texinfo;
 		engine->render->UpdateTextureInfo(texinfo, tex);
+        if(engine->LaunchInfo.IsRune())RuneGore::Material(texinfo,actor);
 
 		float uscale = (tex ? tex->UsedMipmaps.front().Width : 256) * (1.0f / 255.0f);
 		float vscale = (tex ? tex->UsedMipmaps.front().Height : 256) * (1.0f / 255.0f);
@@ -565,6 +571,7 @@ bool VisibleMesh::DrawLodMeshFace(VisibleFrame* frame, UActor* actor, UActor* li
 
 		TextureInfo texinfo;
 		engine->render->UpdateTextureInfo(texinfo, tex);
+        if(engine->LaunchInfo.IsRune())RuneGore::Material(texinfo,actor);
 
 		float uscale = (texinfo.Texture ? texinfo.Texture->UsedMipmaps.front().Width : 256) * (1.0f / 255.0f);
 		float vscale = (texinfo.Texture ? texinfo.Texture->UsedMipmaps.front().Height : 256) * (1.0f / 255.0f);
@@ -787,6 +794,7 @@ bool VisibleMesh::DrawMeshDX(VisibleFrame* frame, UActor* actor, UActor* lightLo
 
 		TextureInfo texinfo;
 		engine->render->UpdateTextureInfo(texinfo, tex);
+        if(engine->LaunchInfo.IsRune())RuneGore::Material(texinfo,actor);
 
 		float uscale = (tex ? tex->UsedMipmaps.front().Width : 256) * (1.0f / 255.0f);
 		float vscale = (tex ? tex->UsedMipmaps.front().Height : 256) * (1.0f / 255.0f);
@@ -1042,6 +1050,7 @@ bool VisibleMesh::DrawLodMeshFaceDX(VisibleFrame* frame, UActor* actor, UActor* 
 
 		TextureInfo texinfo;
 		engine->render->UpdateTextureInfo(texinfo, tex);
+        if(engine->LaunchInfo.IsRune())RuneGore::Material(texinfo,actor);
 
 		float uscale = (texinfo.Texture ? texinfo.Texture->UsedMipmaps.front().Width : 256) * (1.0f / 255.0f);
 		float vscale = (texinfo.Texture ? texinfo.Texture->UsedMipmaps.front().Height : 256) * (1.0f / 255.0f);

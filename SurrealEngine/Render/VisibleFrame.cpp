@@ -1,3 +1,4 @@
+#include "RuneGore.h"
 
 #include "Precomp.h"
 #include "VisibleSnow.h"
@@ -365,6 +366,7 @@ void VisibleFrame::Draw()
 	DrawOpaqueActors();
     RuneSnow::Draw(this);
     RuneBloodPresentation::Draw(this);
+    RuneGore::Draw(this);
 	SortTranslucent();
 	DrawTranslucent();
 }

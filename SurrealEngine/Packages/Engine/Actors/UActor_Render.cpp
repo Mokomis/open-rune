@@ -24,9 +24,16 @@ void UActor::UpdateBspInfo()
 	else if ((dt == DT_Mesh || (engine->LaunchInfo.IsRune() && (int)dt == 6)) && GetRuneDisplayMesh(this))
 	{
 		UMesh* mesh = GetRuneDisplayMesh(this);
-		mat4 objectToWorld = GetRuneActorToWorld(this);
-		mat4 meshToWorld = objectToWorld * mesh->meshToObject;
-		bbox = mesh->BoundingBox.transform(meshToWorld);
+        if(engine->LaunchInfo.IsRune() && RuneCorpse::Posed(this)) {
+            // The relaxed body extends beyond the authored floor-pose bounds,
+            // and uses its own centred transform rather than the torso joint.
+            auto world=RuneCorpse::MeshToWorld(this);
+            bbox=BBox(CorpseBody.lower,CorpseBody.upper).transform(world);
+        }else {
+            mat4 objectToWorld = GetRuneActorToWorld(this);
+            mat4 meshToWorld = objectToWorld * mesh->meshToObject;
+            bbox = mesh->BoundingBox.transform(meshToWorld);
+        }
 	}
 	else if ((dt == DT_Sprite || dt == DT_SpriteAnimOnce) && sprite && !sprite->UsedMipmaps.empty())
 	{

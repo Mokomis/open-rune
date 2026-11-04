@@ -21,10 +21,12 @@
 
 void RunRuneDualWieldProbe(Engine& game);
 void RunRuneBloodlustProbe(Engine& game);
+void RunRuneRelocationProbe(Engine& game);
 void RunRuneTacticsProbe(Engine& game) {
     if(commandline->GetArg("","--rune-tactics-probe","")=="previews") { RuneCharacterPreview::Probe(game);return; }
     if(commandline->GetArg("","--rune-tactics-probe","")=="characters") { RuneCharacters::Probe(game);return; }
     if(commandline->GetArg("","--rune-tactics-probe","")=="bloodlust") { RunRuneBloodlustProbe(game);return; }
+    if(commandline->GetArg("","--rune-tactics-probe","")=="relocation") { RunRuneRelocationProbe(game);return; }
     RuneBloodlust::Enabled=false; // Separate ordinary-combat regression.
     if(commandline->GetArg("","--rune-tactics-probe","")=="dual") { RunRuneDualWieldProbe(game);return; }
     RuneDualWield::Enabled=false; // Baseline original single-weapon AI regression.

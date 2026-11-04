@@ -10,6 +10,9 @@
 
 // Presentation only: never alter source palettes, authored emitters or gameplay RNG.
 namespace RuneBloodPresentation {
+// Shared deep crimson for enhanced blood; retain coverage and emission rates.
+inline constexpr float BloodRed=.34f, BloodGreen=.045f, BloodBlue=.028f;
+inline vec3 BloodColor(){return vec3(BloodRed,BloodGreen,BloodBlue);}
 inline bool RedEmitter(UActor* a) {
     return a && !a->IsA("SarkBloodMist") && !a->IsA("GreenBloodSpray") &&
         (a->IsA("BloodMist") || a->IsA("Blood") || a->IsA("BloodSpurt") || a->IsA("DrippingBlood"));
@@ -22,9 +25,9 @@ inline TextureColor Crimson(TextureColor source) {
     density*=std::clamp((int(source.R)-std::min(source.G,source.B))/12.f,0.f,1.f);
     float alpha=density*.88f;
     // Muted crimson: lower red intensity without reducing silhouette/coverage.
-    float red=.48f+.09f*(1-density);
-    return TextureColor(uint8_t(std::lround(red*alpha*255)),uint8_t(std::lround(.060f*alpha*255)),
-        uint8_t(std::lround(.035f*alpha*255)),uint8_t(std::lround(alpha*255)));
+    float red=BloodRed+.065f*(1-density);
+    return TextureColor(uint8_t(std::lround(red*alpha*255)),uint8_t(std::lround(BloodGreen*alpha*255)),
+        uint8_t(std::lround(BloodBlue*alpha*255)),uint8_t(std::lround(alpha*255)));
 }
 struct Palette {std::array<TextureColor,256> colors;};
 inline std::map<UTexture*,std::unique_ptr<Palette>> palettes;
@@ -37,8 +40,8 @@ inline bool Recolor(UActor* actor,TextureInfo& info,uint32_t& flags,int style) {
             auto src=info.Palette[i];
             if(flags&PF_Modulated)p->colors[i]=Crimson(src);
             else {
-                float shade=.40f+.14f*std::sqrt(src.R/255.f),a=.88f;
-                p->colors[i]=TextureColor(uint8_t(shade*a*255),uint8_t(.055f*a*255),uint8_t(.035f*a*255),uint8_t(a*255));
+                float shade=.29f+.10f*std::sqrt(src.R/255.f),a=.88f;
+                p->colors[i]=TextureColor(uint8_t(shade*a*255),uint8_t(BloodGreen*a*255),uint8_t(BloodBlue*a*255),uint8_t(a*255));
             }
         }
         if(flags&PF_Masked)p->colors[0]=TextureColor(0,0,0,0);

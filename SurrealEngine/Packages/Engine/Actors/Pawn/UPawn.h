@@ -21,6 +21,7 @@ public:
 	RuneTactics::State Tactics;
     RuneDualWield::State Dual;
     RuneBloodlust::State Bloodlust;
+    RuneCorpse::CarryState CorpseCarry;
 
 	// Transient combat-kick state. Save/load safely cancels a pending hit.
     bool RuneKickActive=false, RuneKickPending=false;

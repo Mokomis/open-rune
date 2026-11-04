@@ -1,0 +1,47 @@
+#pragma once
+#include "RunePose.h"
+#include "Utils/Array.h"
+#include <vector>
+class UActor; class UPawn; class UObject; class UFunction; class ExpressionValue; class USkelModel;
+namespace RuneCorpse {
+// Transient, actor-owned state. Saving sets manipulated bodies down first.
+struct BodyState {
+    bool active=false, flying=false, centered=false, presented=false;
+    const USkelModel* poseModel=nullptr;
+    Array<RuneJointPose> pose;
+    float supportDepth=0;
+    bool collide=false, blockActors=false, blockPlayers=false, world=false;
+    float radius=0,height=0,life=0,age=0,carry=0;
+    vec3 center{0},lower{0},upper{0};
+    UPawn* thrower=nullptr;
+    std::vector<UPawn*> victims;
+};
+struct CarryState {
+    UActor* body=nullptr;
+    float age=0,release=-1,cooldown=0,think=.4f;
+    unsigned pickups=0,throws=0,hits=0,blocks=0;
+};
+bool Eligible(UPawn*);
+bool Throwable(UActor*);
+UActor* Held(UPawn*); // Also resolves presentation replicas from attachment links.
+bool Busy(UPawn*);
+bool Pickup(UPawn*,UActor*);
+bool Use(UPawn*);
+bool Throw(UPawn*);
+void Drop(UPawn*);
+void Tick(UPawn*,float);
+bool TickBody(UActor*,float);
+void OnDestroy(UActor*);
+void BeforeSave();
+float SpeedScale(UPawn*);
+float Windup(UPawn*);
+bool ScriptCall(UFunction*,UObject*,const ArrayView<ExpressionValue>&,ExpressionValue&);
+Array<RuneJointPose> RelaxedPose(const USkelModel&);
+Array<RuneJointPose> ReferencePose(const USkelModel&);
+bool Posed(UActor*);
+void Presentation(UActor*,bool);
+void ApplyPose(const USkelModel&,UActor*,Array<RuneJointPose>&);
+bool CustomTransform(UActor*);
+mat4 MeshToWorld(UActor*);
+vec3 SnapshotLocation(UActor*,vec3);
+}

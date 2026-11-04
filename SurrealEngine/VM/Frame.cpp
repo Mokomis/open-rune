@@ -338,6 +338,8 @@ ExpressionValue Frame::Call(UFunction* func, UObject* instance, const ArrayView<
 		return ExpressionValue::NothingValue();
 	}
 
+    ExpressionValue corpseResult;
+    if(RuneCorpse::ScriptCall(func,instance,args,corpseResult))return corpseResult;
     ExpressionValue bloodResult;
     if(RuneBloodlust::ScriptCall(func,instance,args,bloodResult))return bloodResult;
     ExpressionValue dualResult;

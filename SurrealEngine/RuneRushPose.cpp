@@ -1,6 +1,7 @@
 #include "Precomp.h"
 #include "RuneRushPose.h"
 #include "RuneBloodlust.h"
+#include "RuneCorpse.h"
 #include "Packages/Engine/Actors/Pawn/UPawn.h"
 #include "Packages/Engine/Actors/Inventory/UWeapon.h"
 #include "Packages/Engine/Resources/Mesh/USkelModel.h"
@@ -129,6 +130,89 @@ void Apply(const USkelModel& m,UActor* actor,Array<RuneJointPose>& pose){
             auto local=Local(InverseAffine(bones[m.Joints[hand].Parent])*parked);
             float parkedBlend=windup?Smooth((s.age-.12f)/.12f):recovery?1-Smooth((s.age-.18f)/.16f):1;
             pose[hand]=BlendRunePose(pose[hand],local,parkedBlend);
+        }
+    }
+}
+}
+
+namespace RuneCorpse {
+Array<RuneJointPose> ReferencePose(const USkelModel& m) {
+    int reference=-1;
+    for(auto name:{"neutral_idle","idle","w_idleA","IDL_ALL_base1_AN0N"}) {
+        reference=RuneRushPose::Sequence(m,name);if(reference>=0)break;
+    }
+    if(reference<0)for(size_t i=0;i<m.Sequences.size();++i) {
+        auto name=m.Sequences[i].Info.Name.ToString();for(char& c:name)c=char(std::tolower((unsigned char)c));
+        if(name.find("idle")!=std::string::npos){reference=int(i);break;}
+    }
+    return m.DecodeFrame(reference>=0?reference:0,0);
+}
+Array<RuneJointPose> RelaxedPose(const USkelModel& m) {
+    using namespace RuneRushPose;
+    auto pose=ReferencePose(m);if(pose.empty())return pose;
+    const auto meshToActor=Coords::Rotation(m.RotationOffset).ToMatrix();
+    auto actorToMesh=InverseAffine(meshToActor);
+    auto direction=[&](vec3 v){return (actorToMesh*vec4(v,0)).xyz();};
+    // Lay a proportion-preserving reference pose across the carrier. Root uses
+    // the Rune-specific transposed rotation convention; never rescale bones.
+    auto laid=actorToMesh*mat4::rotate(1.57079632679f,0,1,0)*meshToActor*
+        mat4::transpose(RunePoseRotation(pose[0].Rotation));
+    pose[0].Rotation=RunePoseEuler(mat4::transpose(laid));
+    auto aim=[&](int joint,int child,vec3 actorDirection) {
+        if(joint<0 || child<0 || m.Joints[joint].Parent<0)return;
+        auto bones=m.JointMatrices(pose);auto from=Point(bones[child])-Point(bones[joint]);
+        Rotate(m,pose,joint,Turn(from,direction(actorDirection))*bones[joint],bones);
+    };
+    for(bool left:{true,false}) {
+        int shoulder=Joint(m,left?"lshouldb":"rshouldb");if(shoulder<0)shoulder=Joint(m,left?"lshould":"rshould");
+        int elbow=Joint(m,left?"lelbow":"relbow"),wrist=Joint(m,left?"lwrist":"rwrist");float side=left?1.f:-1.f;
+        aim(shoulder,elbow,{.08f,side*.27f,-1.f});
+        aim(elbow,wrist,{.24f,side*.14f,-1.f});
+        int hip=Joint(m,left?"lhip":"rhip"),knee=Joint(m,left?"lknee":"rknee"),ankle=Joint(m,left?"lankle":"rankle");
+        aim(hip,knee,{-1.f,side*.09f,-.38f});
+        aim(knee,ankle,{-.18f,side*.07f,-1.f});
+    }
+    int neck=Joint(m,"neck");if(neck>=0 && m.Joints[neck].Parent>=0) {
+        auto bones=m.JointMatrices(pose);auto tilt=actorToMesh*mat4::rotate(.2f,0,1,0)*meshToActor;
+        Rotate(m,pose,neck,tilt*bones[neck],bones);
+    }
+    return pose;
+}
+void ApplyPose(const USkelModel& m,UActor* actor,Array<RuneJointPose>& pose) {
+    if(Posed(actor)) {
+        auto& state=actor->CorpseBody;
+        if(state.poseModel!=&m || state.pose.size()!=m.Joints.size()){state.pose=RelaxedPose(m);state.poseModel=&m;}
+        pose=state.pose;return;
+    }
+    auto* p=UObject::TryCast<UPawn>(actor);if(!p || p->Health()<=0 || !Held(p) || !RuneRushPose::Supported(p))return;
+    // Reuse the two-bone solver: retain leg animation, bone lengths and scales.
+    // Hands support the body above the head; selected equipment uses temporary
+    // attachment frames, leaving ownership and all inventory slots untouched.
+    using namespace RuneRushPose;
+    auto bones=m.JointMatrices(pose);int head=Joint(m,"head");
+    auto actorToMesh=InverseAffine(Coords::Rotation(m.RotationOffset).ToMatrix());
+    auto offset=[&](vec3 v){return (actorToMesh*vec4(v,0)).xyz();};
+    auto top=Point(bones[head])+offset(vec3(7+16*Windup(p),0,17-4*Windup(p)));
+    for(bool left:{true,false}) {
+        int wrist=Joint(m,left?"lwrist":"rwrist");
+        auto target=At(bones[wrist],top+offset(vec3(0,left?-18.f:18.f,0)));
+        Arm(m,pose,left,target,top+offset(vec3(15,left?-35.f:35.f,-24)));
+    }
+    auto park=[&](UActor* item,int destination) {
+        if(!item || item->bDeleteMe() || item->GetUObject("AttachParent")!=p || destination<0)return;
+        int j=item->GetByte("AttachParentJoint");if(j>=int(m.Joints.size()) || m.Joints[j].Parent<0)return;
+        bones=m.JointMatrices(pose);auto frame=bones[destination];
+        auto** children=static_cast<UObject**>(p->GetProperty("JointChild"));
+        if(children[destination] && children[destination]!=item)frame=frame*mat4::translate(5,0,0);
+        pose[j]=Local(InverseAffine(bones[m.Joints[j].Parent])*frame);
+    };
+    if(auto* w=p->Weapon())park(w,Joint(m,w->GetByte("MeleeType")==0?"attatch_sword":w->GetByte("MeleeType")==1?"attach_hammer":"attach_axe"));
+    auto* shield=UObject::TryCast<UActor>(p->GetUObject("Shield"));
+    if(shield && shield->GetUObject("AttachParent")==p) {
+        int j=shield->GetByte("AttachParentJoint"),chest=Joint(m,"chest");
+        if(j<int(m.Joints.size()) && m.Joints[j].Parent>=0) {
+            bones=m.JointMatrices(pose);auto back=At(bones[chest],Point(bones[chest])+offset(vec3(-13,0,0)));
+            pose[j]=Local(InverseAffine(bones[m.Joints[j].Parent])*back);
         }
     }
 }

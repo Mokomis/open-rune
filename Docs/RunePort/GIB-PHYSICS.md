@@ -1,5 +1,9 @@
 # Open Rune — Gib and severed-limb physics audit
 
+November 3: [Enhanced gore presentation](ENHANCED-GORE.md) now adds a cosmetic layer.
+The original actor physics below remains unchanged; added fragments use a separate
+local solver. This October audit is retained as the original-physics baseline.
+
 October 25, 2026. Measurement only; production physics behavior is unchanged.
 
 ## Method

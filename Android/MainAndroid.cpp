@@ -1,6 +1,7 @@
 #include "RuneSnow.h"
 #include "RuneController.h"
 #include "RuneVisualEffects.h"
+#include "RuneGore.h"
 #include "RuneKick.h"
 #include "RuneBash.h"
 #include "RuneBloodlust.h"
@@ -49,7 +50,7 @@ extern "C" JNIEXPORT void JNICALL Java_org_runeclassic_port_MainActivity_nativeN
 
 extern "C" JNIEXPORT void JNICALL Java_org_runeclassic_port_MainActivity_nativeSetWorldFeatures(JNIEnv*, jclass, jint settings)
 {
-    VisualComparison::RequestedWorldFeatures.store(settings & 65535);
+    VisualComparison::RequestedWorldFeatures.store(settings & 262143);
 }
 extern "C" JNIEXPORT jint JNICALL Java_org_runeclassic_port_MainActivity_nativeGetWorldFeatures(JNIEnv*, jclass)
 {
@@ -162,6 +163,7 @@ extern "C" JNIEXPORT void JNICALL Java_org_runeclassic_port_MainActivity_nativeM
     case 23: RuneMultiplayer::AdaptiveSmoothing.store(value != 0); break;
     case 15: RuneBloodlust::Enabled.store(value != 0); break;
     case 16: RuneVisualEffects::Enabled.store(value != 0); break;
+    case 24: RuneGore::Enabled.store(value != 0); break;
     case 18: RuneSnow::Mode.store(std::clamp((int)value,0,2)); break;
     case 19: case 20: {
         openrune::CharacterChoice choice{uint8_t(value&255),uint8_t((value>>8)&255)};

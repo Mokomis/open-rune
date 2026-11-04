@@ -64,9 +64,15 @@ void UActor::TickMovingBrush(float elapsed)
 
 			// LogMessage("Moving brush: " + std::to_string(t) + " key=" + std::to_string(keyIndex) +" keypos=(" + std::to_string(keypos.x) + "," + std::to_string(keypos.y) + "," + std::to_string(keypos.z) + ")");
 
-			if (TryMove(targetPos - Location()).Fraction == 1.0f)
+			// Rune checks encroachment for the combined translation and
+			// rotation, so rotation-only steps can also push or be rejected.
+			bool moved = engine->LaunchInfo.IsRune() ?
+				TryMoveRuneBrush(targetPos - Location(), targetRotation).Fraction == 1.0f :
+				TryMove(targetPos - Location()).Fraction == 1.0f;
+			if (moved)
 			{
-				SetRotation(targetRotation);
+				if (!engine->LaunchInfo.IsRune())
+					SetRotation(targetRotation);
 				PhysAlpha() = physAlpha;
 
 				if (physAlpha == 1.0f)

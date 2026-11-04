@@ -34,7 +34,7 @@ bool SafeState(UPawn* p) {
 }
 bool Busy(UPawn* p) {
     auto* proxy=p->GetUObject("AnimProxy");
-    return RuneBloodlust::Busy(p) || p->RuneKickActive || p->RuneBashPhase || p->GetBool("bSwingingHigh") || p->GetBool("bSwingingLow") ||
+    return RuneCorpse::Busy(p) || RuneBloodlust::Busy(p) || p->RuneKickActive || p->RuneBashPhase || p->GetBool("bSwingingHigh") || p->GetBool("bSwingingLow") ||
         p->Tactics.attacking || (proxy && proxy->GetStateName()!="Idle");
 }
 void Cold(UWeapon* w) {

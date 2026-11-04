@@ -155,6 +155,7 @@ private:
     PipelineState ShadowPipeline;
     void ClearTextureCache();
 	void RunValidationProbe();
+    void RunMaterialLightingProbe();
 	void RunShadowBudgetProbe();
 	void PrepareResolveTarget(VulkanCommandBuffer* commands, bool continuation);
 	bool InPassResolve = false;

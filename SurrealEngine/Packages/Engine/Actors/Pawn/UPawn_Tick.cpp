@@ -12,6 +12,7 @@
 
 void UPawn::Tick(float elapsed)
 {
+    RuneCorpse::Tick(this,elapsed);
 	RuneBloodlust::Tick(this,elapsed);
 	RuneDualWield::Tick(this,elapsed);
 	RuneTactics::Tick(this,elapsed);

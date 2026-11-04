@@ -122,6 +122,7 @@ bool UActor::Destroy()
 	if (bDeleteMe())
 		return true;
 
+    RuneCorpse::OnDestroy(this);
 	bDeleteMe() = true;
 
 	//GotoState({}, {}); // What should happen to function calls after Destroy() has been called? Razor2 calls SetRoll afterwards!
@@ -170,6 +171,7 @@ bool UActor::Destroy()
 
 void UActor::Tick(float elapsed)
 {
+    if(RuneCorpse::TickBody(this,elapsed))return;
 	if (engine->LaunchInfo.IsDeusEx())
 	{
 		DistanceFromPlayer() = length(engine->viewport->Actor()->Location() - Location());
@@ -245,6 +247,8 @@ bool UActor::Move(const vec3& delta)
 
 bool UActor::MoveSmooth(const vec3& delta)
 {
+	if (engine->LaunchInfo.IsRune())
+		return RuneMoveSmooth(delta);
 	CollisionHit hit = TryMoveSmooth(delta);
 	return hit.Fraction != 1.0f;
 }

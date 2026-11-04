@@ -133,7 +133,7 @@ bool Eligible(UPawn* p) {
 }
 bool Controls(UObject* obj) {
     auto* p=UObject::TryCast<UPawn>(obj);
-    return p && p->Tactics.active && Eligible(p) && p->GetStateName()=="Fighting";
+    return p && ((RuneCorpse::Busy(p) && !p->IsA("RunePlayer")) || (p->Tactics.active && Eligible(p) && p->GetStateName()=="Fighting"));
 }
 bool SuppressRandomSpecial(UPawn* p) {
     if(!Eligible(p) || p->GetStateName()!="Fighting")return false;
@@ -151,6 +151,7 @@ bool MayCommit(UPawn* p) {
 }
 void Tick(UPawn* p,float elapsed) {
     if(!engine->LaunchInfo.IsRune() || RuneBloodlust::Busy(p))return;
+    if(!p->IsA("RunePlayer") && RuneCorpse::Busy(p)){p->Acceleration()=vec3(0);p->Velocity().x=p->Velocity().y=0;return;}
     auto& s=p->Tactics;
     const float dt=std::clamp(elapsed,0.0f,.1f);
     auto state=p->GetStateName();

@@ -18,7 +18,9 @@ inline std::atomic<uint64_t> ScalingSnapshot{0};
 // bits 0-1: sharpening (0/1/2/3), bit 2: 16x filtering, bits 3-4: shadow lift (0/1/2/3).
 inline std::atomic<int> RequestedClarity{-1};
 inline std::atomic<int> AppliedClarity{-1};
+// Bits 16/17: GGX material lighting / local environment probes (Remastered only).
 // Low bits: environmental audio=1, relief=2, parallax=4, HRTF=8.
+// Bits 16/17: GGX material lighting / local environment probes (Remastered only).
 // Bits 4-5 detail and 6-7 depth: 1=Low, 2=Medium, 3=High; 0=legacy Medium.
 inline std::atomic<int> RequestedWorldFeatures{-1};
 inline std::atomic<int> AppliedWorldFeatures{-1};

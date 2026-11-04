@@ -25,11 +25,11 @@ private:
     std::mt19937 rng;
     int difficulty=1,side=1,lastHealth=0;
     uint32_t life=0;
-    uint64_t nextThink=0,readyAt=0,guardUntil=0,kickAt=0,bashAt=0,useAt=0,seenAt=0,lastSeen=0,threatAt=0,blockedAt=0,routeAt=0,patrolAt=0,progressAt=0,debugAt=0,jumpAt=0,searchUntil=0,equipmentUntil=0,woundedAt=0,leapAt=0,jumpUntil=0,unreachableAt=0,supportUntil=0,guardAt=0,powerAt=0,escapeUntil=0,trafficUntil=0,trafficWaitUntil=0;
+    uint64_t nextThink=0,readyAt=0,guardUntil=0,kickAt=0,bashAt=0,useAt=0,seenAt=0,lastSeen=0,threatAt=0,blockedAt=0,routeAt=0,patrolAt=0,progressAt=0,debugAt=0,jumpAt=0,searchUntil=0,equipmentUntil=0,woundedAt=0,leapAt=0,jumpUntil=0,unreachableAt=0,supportUntil=0,guardAt=0,powerAt=0,escapeUntil=0,trafficUntil=0,trafficWaitUntil=0,corpseAt=0,carrySince=0;
     uint16_t leapYaw=0;
     float defenseRoll=1;
     bool wasThreat=false,partialRoute=false,teamNavigation=false;
-    openrune::net::EntityRef target{},trafficBlocker{};
+    openrune::net::EntityRef target{},trafficBlocker{},carriedBody{};
     vec3 remembered{},progress{},waypoint{},jumpGoal{},supportGoal{},escapeGoal{},trafficGoal{};
     struct Link { int to; float cost; };
     std::vector<vec3> navPoints;

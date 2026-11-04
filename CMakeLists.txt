@@ -80,6 +80,7 @@ set(SURREALCOMMON_SOURCES
 	SurrealEngine/RuneCharacterProbe.cpp
 	SurrealEngine/RuneDualWield.cpp
 	SurrealEngine/RuneDualWieldProbe.cpp
+	SurrealEngine/RuneRelocationProbe.cpp
 	SurrealEngine/RuneTacticsProbe.cpp
 	SurrealEngine/RuneFeedback.cpp
 	SurrealEngine/Engine.h
@@ -805,6 +806,13 @@ set(SURREALCOMMON_SOURCES
 	SurrealEngine/Collision/BottomLevel/TraceAABBModel.h
 	SurrealEngine/Collision/BottomLevel/OverlapAABBModel.cpp
 	SurrealEngine/Collision/BottomLevel/OverlapAABBModel.h
+	SurrealEngine/RuneCorpse.cpp
+	SurrealEngine/RuneCorpse.h
+	SurrealEngine/RuneGore.cpp
+	SurrealEngine/RuneGore.h
+	SurrealEngine/GorePhysics.h
+	SurrealEngine/Light/EnvironmentProbe.cpp
+	SurrealEngine/Light/EnvironmentProbe.h
 	SurrealEngine/Light/LightSystem.cpp
 	SurrealEngine/Light/LightSystem.h
 	SurrealEngine/Light/LightSystem_Light.cpp
@@ -1197,7 +1205,7 @@ set_target_properties(SurrealVideo PROPERTIES C_STANDARD 17)
 option(OPENRUNE_ENABLE_NETWORK "Build the experimental Open Rune network/engine boundary" OFF)
 if(OPENRUNE_ENABLE_NETWORK)
     add_subdirectory(Network EXCLUDE_FROM_ALL)
-    list(APPEND SURREALCOMMON_SOURCES SurrealEngine/RuneNetwork.cpp SurrealEngine/RuneNetworkProbe.cpp SurrealEngine/RuneNetworkNativeProbe.cpp SurrealEngine/RuneNetworkProcessProbe.cpp SurrealEngine/RuneMultiplayer.cpp SurrealEngine/RuneBot.cpp SurrealEngine/RuneBotProbe.cpp)
+    list(APPEND SURREALCOMMON_SOURCES SurrealEngine/RuneNetwork.cpp SurrealEngine/RuneNetworkProbe.cpp SurrealEngine/RuneNetworkNativeProbe.cpp SurrealEngine/RuneCorpseProbe.cpp SurrealEngine/RuneNetworkProcessProbe.cpp SurrealEngine/RuneMultiplayer.cpp SurrealEngine/RuneBot.cpp SurrealEngine/RuneBotProbe.cpp)
 endif()
 add_library(SurrealCommon STATIC ${SURREALCOMMON_SOURCES} ${THIRDPARTY_SOURCES})
 # Reuse the bundled TrueType rasterizer for Rune gameplay text.

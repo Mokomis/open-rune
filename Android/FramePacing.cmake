@@ -6,7 +6,8 @@ file(DOWNLOAD
     "${SWAPPY_AAR}"
     EXPECTED_HASH SHA256=a9f83e0cf47d694ed2cea0ae995d5cf7411060d9d4b680610430d03d6b20ea27
     TLS_VERIFY ON)
-if(NOT EXISTS "${SWAPPY_ROOT}/prefab/prefab.json")
+if(NOT EXISTS "${SWAPPY_ROOT}/prefab/prefab.json" OR
+   NOT EXISTS "${SWAPPY_ROOT}/prefab/modules/swappy_static/libs/android.${ANDROID_ABI}/libswappy_static.a")
     file(MAKE_DIRECTORY "${SWAPPY_ROOT}")
     execute_process(COMMAND "${CMAKE_COMMAND}" -E tar xf "${SWAPPY_AAR}"
         WORKING_DIRECTORY "${SWAPPY_ROOT}" RESULT_VARIABLE SWAPPY_EXTRACT_RESULT)

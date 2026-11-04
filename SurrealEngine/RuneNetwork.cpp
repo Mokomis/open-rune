@@ -151,7 +151,7 @@ MatchContract MakeRuneMatchContract(Engine& game,const std::string& map,uint16_t
     auto* levelPackage=game.packages->GetPackage(map);
     if(!levelPackage)throw std::runtime_error("missing match map package");
     MatchContract contract;contract.maxPlayers=maxPlayers;contract.map=map;
-    contract.mode=mode;contract.teams=teams;contract.arenaTeamSize=arenaTeamSize;contract.limbsScore=limbsScore;contract.rulesRevision=20; // Bump when native combat or movement rules change.
+    contract.mode=mode;contract.teams=teams;contract.arenaTeamSize=arenaTeamSize;contract.limbsScore=limbsScore;contract.rulesRevision=22; // Bump when native combat or movement rules change.
     contract.gameplayHash=hashFiles(scripts);
     contract.mapHash=hashFiles({levelPackage->GetPackageFilePath()});
     return contract;
@@ -217,7 +217,7 @@ std::optional<MovementAck> RuneNetworkAuthority::movementAck(uint64_t peer) cons
     const auto& player=it->second;auto* p=player.pawn;
     MovementAck a;a.ref=identity(p);a.life=player.life;a.input=player.physicsInput;a.heldTicks=player.heldTicks;
     auto* zone=p->Region().Zone;
-    float factor=p->bIsWalking()?.3f:1.0f;
+    float factor=(p->bIsWalking()?.3f:1.0f)*RuneCorpse::SpeedScale(p);
     auto quantize=[](float v,float scale)->uint16_t {
         return std::isfinite(v) && v>0 && v*scale<=65535?uint16_t(std::round(v*scale)):0;
     };
@@ -362,6 +362,7 @@ void RuneNetworkAuthority::unbind(uint64_t peer)
         p->Acceleration()=vec3(0); p->bFire()=p->bAltFire()=p->bDuck()=0;
         CallEvent(p,"ActivateShield",{ExpressionValue::BoolValue(false)});
     }
+    RuneCorpse::Drop(p);
     p->NetworkDriven=false; players.erase(it);defenses.erase(p);
     std::erase_if(contacts,[&](const auto& c){return c.attacker==p || c.target==p;});
     pendingCombatActions.erase(p);
@@ -414,6 +415,11 @@ bool RuneNetworkAuthority::action(uint64_t peer,const AdmittedAction& a,uint64_t
     }
     if (p->bDeleteMe() || p->Health()<=0 || p->GetStateName()=="Dying" || p->GetStateName()=="Unresponsive") return false;
     if(RuneBloodlust::Busy(p) && a.action.kind!=ActionKind::LowerShield)return false;
+    if(RuneCorpse::Busy(p)) {
+        if(a.action.kind==ActionKind::Attack || a.action.kind==ActionKind::Throw)return RuneCorpse::Throw(p);
+        if(a.action.kind==ActionKind::Use){RuneCorpse::Drop(p);return true;}
+        return a.action.kind==ActionKind::LowerShield;
+    }
     switch(a.action.kind)
     {
     case ActionKind::Attack:
@@ -671,6 +677,8 @@ bool RuneNetworkAuthority::capture(World& out)
         Entity e; e.ref=identity(a); e.kind=kind(a); e.flags=a->Physics()==PHYS_Walking?2:0;
         if(a->bHidden())e.flags|=32;
         if(a->IsA("Weapon") && a->GetBool("bPoweredUp"))e.flags|=128;
+        // Flag 4 is guard for pawns, and centred relaxed presentation for corpses.
+        if(e.kind==EntityKind::Corpse && a->CorpseBody.active)e.flags|=4;
         auto* pawn=UObject::TryCast<UPawn>(a);
         int health=pawn?pawn->Health():(a->HasProperty("Health")?a->GetInt("Health"):0);
         if (health<INT16_MIN || health>INT16_MAX) return fault("health bounds",a);
@@ -684,6 +692,7 @@ bool RuneNetworkAuthority::capture(World& out)
         vec3 presentationLocation=a->Location();
         if(e.kind==EntityKind::Corpse)
             presentationLocation+=a->PrePivot()-a->Class->GetDefaultObject<UActor>()->PrePivot();
+        presentationLocation=RuneCorpse::SnapshotLocation(a,presentationLocation);
         for (int axis=0;axis<3;++axis)
         {
             auto position=quantizePosition(presentationLocation[axis]);
@@ -891,6 +900,7 @@ bool RuneNetworkReplica::install(const Snapshot& s)
         auto* a=actors.at(e.ref.id).second; a->bHidden()=bool(e.flags&32);
         a->Owner()=e.owner.id?actors.at(e.owner.id).second:nullptr;
         if(a->Owner())a->Owner()->ChildActors.push_back(a);
+        RuneCorpse::Presentation(a,e.kind==EntityKind::Corpse && (e.flags&4));
         a->bCarriedItem()=e.attachmentJoint!=255;
         a->SetObject("AttachParent",e.attachmentJoint!=255?a->Owner():nullptr);
         a->SetByte("AttachParentJoint",e.attachmentJoint!=255?e.attachmentJoint:0);
@@ -1035,7 +1045,7 @@ bool RuneNetworkReplica::anticipate(EntityRef ref,uint64_t id,ActionKind kind,co
     auto* p=UObject::TryCast<UPawn>(actor(ref));auto* proxy=object(p,"AnimProxy");
     auto* model=proxy?UObject::TryCast<USkelModel>(GetRuneDisplayMesh(proxy)):nullptr;
     if(!id || !e || !p || !p->NetworkReplica || !proxy || !model || e->health<=0 ||
-       input.life!=e->life || e->combat.phase || (e->flags&32))return false;
+       input.life!=e->life || e->combat.phase || RuneCorpse::Busy(p) || (e->flags&32))return false;
     auto* weapon=object(p,"Weapon");
     auto authored=[&](const char* field){return weapon && weapon->HasProperty(field)?weapon->GetName(field):NameString("None");};
     // Never invent a combo or interrupt an authoritative attack/recovery pose.
@@ -1092,7 +1102,7 @@ void RuneNetworkReplica::presentAnticipation(uint64_t now)
     const auto* e=findEntity(current.world,a.ref);auto* p=UObject::TryCast<UPawn>(actor(a.ref));
     auto* proxy=object(p,"AnimProxy");auto* model=proxy?UObject::TryCast<USkelModel>(GetRuneDisplayMesh(proxy)):nullptr;
     if(!e || !p || !proxy || !model || model!=a.model || now<a.started || e->life!=a.life || e->health<=0 || e->health<a.health || p->Health()<=0 || p->Health()<a.health ||
-        e->weapon!=a.weapon || e->shield!=a.shield || e->combat.offhand!=a.offhand || e->combat.phase || (e->flags&32)) {
+        e->weapon!=a.weapon || e->shield!=a.shield || e->combat.offhand!=a.offhand || e->combat.phase || RuneCorpse::Busy(p) || (e->flags&32)) {
         clearAnticipation();return;
     }
     bool confirmed=false;
@@ -1138,6 +1148,9 @@ void RuneNetworkReplica::presentFrames(double alpha,const Snapshot* older,const 
         const Entity* legacyBefore=findEntity(previous.world,e.ref);
         if(legacyBefore && legacyBefore->ref==e.ref && !nearby(*legacyBefore,e))adaptiveLives.erase(e.ref.id);
         if(!legacyBefore || legacyBefore->ref!=e.ref || !nearby(*legacyBefore,e))legacyBefore=&e;
+        // Centred carried/flight coordinates and the authored ground-pose
+        // origin are different bases. Never interpolate between those bases.
+        if(e.kind==EntityKind::Corpse && ((legacyBefore->flags^e.flags)&4))legacyBefore=&e;
         auto binding=actors.find(e.ref.id);
         if(binding==actors.end() || binding->second.first!=e.ref)continue; // Despawn may lead its next snapshot.
         auto* a=binding->second.second;

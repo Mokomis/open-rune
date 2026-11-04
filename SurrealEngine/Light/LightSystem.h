@@ -5,6 +5,7 @@
 #include "LightActorTree.h"
 #include "LightmapBuilder.h"
 #include "WorldVisibilityCache.h"
+#include "EnvironmentProbe.h"
 #include "Packages/Engine/Resources/Textures/UBitmap.h"
 #include <unordered_map>
 #include <list>
@@ -158,6 +159,7 @@ public:
 
 	// Light:
 
+	EnvironmentLight Environment;
 	vec3 AmbientColor;
 	float ScaleGlow;
 	enum { MaxLights = 8, MaxFogBalls = 4 };
@@ -194,6 +196,9 @@ public:
 	void OnMapLoaded();
 
 	void BeginFrame();
+
+    void PrepareEnvironmentProbes();
+    EnvironmentLight SampleEnvironment(const vec3& position) const;
 	void UpdateLightList(UActor* actor);
 
 	void SetLevel(ULevel* level);
@@ -230,4 +235,5 @@ private:
 
 	Array<UActor*> TempDynLightList;
 	LightActorTree LightTree;
+    EnvironmentProbeField Environment;
 };

@@ -123,6 +123,7 @@ void VulkanRenderDevice::DrawShadowPolygon(TextureInfo& info, const GouraudVerte
 
 vec4 VulkanRenderDevice::GetMaterialResponse(TextureInfo* info)
 {
+    if(info && info->WetGore)return vec4(.32f,56.f,0.f,0.f);
     if (!info || !info->Texture) return vec4(0.10f, 20.0f, 0.0f, 0.0f);
     auto found = MaterialCache.find(info->CacheID);
     if (found != MaterialCache.end()) return found->second;

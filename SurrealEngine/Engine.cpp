@@ -4,6 +4,9 @@
 #include "RuneVisualEffects.h"
 
 #include "Precomp.h"
+#include "RuneGore.h"
+#include "RuneGoreProbe.h"
+#include "RuneCorpseVisualProbe.h"
 #include <iostream>
 #include "Engine.h"
 #include "RuneMenu.h"
@@ -216,6 +219,7 @@ void Engine::Run()
 	bool firstCall = true;
     if(commandline->HasArg("", "--rune-effects"))RuneVisualEffects::Enabled.store(commandline->GetArgInt("", "--rune-effects",1)!=0);
     if(commandline->HasArg("","--snow"))RuneSnow::Mode=std::clamp(commandline->GetArgInt("","--snow",0),0,2);
+    if(commandline->HasArg("","--gore"))RuneGore::Enabled=commandline->GetArgInt("","--gore",1)!=0;
     LogMessage("RUNE_EFFECTS_MODE enabled="+std::to_string(RuneVisualEffects::Enabled.load()));
 	if(commandline->HasArg("", "--rune-tactics"))RuneTactics::Enabled.store(commandline->GetArgInt("", "--rune-tactics", 1)!=0);
 	int remainingFrames = commandline->GetArgInt("", "--maxframes", 0);
@@ -229,6 +233,8 @@ void Engine::Run()
 	int fireProbeFrame=commandline->GetArgInt("", "--probe-fire-frame", 0);
 	int probeFrame=0;
     RuneLiftProbe liftProbe;
+    RuneGoreProbe goreProbe;
+    RuneCorpseVisualProbe corpseProbe;
 	int profileFrames=commandline->GetArgInt("", "--profile-frames", 0);
 	RuneParticleProfile::Milliseconds = {};
 	std::vector<double> profileTimes;
@@ -283,11 +289,22 @@ void Engine::Run()
 	int appliedVisualMode = -1;
 	int clarity = commandline->GetArgInt("", "--clarity", 0);
 	int appliedClarity = -1;
-	int worldFeatures = commandline->GetArgInt("", "--world-features", 0) & 65535;
+	int worldFeatures = commandline->GetArgInt("", "--world-features", 0) & 262143;
     int texturePackQuality = clamp(commandline->GetArgInt("", "--texture-pack", 0), 0, 2);
 	int upscaleMode = clamp(commandline->GetArgInt("", "--upscale", 0), 0, 3);
 	int appliedUpscale = -1;
 	const float originalScale = window->GetRenderDevice()->ResolutionScale;
+    const bool materialCycle=commandline->HasArg("","--probe-material-cycle");
+    if(materialCycle && (remainingFrames<=0 || !commandline->HasArg("","--save-directory")))
+        Exception::Throw("Material comparison requires bounded frames and isolated saves");
+    std::vector<double> materialTimes;
+    if(materialCycle) {
+        // Account for the one-time bake separately from steady frame timing.
+        auto* device=window->GetRenderDevice();int saved=device->WorldFeatures;
+        device->WorldFeatures=worldFeatures|196608;
+        Level->Light.PrepareEnvironmentProbes();
+        device->WorldFeatures=saved;
+    }
 	int visualFpsFrames = 0;
 	auto visualFpsStart = std::chrono::steady_clock::now();
 
@@ -417,7 +434,13 @@ void Engine::Run()
         }
         VisualComparison::AppliedTexturePack.store(texturePackQuality);
 		int requestedWorld = VisualComparison::RequestedWorldFeatures.exchange(-1);
-		if (requestedWorld >= 0) worldFeatures = requestedWorld & 65535;
+		if (requestedWorld >= 0) worldFeatures = requestedWorld & 262143;
+        if(materialCycle) {
+            // Alternate within one process to reduce clock/temperature and
+            // launch-to-launch variance. Skip initial warmup and switch frames.
+            const int modes[]={0,196608,196608,0};
+            worldFeatures=(worldFeatures&~196608)|modes[(probeFrame/240)%4];
+        }
 		window->GetRenderDevice()->WorldFeatures = worldFeatures;
 		if (VisualComparison::AppliedWorldFeatures.exchange(worldFeatures) != worldFeatures)
 			LogMessage("RUNE_WORLD_FEATURES code=" + std::to_string(worldFeatures));
@@ -645,9 +668,13 @@ void Engine::Run()
 
 		viewport->SetViewportRect(0, 0, engine->window->GetPixelWidth(), engine->window->GetPixelHeight());
         liftProbe.Tick(*this,probeFrame);
+        goreProbe.Before(*this,probeFrame);
+        corpseProbe.Before(*this,probeFrame);
 		auto profileDrawStart=std::chrono::steady_clock::now();
 		render->DrawGame(levelElapsed);
 		auto profileDrawEnd=std::chrono::steady_clock::now();
+        goreProbe.After(probeFrame);
+        corpseProbe.After(*this,probeFrame);
 		VisualComparison::AppliedMode.store(appliedVisualMode);
 		VisualComparison::AppliedUpscale.store(appliedUpscale);
 		VisualComparison::AppliedClarity.store(appliedClarity);
@@ -660,6 +687,19 @@ void Engine::Run()
 			visualFpsFrames = 0;
 			visualFpsStart = profileDrawEnd;
 		}
+        if(materialCycle) {
+            int local=probeFrame%240;
+            if(local==0)materialTimes.clear();
+            if(local>=60)materialTimes.push_back(std::chrono::duration<double,std::milli>(profileDrawEnd-profileGameStart).count());
+            if(local==239) {
+                double sum=0;for(double ms:materialTimes)sum+=ms;
+                std::sort(materialTimes.begin(),materialTimes.end());
+                LogMessage("RUNE_MATERIAL_PERFORMANCE block="+std::to_string(probeFrame/240)+" enabled="+
+                    std::to_string((worldFeatures&196608)!=0)+" frames="+std::to_string(materialTimes.size())+
+                    " mean_ms="+std::to_string(sum/materialTimes.size())+" fps="+std::to_string(1000.0*materialTimes.size()/sum)+
+                    " p95_ms="+std::to_string(materialTimes[(materialTimes.size()-1)*95/100]));
+            }
+        }
 		++probeFrame;
 		if (probeFrame == 1 && commandline->HasArg("", "--probe-start") && LaunchInfo.IsRune() && viewport->Actor())
 		{
@@ -692,6 +732,11 @@ void Engine::Run()
             if(!commandline->HasArg("", "--save-directory")) Exception::Throw("Texture probe requires isolated saves");
             OutputDevice output;
             if(!window->GetRenderDevice()->Exec("RuneTexturePackProbe",output)) Exception::Throw("Texture probe requires Vulkan");
+        }
+        if(probeFrame==120 && commandline->HasArg("","--probe-material-lighting")) {
+            if(!commandline->HasArg("","--save-directory"))Exception::Throw("Material probe requires isolated saves");
+            OutputDevice output;
+            if(!window->GetRenderDevice()->Exec("RuneMaterialLightingProbe",output))Exception::Throw("Material probe requires Vulkan");
         }
 		if (probeFrame == 120 && (commandline->HasArg("", "--probe-vulkan")||commandline->HasArg("","--probe-shadow-budget")))
 		{
@@ -880,6 +925,8 @@ void Engine::Run()
 		}
 		if (remainingFrames > 0 && --remainingFrames == 0)
 		{
+            goreProbe.Finish();
+            corpseProbe.Finish();
 			if(saveProbe.Active()) Exception::Throw("Bounded run ended before save probe completed");
 			if(ropeProbe.Active()) Exception::Throw("Bounded run ended before rope probe completed");
 			if(gibProbe.Active()) Exception::Throw("Bounded run ended before gib probe completed");
@@ -902,6 +949,32 @@ void Engine::Run()
                     for (const auto& p:pixels) { image.put((char)p.R); image.put((char)p.G); image.put((char)p.B); }
                 };
                 captureFrame(capture);
+                if(commandline->HasArg("","--capture-gore-comparison") || commandline->HasArg("","--probe-gore-render")) {
+                    if(!commandline->HasArg("","--save-directory"))Exception::Throw("Gore comparison requires isolated saves");
+                    bool saved=RuneGore::Enabled.load();
+                    for(int block=0;block<4;++block) {
+                        int mode=(block==1 || block==2)?1:0;RuneGore::Enabled=mode!=0;
+                        int frames=commandline->HasArg("","--probe-gore-render")?135:1;
+                        double total=0;int samples=0;
+                        for(int i=0;i<frames;++i) {
+                            auto begin=std::chrono::steady_clock::now();render->DrawGame(0);
+                            if(i>=15){total+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-begin).count();++samples;}
+                        }
+                        if(samples)LogMessage("RUNE_GORE_RENDER_BENCH block="+std::to_string(block)+" enabled="+std::to_string(mode)+" frames="+std::to_string(samples)+" mean_ms="+std::to_string(total/samples));
+                        if(block<2)captureFrame(capture+(mode?"-gore-on.ppm":"-gore-off.ppm"));
+                    }
+                    RuneGore::Enabled=saved;
+                }
+                if(commandline->HasArg("","--capture-material-comparison")) {
+                    if(!commandline->HasArg("","--save-directory"))Exception::Throw("Material capture requires isolated saves");
+                    auto* device=window->GetRenderDevice();int saved=device->WorldFeatures;
+                    for(int mode:{0,196608}) {
+                        device->WorldFeatures=(saved&~196608)|mode;
+                        render->DrawGame(0);
+                        captureFrame(capture+(mode?"-on.ppm":"-off.ppm"));
+                    }
+                    device->WorldFeatures=saved;
+                }
                 if(commandline->HasArg("", "--capture-texture-comparison"))
                 {
                     if(!commandline->HasArg("", "--save-directory")) Exception::Throw("Texture comparison requires isolated saves");
@@ -1626,6 +1699,7 @@ void Engine::SaveGameToSlot(int32_t slotNum, const std::string& saveDescription)
 	if (slotNum < -1 || (!packages->IsDeusEx() && slotNum < 0))
 		Exception::Throw("Invalid save slot: " + std::to_string(slotNum));
 
+    RuneCorpse::BeforeSave();
 	// First and foremost ensure the Save folder exists
 	const auto saveFolderPath = packages->GetSaveFolderPath();
 	if (!fs::exists(saveFolderPath))
@@ -1944,6 +2018,18 @@ std::string Engine::ConsoleCommand(UObject* context, const std::string& commandl
 	{
 		quit = true;
 	}
+    else if(command=="gore" && args.size()==2 && LaunchInfo.IsRune()) {
+        if(args[1]!="0" && args[1]!="1")return "Use gore 0 (Original) or gore 1 (Enhanced).";
+        RuneGore::Enabled=args[1]=="1";
+        return RuneGore::Enabled?"Enhanced gore presentation":"Original gore presentation";
+    }
+    else if((command=="materiallighting" || command=="environmentlighting") && args.size()==2 && LaunchInfo.IsRune()) {
+        if(args[1]!="0" && args[1]!="1")return "Use 0 (off) or 1 (on).";
+        int bit=command=="materiallighting"?65536:131072;
+        int world=std::max(VisualComparison::AppliedWorldFeatures.load(),0);
+        VisualComparison::RequestedWorldFeatures=(world&~bit)|(args[1]=="1"?bit:0);
+        return "Lighting choice updated; requires Remastered lighting.";
+    }
 	else if (command == "timedemo" && args.size() == 2)
 	{
 		render->ShowTimedemoStats = args[1] == "1";
