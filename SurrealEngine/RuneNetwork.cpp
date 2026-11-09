@@ -1,4 +1,7 @@
+#include "RuneBattleLaws.h"
 #include "Precomp.h"
+#include "OpenRuneVersion.h"
+#include "RunePhysics.h"
 #include "RuneNetwork.h"
 #include "Packages/Engine/Actors/Brush/MovingBrush.h"
 #include "Engine.h"
@@ -128,7 +131,7 @@ void setAnimation(UActor* a,uint16_t index,int16_t phase,int16_t rate,bool loopi
     if (!a || !index) return;
     auto* model=UObject::Cast<USkelModel>(GetRuneDisplayMesh(a));
     auto sequence=model->Sequences[index-1].Info.Name;
-    if(a->AnimSequence()!=sequence && phase<0)
+    if(phase<0 && (a->AnimSequence()!=sequence || a->AnimFrame()>=0))
     { model->CaptureTween(a);a->RuneTweenTarget=sequence; }
     a->AnimSequence()=sequence;
     a->AnimFrame()=float(phase)/32767.0f;a->AnimRate()=float(rate)/256.0f;
@@ -151,8 +154,15 @@ MatchContract MakeRuneMatchContract(Engine& game,const std::string& map,uint16_t
     auto* levelPackage=game.packages->GetPackage(map);
     if(!levelPackage)throw std::runtime_error("missing match map package");
     MatchContract contract;contract.maxPlayers=maxPlayers;contract.map=map;
-    contract.mode=mode;contract.teams=teams;contract.arenaTeamSize=arenaTeamSize;contract.limbsScore=limbsScore;contract.rulesRevision=22; // Bump when native combat or movement rules change.
+    contract.mode=mode;contract.teams=teams;contract.arenaTeamSize=arenaTeamSize;contract.limbsScore=limbsScore;contract.rulesRevision=OpenRuneBuild::GameplayRulesRevision; // Bump when native combat or movement rules change.
     contract.gameplayHash=hashFiles(scripts);
+    // Bind the canonical selected laws into the existing authenticated content contract.
+    std::array<uint8_t,40> rules{};
+    std::copy(contract.gameplayHash.begin(),contract.gameplayHash.end(),rules.begin());
+    auto mask=RuneBattleLaws::Mask();
+    rules[32]='L';rules[33]='A';rules[34]='W';rules[35]=1;
+    for(unsigned i=0;i<4;++i)rules[36+i]=uint8_t(mask>>(i*8));
+    if(mbedtls_sha256(rules.data(),rules.size(),contract.gameplayHash.data(),0))throw std::runtime_error("laws hash failed");
     contract.mapHash=hashFiles({levelPackage->GetPackageFilePath()});
     return contract;
 }
@@ -202,9 +212,9 @@ void RuneNetworkAuthority::synchronizeLives()
             if(player.life==UINT32_MAX){combatFault=true;continue;}
             ++player.life;player.diedAt=0;
             defenses.erase(p);pendingCombatActions.erase(p);
-            p->Dual={};p->Bloodlust={};player.lastJump=0;
+            p->Dual={};p->Bloodlust={};p->Slam={};player.lastJump=0;
             player.pendingInput=player.physicsInput=player.heldTicks=player.guardInput=0;
-            p->bFire()=p->bAltFire()=p->bDuck()=0;p->aForward()=p->aStrafe()=0;
+            p->bFire()=p->bAltFire()=p->bDuck()=0;p->aForward()=p->aStrafe()=p->aUp()=0;
             std::cout<<"OPEN_RUNE_PLAYER_LIFE player="<<id<<" life="<<player.life<<" health="<<p->Health()<<std::endl;
         }
     }
@@ -214,7 +224,7 @@ uint32_t RuneNetworkAuthority::playerLife(uint64_t peer) const
 std::optional<MovementAck> RuneNetworkAuthority::movementAck(uint64_t peer) const
 {
     auto it=players.find(peer);if(it==players.end())return {};
-    const auto& player=it->second;auto* p=player.pawn;
+    const auto& player=it->second;auto* p=player.pawn;if(RunePhysics::Controls(p))return {};
     MovementAck a;a.ref=identity(p);a.life=player.life;a.input=player.physicsInput;a.heldTicks=player.heldTicks;
     auto* zone=p->Region().Zone;
     float factor=(p->bIsWalking()?.3f:1.0f)*RuneCorpse::SpeedScale(p);
@@ -321,7 +331,7 @@ bool RuneNetworkAuthority::track(UActor* a)
         event.proxyPackage=proxy->Class->package->GetPackageName().ToString();
         event.proxyClass=proxy->Class->Name.ToString();
     }
-    if(event.kind==EntityKind::Mover || event.kind==EntityKind::Objective)event.mapActor=a->Name.ToString();
+    if(event.kind==EntityKind::Mover || event.kind==EntityKind::Objective || (event.kind==EntityKind::Pickup&&RunePhysics::IsProp(a)&&!a->RuneSpawnedDuringPlay))event.mapActor=a->Name.ToString();
     Bytes bytes;
     if(!encodeActorEvent(1,event,bytes)){combatFault=true;registry.release(reinterpret_cast<uintptr_t>(a));return false;}
     actors[ref->id]=a;actorEvents.push_back(std::move(event));++nextActorEventId;return true;
@@ -333,7 +343,7 @@ std::vector<ActorEvent> RuneNetworkAuthority::actorBaseline() const
     for(const auto& [id,a]:actors)if(a && !a->bDeleteMe()) {
         ActorEvent event{uint64_t(out.size()+1),identity(a),ActorOperation::Spawn,kind(a),a->Class->package->GetPackageName().ToString(),a->Class->Name.ToString()};
         if(auto* proxy=object(a,"AnimProxy")) {event.proxyPackage=proxy->Class->package->GetPackageName().ToString();event.proxyClass=proxy->Class->Name.ToString();}
-        if(event.kind==EntityKind::Mover || event.kind==EntityKind::Objective)event.mapActor=a->Name.ToString();
+        if(event.kind==EntityKind::Mover || event.kind==EntityKind::Objective || (event.kind==EntityKind::Pickup&&RunePhysics::IsProp(a)&&!a->RuneSpawnedDuringPlay))event.mapActor=a->Name.ToString();
         out.push_back(std::move(event));
         if(UObject::TryCast<USkelModel>(GetRuneDisplayMesh(a)))for(uint8_t first:{0,8}) {
             auto state=appearanceOf(a,first);
@@ -358,7 +368,7 @@ void RuneNetworkAuthority::unbind(uint64_t peer)
     auto* p=it->second.pawn;
     if (!p->bDeleteMe())
     {
-        p->aForward()=p->aStrafe()=p->aTurn()=p->aLookUp()=0;
+        p->aForward()=p->aStrafe()=p->aUp()=p->aTurn()=p->aLookUp()=0;
         p->Acceleration()=vec3(0); p->bFire()=p->bAltFire()=p->bDuck()=0;
         CallEvent(p,"ActivateShield",{ExpressionValue::BoolValue(false)});
     }
@@ -373,6 +383,7 @@ bool RuneNetworkAuthority::input(uint64_t peer,const Input& i)
     auto* p=it->second.pawn;
     if (p->bDeleteMe() || p->Health()<=0 || i.life!=it->second.life || i.forward<-1000 || i.forward>1000 ||
         i.strafe<-1000 || i.strafe>1000 || i.pitch<-16384 || i.pitch>16384 || (i.held&~7)) return false;
+    if(RunePhysics::Controls(p)){p->bFire()=p->bAltFire()=p->bDuck()=0;p->aForward()=p->aStrafe()=p->aUp()=0;return true;}
     bool newInput=i.sequence!=it->second.pendingInput;
     it->second.pendingInput=i.sequence;
     double length=std::hypot(double(i.forward),double(i.strafe));
@@ -382,6 +393,11 @@ bool RuneNetworkAuthority::input(uint64_t peer,const Input& i)
     if(!(i.held&2) && (newInput || p->bAltFire()))
         defense(p,false,i.sequence?i.createdMs:wallTime,wallTime,i.yaw);
     p->bFire()=uint8_t(i.held&1); p->bDuck()=uint8_t((i.held>>2)&1);
+    // Match the original Duck alias: hold bDuck on land and a negative aUp
+    // while swimming. Network-driven pawns skip hardware PlayerInput, so both
+    // halves must be reconstructed from the complete held state every tick.
+    // PlayerInput scales the original -300 axis by 20 before PlayerMove.
+    p->aUp()=(i.held&4)?-6000.0f:0.0f;
     // Guard actions and complete inputs use independent delivery lanes. A later
     // held-state command must not be undone by an older movement datagram.
     if(i.sequence>=it->second.guardInput){
@@ -408,13 +424,15 @@ bool RuneNetworkAuthority::action(uint64_t peer,const AdmittedAction& a,uint64_t
             (p->HasProperty("bCanRestart") && !p->GetBool("bCanRestart")))return false;
         if(!CallEvent(game.GameInfo,"RestartPlayer",{ExpressionValue::ObjectValue(p)}).ToBool())return false;
         synchronizeLives();
-        p->bFire()=p->bAltFire()=p->bDuck()=0;p->aForward()=p->aStrafe()=0;
+        p->bFire()=p->bAltFire()=p->bDuck()=0;p->aForward()=p->aStrafe()=p->aUp()=0;
         CallEvent(game.GameInfo,"StartPlayer",{ExpressionValue::ObjectValue(p)});
         CallEvent(p,"ClientReStart");CallEvent(p,"PlayerRestart");
         return p->Health()>0;
     }
     if (p->bDeleteMe() || p->Health()<=0 || p->GetStateName()=="Dying" || p->GetStateName()=="Unresponsive") return false;
-    if(RuneBloodlust::Busy(p) && a.action.kind!=ActionKind::LowerShield)return false;
+    if(RuneBloodlust::Busy(p) && a.action.kind!=ActionKind::LowerShield && !(a.action.kind==ActionKind::Attack && RuneSlam::CanStart(p)))return false;
+    if(RunePhysics::Controls(p))return false;
+    if(RunePhysics::Carrying(p)){if(a.action.kind==ActionKind::Attack||a.action.kind==ActionKind::Throw)return RunePhysics::ThrowProp(p);if(a.action.kind==ActionKind::Use)return RunePhysics::UseProp(p);return false;}
     if(RuneCorpse::Busy(p)) {
         if(a.action.kind==ActionKind::Attack || a.action.kind==ActionKind::Throw)return RuneCorpse::Throw(p);
         if(a.action.kind==ActionKind::Use){RuneCorpse::Drop(p);return true;}
@@ -485,9 +503,10 @@ bool RuneNetworkAuthority::action(uint64_t peer,const AdmittedAction& a,uint64_t
         float yaw=float(a.input.yaw)*(6.28318530718f/65536);
         vec3 direction=vec3(std::cos(yaw),std::sin(yaw),0)*float(a.input.forward)+
             vec3(-std::sin(yaw),std::cos(yaw),0)*float(a.input.strafe);
+        bool armed=RuneSlam::Arm(p);
         bool accepted=RuneBloodlust::Leap(p,direction);
         if(!accepted)p->Bloodlust.tap=previousTap;
-        return accepted;
+        return accepted || armed;
     }
     case ActionKind::ShieldCharge:
         if(!(a.input.held&2))return false;
@@ -635,7 +654,7 @@ bool RuneNetworkAuthority::capture(World& out)
     // Replicate loose inventory as well as equipped items, so a throw or pickup
     // has one authority. Static geometry stays local to the agreed map.
     for(auto* actor:game.Level->Actors)
-        if(actor && (actor->IsA("Pawn") || actor->IsA("Inventory") || actor->IsA("Projectile") || actor->IsA("Carcass") || actor->IsA("Debris") || actor->IsA("Gib") || replicatedEffect(actor) || GetMovingBrush(actor) || actor->IsA("Pump")) &&
+        if(actor && (actor->IsA("Pawn") || actor->IsA("Inventory") || actor->IsA("Projectile") || actor->IsA("Carcass") || actor->IsA("Debris") || actor->IsA("Gib") || replicatedEffect(actor) || RunePhysics::IsProp(actor) || GetMovingBrush(actor) || actor->IsA("Pump")) &&
             !actor->bDeleteMe() && !actor->NetworkReplica && actor->Role()==ROLE_Authority &&
             (!actor->bStatic() || actor->IsA("Pump")) && (!actor->bHidden() || GetMovingBrush(actor) || actor->IsA("Pump")))
             {
@@ -689,6 +708,8 @@ bool RuneNetworkAuthority::capture(World& out)
         // Express only corpse positions in that basis so existing clients draw
         // the same mesh origin without an artificial hover or resize drop.
         // Authoritative collision/physics and pawn prediction stay unchanged.
+        if(e.kind==EntityKind::Corpse && (!std::isfinite(a->Velocity().x)||!std::isfinite(a->Velocity().y)||!std::isfinite(a->Velocity().z)))
+            RunePhysics::RepairInvalidMotion(a);
         vec3 presentationLocation=a->Location();
         if(e.kind==EntityKind::Corpse)
             presentationLocation+=a->PrePivot()-a->Class->GetDefaultObject<UActor>()->PrePivot();
@@ -731,12 +752,14 @@ bool RuneNetworkAuthority::capture(World& out)
             c.meter=uint8_t(std::clamp(pawn->IsA("RunePlayer")?100.f*pawn->GetInt("Strength")/std::max(1,(int)pawn->GetInt("MaxStrength")):b.rage,0.f,100.f));
             c.phase=uint8_t(b.phase);c.age=b.phase?uint16_t(std::lround(std::clamp(b.age,0.f,10.f)*1000)):0;
             c.cooldown=uint16_t(std::ceil(std::clamp(b.cooldown,0.f,4.f)*1000));c.ready=uint8_t(RuneBloodlust::Readiness(pawn));
+            if(RuneSlam::Busy(pawn)){c.phase=uint8_t(5+pawn->Slam.phase);c.age=uint16_t(std::clamp(pawn->Slam.age*1000.f,0.f,10000.f));c.ready=0;c.flags&=~8;}
             if(pawn->IsA("RunePlayer")) {
                 int capacity=pawn->GetInt("MaxPower"), power=pawn->GetInt("RunePower");
                 if(capacity<0 || capacity>200 || power<0 || power>capacity)return fault("power bounds",a);
                 c.runeCapacity=uint8_t(capacity);c.runePower=uint8_t(power);
             }
         }
+        RunePhysics::Capture(a,e.physical);
         world.push_back(e);
     }
     if (!validWorld(world)) {
@@ -788,7 +811,7 @@ UActor* RuneNetworkReplica::spawn(Engine& game,const ActorEvent& event)
         actor->Index=int(game.Level->Actors.size());game.Level->Actors.push_back(actor);
         return actor;
     };
-    if(event.kind==EntityKind::Mover || event.kind==EntityKind::Objective) {
+    if(event.kind==EntityKind::Mover || event.kind==EntityKind::Objective || (event.kind==EntityKind::Pickup&&!event.mapActor.empty())) {
         for(auto* a:game.Level->Actors)if(a && !a->bDeleteMe() && !a->NetworkReplica && kind(a)==event.kind &&
             a->Name==NameString(event.mapActor) && a->Class->Name==NameString(event.actorClass) &&
             a->Class->package->GetPackageName()==NameString(event.package))
@@ -865,7 +888,7 @@ bool RuneNetworkReplica::unbind(EntityRef ref)
     auto* proxy=object(actor,"AnimProxy");
     if(proxy){actor->SetObject("AnimProxy",nullptr);detach(proxy);}
     detach(actor);
-    effectAges.erase(ref.id);actors.erase(it);healthOverlays.erase(ref.id);adaptiveLives.erase(ref.id);
+    animationPlayback.erase(ref.id);effectAges.erase(ref.id);actors.erase(it);healthOverlays.erase(ref.id);adaptiveLives.erase(ref.id);
     retired.push_back(ref);if(retired.size()>MaxEntities)retired.pop_front();
     return true;
 }
@@ -883,7 +906,7 @@ bool RuneNetworkReplica::install(const Snapshot& s)
         auto it=actors.find(e.ref.id);
         if (it==actors.end() || it->second.first!=e.ref) return false;
         auto* actor=it->second.second;
-        if (actor->bDeleteMe() || !actor->NetworkReplica || kind(actor)!=e.kind || !validAnimation(actor,e.bodyAnimation) || !validAnimation(object(actor,"AnimProxy"),e.torsoAnimation)) return false;
+        if (actor->bDeleteMe() || !actor->NetworkReplica || kind(actor)!=e.kind || !RunePhysics::ValidateReplica(actor,e.physical) || !validAnimation(actor,e.bodyAnimation) || !validAnimation(object(actor,"AnimProxy"),e.torsoAnimation)) return false;
         if(e.attachmentJoint!=255)
         {
             auto parent=actors.find(e.owner.id);
@@ -925,6 +948,7 @@ bool RuneNetworkReplica::install(const Snapshot& s)
             p->Dual.left=(c.flags&1)!=0;p->Dual.guard=(c.flags&2)!=0;p->Dual.guardBlend=float(c.guard)/255;
             p->Bloodlust={};p->Bloodlust.active=(c.flags&4)!=0;p->Bloodlust.rushing=(c.flags&8)!=0;
             p->Bloodlust.phase=c.phase;p->Bloodlust.age=float(c.age)/1000;p->Bloodlust.cooldown=float(c.cooldown)/1000;
+            p->Slam={};if(c.phase>=6){p->Slam.phase=c.phase-5;p->Slam.age=float(c.age)/1000;p->Bloodlust.phase=0;p->Bloodlust.age=0;}
             p->Bloodlust.rage=c.meter;p->Bloodlust.ready=c.ready;
             if(p->IsA("RunePlayer")) {
                 p->SetInt("Strength",int(std::lround(float(c.meter)*p->GetInt("MaxStrength")/100)));
@@ -979,8 +1003,16 @@ RuneNetworkReplica::CombatApply RuneNetworkReplica::applyCombat(const CombatOutc
     int target=c.target.id?classify(c.target,c.targetLife):0;
     if(source==2 || target==2)return CombatApply::Rejected;
     if(source<0 || target<0)return CombatApply::Deferred;
+    auto presentBash=[&]() {
+        if(source || target || !c.target.id || c.move!=CombatMove::Bash || c.contact!=CombatContact::Hit || c.targetHealth<=0)return;
+        // Late reliable outcomes must not replay an ancient reaction or affect a new life.
+        if(current.tick>c.tick && current.tick-c.tick>15)return;
+        auto it=actors.find(c.target.id);
+        if(it!=actors.end() && it->second.first==c.target)
+            RuneBash::PresentImpact(UObject::TryCast<UPawn>(it->second.second),c.staggered);
+    };
     if(source>0 || target>0 || current.tick>=c.tick)
-    { lastCombatId=c.id; return CombatApply::Superseded; }
+    { presentBash(); lastCombatId=c.id; return CombatApply::Superseded; }
     auto sourceActor=actors.find(c.attacker.id);
     auto targetActor=c.target.id?actors.find(c.target.id):actors.end();
     if(sourceActor==actors.end() || sourceActor->second.first!=c.attacker ||
@@ -993,7 +1025,7 @@ RuneNetworkReplica::CombatApply RuneNetworkReplica::applyCombat(const CombatOutc
         pawn->Health()=c.targetHealth; // Data write only; no JointDamaged or physics callback.
         healthOverlays[c.target.id]={c.target,c.targetLife,c.tick,c.targetHealth};
     }
-    lastCombatId=c.id; return CombatApply::Applied;
+    presentBash();lastCombatId=c.id; return CombatApply::Applied;
 }
 bool RuneNetworkReplica::queueCombat(const CombatOutcome& c,uint64_t localNow)
 {
@@ -1045,7 +1077,7 @@ bool RuneNetworkReplica::anticipate(EntityRef ref,uint64_t id,ActionKind kind,co
     auto* p=UObject::TryCast<UPawn>(actor(ref));auto* proxy=object(p,"AnimProxy");
     auto* model=proxy?UObject::TryCast<USkelModel>(GetRuneDisplayMesh(proxy)):nullptr;
     if(!id || !e || !p || !p->NetworkReplica || !proxy || !model || e->health<=0 ||
-       input.life!=e->life || e->combat.phase || RuneCorpse::Busy(p) || (e->flags&32))return false;
+       input.life!=e->life || e->physical.kind || e->combat.phase || RuneCorpse::Busy(p) || (e->flags&32))return false;
     auto* weapon=object(p,"Weapon");
     auto authored=[&](const char* field){return weapon && weapon->HasProperty(field)?weapon->GetName(field):NameString("None");};
     // Never invent a combo or interrupt an authoritative attack/recovery pose.
@@ -1102,7 +1134,7 @@ void RuneNetworkReplica::presentAnticipation(uint64_t now)
     const auto* e=findEntity(current.world,a.ref);auto* p=UObject::TryCast<UPawn>(actor(a.ref));
     auto* proxy=object(p,"AnimProxy");auto* model=proxy?UObject::TryCast<USkelModel>(GetRuneDisplayMesh(proxy)):nullptr;
     if(!e || !p || !proxy || !model || model!=a.model || now<a.started || e->life!=a.life || e->health<=0 || e->health<a.health || p->Health()<=0 || p->Health()<a.health ||
-        e->weapon!=a.weapon || e->shield!=a.shield || e->combat.offhand!=a.offhand || e->combat.phase || RuneCorpse::Busy(p) || (e->flags&32)) {
+        e->weapon!=a.weapon || e->shield!=a.shield || e->combat.offhand!=a.offhand || e->physical.kind || e->combat.phase || RuneCorpse::Busy(p) || (e->flags&32)) {
         clearAnticipation();return;
     }
     bool confirmed=false;
@@ -1136,17 +1168,17 @@ void RuneNetworkReplica::presentAnticipation(uint64_t now)
     }
 }
 
-void RuneNetworkReplica::present(double alpha)
-{presentFrames(alpha,nullptr,nullptr,1,{});}
-void RuneNetworkReplica::presentAdaptive(const Snapshot& before,const Snapshot& after,double alpha,EntityRef owned,double localAlpha)
-{presentFrames(localAlpha,&before,&after,alpha,owned);}
-void RuneNetworkReplica::presentFrames(double alpha,const Snapshot* older,const Snapshot* newer,double remoteAlpha,EntityRef owned)
+void RuneNetworkReplica::present(double alpha,double animationSeconds)
+{presentFrames(alpha,nullptr,nullptr,1,{},animationSeconds);}
+void RuneNetworkReplica::presentAdaptive(const Snapshot& before,const Snapshot& after,double alpha,EntityRef owned,double localAlpha,double animationSeconds)
+{presentFrames(localAlpha,&before,&after,alpha,owned,animationSeconds);}
+void RuneNetworkReplica::presentFrames(double alpha,const Snapshot* older,const Snapshot* newer,double remoteAlpha,EntityRef owned,double animationSeconds)
 {
     auto nearby=[](const Entity& x,const Entity& y){double d=0;for(int i=0;i<3;++i){auto v=double(x.position[i])-y.position[i];d+=v*v;}return d<=2048.*2048;};
     for(const auto& e:current.world)
     {
         const Entity* legacyBefore=findEntity(previous.world,e.ref);
-        if(legacyBefore && legacyBefore->ref==e.ref && !nearby(*legacyBefore,e))adaptiveLives.erase(e.ref.id);
+        if(legacyBefore && legacyBefore->ref==e.ref && !nearby(*legacyBefore,e)){adaptiveLives.erase(e.ref.id);animationPlayback.erase(e.ref.id);}
         if(!legacyBefore || legacyBefore->ref!=e.ref || !nearby(*legacyBefore,e))legacyBefore=&e;
         // Centred carried/flight coordinates and the authored ground-pose
         // origin are different bases. Never interpolate between those bases.
@@ -1190,6 +1222,7 @@ void RuneNetworkReplica::presentFrames(double alpha,const Snapshot* older,const 
         bool rehash=e.kind==EntityKind::Mover && a->XLevel() && moved;
         if(rehash)a->XLevel()->Collision.RemoveFromCollision(a);
         a->Location()=location;a->Rotation()=rotation;
+        RunePhysics::Present(a,legacyBefore->physical,e.physical,float(alpha));
         for(int axis=0;axis<3;++axis)a->Velocity()[axis]=float(pose.velocity[axis]);
         if(rehash)a->XLevel()->Collision.AddToCollision(a);
         // Assign regions without zone-change scripts or local swimming physics.
@@ -1210,20 +1243,40 @@ void RuneNetworkReplica::presentFrames(double alpha,const Snapshot* older,const 
             float blend=float(std::clamp(std::isfinite(alpha)?alpha:1.0,0.0,1.0));
             if(legacyBefore->life==e.life && legacyBefore->combat.offhand==e.combat.offhand)
                 p->Dual.guardBlend=(legacyBefore->combat.guard+(e.combat.guard-legacyBefore->combat.guard)*blend)/255.f;
-            if(legacyBefore->life==e.life && legacyBefore->combat.phase==e.combat.phase && legacyBefore->combat.age<=e.combat.age)
-                p->Bloodlust.age=(legacyBefore->combat.age+(e.combat.age-legacyBefore->combat.age)*blend)/1000.f;
+            if(legacyBefore->life==e.life && legacyBefore->combat.phase==e.combat.phase && legacyBefore->combat.age<=e.combat.age) {
+                float age=(legacyBefore->combat.age+(e.combat.age-legacyBefore->combat.age)*blend)/1000.f;
+                if(e.combat.phase>=6)p->Slam.age=age;else p->Bloodlust.age=age;
+            }
         }
+        const bool playback=std::isfinite(animationSeconds) && animationSeconds>=0 &&
+            e.kind==EntityKind::Pawn && e.health>0 && a->GetInt("Health")>0 && !e.physical.kind && !e.combat.phase;
+        // install() also prepares legacy root placement before the render call.
+        // That intermediate pass must not discard the persistent playback clock.
+        if(e.kind!=EntityKind::Pawn || e.health<=0 || e.physical.kind || e.combat.phase)animationPlayback.erase(e.ref.id);
+        auto animationFrame=[&](UActor* actor,uint16_t sequence,int16_t phase,int16_t rate,bool loop,double fallback,bool torso) {
+            if(!playback || !actor || !sequence)return fallback;
+            auto* model=UObject::TryCast<USkelModel>(GetRuneDisplayMesh(actor));
+            if(!model || sequence>model->Sequences.size())return fallback;
+            auto& channels=animationPlayback[e.ref.id];
+            auto& clock=torso?channels.torso:channels.body;
+            RuneAnimationPlayback::Sample sample;
+            sample.snapshot=current.id;sample.tick=current.tick;sample.life=e.life;sample.sequence=sequence;
+            sample.model=reinterpret_cast<uintptr_t>(model);sample.phase=double(phase)/32767;
+            sample.rate=double(rate)/256;sample.end=1.-1./std::max(1,model->Sequences[sequence-1].Info.NumFrames);
+            sample.looping=loop;
+            return clock.present(sample,animationSeconds,fallback);
+        };
         if(e.bodyAnimation)
         {
             double frame=transitionPhase(a,e.bodyAnimation,pose.bodyPhase,legacyBefore!=&e &&
                 legacyBefore->life==e.life && legacyBefore->bodyAnimation!=e.bodyAnimation,alpha);
-            a->AnimFrame()=float(frame);a->AnimRate()=float(pose.bodyRate);
+            a->AnimFrame()=float(animationFrame(a,e.bodyAnimation,e.animationPhase,e.animationRate,bool(e.flags&8),frame,false));a->AnimRate()=float(pose.bodyRate);
         }
         if(e.torsoAnimation)if(auto* proxy=object(a,"AnimProxy"))
         {
             double frame=transitionPhase(proxy,e.torsoAnimation,pose.torsoPhase,legacyBefore!=&e &&
                 legacyBefore->life==e.life && legacyBefore->torsoAnimation!=e.torsoAnimation,alpha);
-            proxy->AnimFrame()=float(frame);proxy->AnimRate()=float(pose.torsoRate);
+            proxy->AnimFrame()=float(animationFrame(proxy,e.torsoAnimation,e.torsoPhase,e.torsoRate,bool(e.flags&16),frame,true));proxy->AnimRate()=float(pose.torsoRate);
         }
         if(auto* p=UObject::TryCast<UPawn>(a))RuneDualWield::UpdatePoseState(p);
     }

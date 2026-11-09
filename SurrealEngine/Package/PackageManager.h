@@ -48,6 +48,7 @@ public:
 	fs::path GetRootFolderPath() const { return gameRootFolderPath; }
 	fs::path GetSystemFolderPath() const { return gameSystemFolderPath; }
 	fs::path GetSaveFolderPath() const { return gameSaveFolderPath; }
+    void SetSaveFolderPath(const fs::path& path);
 	fs::path GetCacheFolderPath() const { return gameCacheFolderPath; }
 
 	Package* GetPackage(const NameString& name);

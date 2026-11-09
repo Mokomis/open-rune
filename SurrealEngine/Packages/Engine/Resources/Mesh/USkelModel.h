@@ -64,6 +64,13 @@ struct RuneAnimFrame
 	Array<RuneJointPose> PreprocessJoints;
 };
 
+// Derived reference axes, owned by the model and never serialized.
+struct RuneLegMirrorBasis {
+    int Source=-1;
+    bool Leg=false;
+    mat3 Before=mat3::identity(),After=mat3::identity();
+};
+
 class USkelModel : public UMesh
 {
 public:
@@ -77,6 +84,7 @@ public:
     void CaptureTween(UActor* actor) const;
 	Array<mat4> JointMatrices(const Array<RuneJointPose>& pose) const;
 	Array<mat4> ActorJointMatrices(UActor* actor) const;
+    BBox PoseBounds(UActor* actor) const;
 	void InitializeDynamics(UActor* actor) const;
 	void ApplyJointForce(UActor* actor, int joint, const vec3& force) const;
 	void TickDynamics(UActor* actor, float elapsed) const;
@@ -89,8 +97,13 @@ public:
 	Array<RuneJoint> Joints;
 	Array<RuneSequence> Sequences;
 	Array<RuneAnimFrame> Frames;
+    mutable Array<RuneLegMirrorBasis> LegMirrorBasis;
 	int NumSkins = 0, RootJoint = 0;
 	vec3 PositionOffset;
 	Rotator RotationOffset;
 	uint32_t SerializedEnd = 0;
+private:
+    // Geometry-local influence bounds are immutable after the first query.
+    // A skinned blend lies inside the union of its transformed influences.
+    mutable Array<Array<BBox>> InfluenceBoxes;
 };

@@ -3,7 +3,7 @@ const crypto = require('hypercore-crypto')
 const b = require('b4a')
 const sodium = require('sodium-universal')
 const PROTOCOL = 'open-rune-discovery/1'
-const GAME_PROTOCOL = 22
+const GAME_PROTOCOL = 25
 const TOPIC = `open-rune/multiplayer/protocol-${GAME_PROTOCOL}/v1`
 const KEY = /^[0-9a-f]{64}$/
 const MAP = /^(DM-|AR-|HB-)[A-Za-z0-9_-]{1,45}$/
@@ -45,11 +45,11 @@ function invitation(text) {
   if (typeof text !== 'string' || text.length > 1024) throw new Error('Invalid invitation.')
   const t = text.trim().split(/\s+/)
   const integer = (s, min, max) => /^\d+$/.test(s) && +s >= min && +s <= max
-  if (t.length !== 13 || t[0] !== 'OPEN-RUNE-INVITE-4' || !text.startsWith(t[0]+'\n') ||
+  if (t.length !== 14 || t[0] !== 'OPEN-RUNE-INVITE-5' || !text.startsWith(t[0]+'\n') ||
       !/^\d{1,3}(\.\d{1,3}){3}$/.test(t[1]) || t[1].split('.').some(n=>+n>255) || +t[1].split('.')[0] >=224 || t[1]==='0.0.0.0' ||
       !integer(t[2],1,65535) || !MAP.test(t[3]) || !integer(t[4],1,16) || !integer(t[5],1,4294967295) ||
       !/^[0-9a-f]{32}$/.test(t[6]) || !KEY.test(t[7]) || !integer(t[8],2,16) || +t[4]>+t[8] ||
-      !integer(t[9],1,4) || !integer(t[10],2,4) || !integer(t[11],1,4) || !integer(t[12],0,1)) throw new Error('Invalid invitation.')
+      !integer(t[9],1,4) || !integer(t[10],2,4) || !integer(t[11],1,4) || !integer(t[12],0,1) || !integer(t[13],0,4095)) throw new Error('Invalid invitation.')
   return t
 }
 function encode(t) { return t[0]+'\n'+t[1]+' '+t[2]+'\n'+t.slice(3).join('\n')+'\n' }

@@ -1,6 +1,7 @@
 
 #include "Precomp.h"
 #include "LauncherWindow.h"
+#include "RuneUpdatesPage.h"
 #include "LauncherBanner.h"
 #include "LauncherButtonbar.h"
 #include "PlayGamePage.h"
@@ -46,6 +47,7 @@ LauncherWindow::LauncherWindow() : Widget(nullptr, WidgetType::Window)
 	Pages->AddTab(PlayGame, "Games");
 	Pages->AddTab(GameFolders, "Folders");
 	Pages->AddTab(GraphicsSettings, "Video Settings");
+	Pages->AddTab(new RuneUpdatesPage(this), "Updates");
 	// Pages->AddTab(AudioSettings, "Audio Settings");
 
 	Pages->SetCurrentWidget(PlayGame);

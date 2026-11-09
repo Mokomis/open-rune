@@ -1,4 +1,7 @@
+#include "RuneBattleLaws.h"
 #include "Precomp.h"
+#include "RuneUpdates.h"
+#include "RunePhysics.h"
 #include "Render/ShadowSettings.h"
 #include "RuneDesktopMenu.h"
 #include "RuneDesktopSession.h"
@@ -71,6 +74,7 @@ struct State {
  std::shared_ptr<Image> home,settings,mark;std::map<int,std::shared_ptr<Font>> fonts;
  std::vector<Setting> options;std::vector<Hit> hits;std::string page="home",tab="Video",section,helpKey,message,focus,pressed,edit,editTitle;
  std::function<void(std::string)> acceptText;std::string modal;std::function<void()> confirmed;
+ uint32_t campaignLaws=RuneBattleLaws::All & ~RuneBattleLaws::Leap;
  int scroll=0,characterStart=0,character=-1,skin=0;bool campaign=false,title=true,wasActive=false,previousDead=false,pending=false,fullscreen=false;
  struct Navigation {std::string page,tab,section,focus;int scroll;bool campaign;};
  std::vector<Navigation> history;bool comparing=false;
@@ -81,29 +85,30 @@ struct State {
  void controller();
  void scanSaves(){auto now=GetTickCount64();if(now<saveScan+1000)return;saveScan=now;latestSave=-1;fs::file_time_type newest=fs::file_time_type::min();for(int i=0;i<11;++i){auto file=game->packages->GetSaveFolderPath()/("Save"+std::to_string(i)+"."+game->packages->GetSaveExtension());std::error_code ec;saveExists[i]=fs::is_regular_file(file,ec)&&(!commandline->HasArg("","--save-directory")||fs::is_regular_file(game->packages->GetSaveFolderPath()/("Save"+std::to_string(i)+".mapname"),ec));if(saveExists[i]){auto stamp=fs::last_write_time(file,ec);if(!ec&&stamp>newest){newest=stamp;latestSave=i;}}}}
  std::vector<std::string> category(const std::string&){for(const auto& p:RuneMenuSections())if(p.id==section)return p.keys;return {};}
- bool hostControlled(const std::string& key){return RuneMultiplayer::Active&&(key=="difficulty"||key=="tactics"||key=="kick"||key=="bash"||key=="dualWield"||key=="bloodlustMoves"||key=="normalBloodlust");}
+ bool hostControlled(const std::string& key){return RuneMultiplayer::Active&&(key=="difficulty"||key=="tactics"||key=="kick"||key=="bash"||key=="dualWield"||key=="bloodlustMoves"||key=="normalBloodlust"||key=="physics");}
  std::string dependency(const std::string& key){if(key=="soundRemaster"){std::error_code error;auto root=fs::path(commandline->GetArg("","--sound-pack",(fs::path(game->LaunchInfo.gameRootFolder)/"SoundPacks/OpenRune-Layered-v1").string()));if(!fs::is_regular_file(root/"runtime.json",error))return "Optional sound pack is not installed. Original sounds will be used.";}if((key=="materialMaps"||key=="shadowLights"||key=="materialLighting"||key=="environmentProbes")&&v("pixelLighting")!=2)return "Requires Remastered lighting. Your choice is kept.";if(key=="scalingMethod"&&v("resolution")==0)return "Native resolution bypasses upscaling.";return {};}
  Setting& get(const std::string& key){auto i=std::find_if(options.begin(),options.end(),[&](auto& x){return x.key==key;});if(i==options.end())throw std::runtime_error("Unknown setting: "+key);return *i;}
  int v(const std::string& k){return get(k).value;}
  std::shared_ptr<Font> font(int h){auto& f=fonts[h];if(!f)f=Font::Create("Noto Sans",h);return f;}
  void text(double x,double y,const std::string& str,int size=24,Colorf color=ivory,double max=1300){canvas->drawTextEllipsis(font(size),{x,y},Rect(x,y-size,max,size*1.5),str,color);}
- void wrap(double x,double y,const std::string& str,double width,int size=20,int maxLines=4){std::istringstream in(str);std::string word,line;int n=0;while(in>>word){auto next=line.empty()?word:line+" "+word;if(canvas->measureText(font(size),next).width>width&&!line.empty()){text(x,y,line,size,muted,width);y+=size*1.35;line=word;if(++n>=maxLines)return;}else line=next;}if(!line.empty())text(x,y,line,size,muted,width);}
+ void wrap(double x,double y,const std::string& str,double width,int size=20,int maxLines=4,Colorf color=muted){std::istringstream in(str);std::string word,line;int n=0;while(in>>word){auto next=line.empty()?word:line+" "+word;if(canvas->measureText(font(size),next).width>width&&!line.empty()){text(x,y,line,size,color,width);y+=size*1.35;line=word;if(++n>=maxLines)return;}else line=next;}if(!line.empty())text(x,y,line,size,color,width);}
  void panel(Rect r,float alpha=.90f){canvas->fillRect(r,Colorf(.045f,.057f,.061f,alpha));canvas->line(r.topLeft(),r.topRight(),Colorf(.42f,.33f,.20f));canvas->line(r.bottomLeft(),r.bottomRight(),Colorf(.25f,.22f,.17f));}
  void button(std::string id,Rect r,const std::string& name,std::function<void()> action,bool selected=false,bool enabled=true){
   bool hot=focus==id||r.contains(mouse);panel(r,hot?.97f:.83f);if(hot||selected){canvas->fillRect({r.x,r.y,4,r.height},gold);canvas->line(r.topLeft(),r.topRight(),gold);}text(r.x+22,r.y+r.height*.5+9,name,24,enabled?(hot||selected?gold:ivory):muted,r.width-42);if(enabled)hits.push_back({r,std::move(id),std::move(action)});
  }
  Navigation location()const{return {page,tab,section,focus,scroll,campaign};}
  void go(const std::string& p){if(p=="home")history.clear();else if(p!=page)history.push_back(location());page=p;scroll=0;focus.clear();pressed.clear();message.clear();LogMessage("DESKTOP_MENU page="+p);}
- void openSection(const std::string& id){history.push_back(location());section=id;scroll=0;focus.clear();helpKey.clear();}
+ void openSection(const std::string& id){if(id=="combat"){go(RuneMultiplayer::Active?"match-laws":"campaign-laws");return;}history.push_back(location());section=id;scroll=0;focus.clear();helpKey.clear();}
  void chooseCategory(const std::string& id){while(!history.empty()&&history.back().page=="settings")history.pop_back();tab=id;section.clear();scroll=0;focus.clear();helpKey.clear();}
 
- void save(){auto j=JsonValue::object();for(auto& s:options)j[s.key]=JsonValue::number(s.value);j["character"]=JsonValue::number(RuneCharacters::Multiplayer);j["campaignCharacter"]=JsonValue::number(RuneCharacters::Campaign);j["lastKey"]=JsonValue::string(session.LastKey);j["hostName"]=JsonValue::string(host.name);auto temp=config;temp+=".tmp";std::ofstream f(temp,std::ios::binary);f<<j.to_json();f.close();if(!f||!MoveFileExW(temp.c_str(),config.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))message="Settings could not be saved.";}
+ void save(){auto j=JsonValue::object();j["normalMovesDefaultV2"]=JsonValue::boolean(true);j["campaignLaws"]=JsonValue::number(campaignLaws);j["hostLaws"]=JsonValue::number(host.laws);j["hostPhysics"]=JsonValue::number(host.physics);for(auto& s:options)j[s.key]=JsonValue::number(s.value);j["character"]=JsonValue::number(RuneCharacters::Multiplayer);j["campaignCharacter"]=JsonValue::number(RuneCharacters::Campaign);j["lastKey"]=JsonValue::string(session.LastKey);j["hostName"]=JsonValue::string(host.name);auto temp=config;temp+=".tmp";std::ofstream f(temp,std::ios::binary);f<<j.to_json();f.close();if(!f||!MoveFileExW(temp.c_str(),config.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))message="Settings could not be saved.";}
  void apply(){
+  RuneBattleLaws::Campaign=campaignLaws & ~RuneBattleLaws::Leap;
   RuneShadows::RequestedBudget=commandline->GetArgInt("","--shadow-lights",RuneShadows::ChoiceBudget(v("shadowLights")));
   RuneMultiplayer::Diagnostics=v("networkDiagnostics");RuneMultiplayer::AdaptiveSmoothing=v("networkSmoothing");VisualComparison::RequestedUpscale=v("resolution");VisualComparison::RequestedMode=v("bloom");VisualComparison::RequestedClarity=v("sharp")|(v("filter")<<2)|(v("shadow")<<3);
   int lighting=v("pixelLighting");VisualComparison::RequestedWorldFeatures=v("environment")|(v("hrtf")<<3)|(v("detail")?2:0)|(v("depth")?4:0)|(v("detail")<<4)|(v("depth")<<6)|(lighting==2?768:lighting<<8)|(v("materialMaps")<<10)|(v("water")?2048:0)|(v("water")==2?8192:0)|((v("shadowLights")>0?1:0)<<12)|(v("ambientOcclusion")<<14)|(v("materialLighting")<<16)|(v("environmentProbes")<<17);
   VisualComparison::RequestedTexturePack=v("texturePack");RuneMenu::Antialias=v("aa");RuneMenu::TargetFps=v("fps");RuneMenu::Pacing=v("pacing");RuneMenu::Master=v("master");RuneMenu::Music=v("music");RuneMenu::Effects=v("effects");RuneMenu::Difficulty=v("difficulty");
-  RuneView::FieldOfView=v("fov");RuneView::AutomaticAspect=v("wideView");RuneKick::Enabled=v("kick");RuneBash::Enabled=v("bash");RuneBloodlust::Enabled=v("bloodlustMoves");RuneBloodlust::AllowNormal=v("normalBloodlust");RuneDualWield::Enabled=v("dualWield");RuneTactics::Enabled=v("tactics");RuneVisualEffects::Enabled=v("fireEffects");RuneGore::Enabled=v("gore");RuneSnow::Mode=v("snow");GameFeedback::SetEnabled(v("rumble")!=0);
+  RuneView::FieldOfView=v("fov");RuneView::AutomaticAspect=v("wideView");RunePhysics::RequestedMode=commandline->GetArgInt("","--rune-physics",v("physics"));RuneKick::Enabled=true;RuneBash::Enabled=true;RuneBloodlust::Enabled=true;RuneBloodlust::AllowNormal=true;RuneDualWield::Enabled=true;RuneTactics::Enabled=true;RuneVisualEffects::Enabled=v("fireEffects");RuneGore::Enabled=v("gore");RuneSnow::Mode=v("snow");GameFeedback::SetEnabled(v("rumble")!=0);
   if(comparing){VisualComparison::RequestedMode=0;VisualComparison::RequestedClarity=0;VisualComparison::RequestedWorldFeatures=v("environment")|(v("hrtf")<<3);VisualComparison::RequestedTexturePack=0;RuneVisualEffects::Enabled=false;RuneGore::Enabled=false;RuneSnow::Mode=0;}
   if(fullscreen!=(v("fullscreen")!=0)){game->window->ToggleWindowFullscreen(fullscreen?Size(1280,800):Size(game->window->GetNativePixelWidth(),game->window->GetNativePixelHeight()));fullscreen=v("fullscreen")!=0;}
  }
@@ -150,13 +155,31 @@ void State::draw(){
  if(landing){c.drawImage(mark,{84,45,128,128});text(235,125,"OPEN RUNE",64,gold);if(!title||RuneMenu::PlayerDead)text(88,238,RuneMenu::PlayerDead?"FALLEN IN BATTLE":"PAUSED",24,muted);
   double y=title&&!RuneMenu::PlayerDead?234:286;auto item=[&](std::string id,std::string label,std::function<void()> fn){button(id,{84,y,510,75},label,fn);y+=88;};
   if(RuneMultiplayer::Active){item("resume","Return to match",[this]{close();});if(RuneMenu::PlayerDead)item("respawn","Respawn",[this]{RuneMultiplayer::Respawn=true;close();});item("multiplayer","Match & hosting",[this]{go("multiplayer");});}
-  else {if(title&&latestSave>=0)item("continue","Continue",[this]{RuneMenu::Slot=latestSave;request(7);});if(!title&&!RuneMenu::PlayerDead)item("resume","Continue",[this]{close();});if(RuneMenu::PlayerDead)item("retry","Retry checkpoint",[this]{request(4);});item("new","New campaign",[this]{ask("Start a new campaign? Unsaved progress will be lost.",[this]{request(1);});});item("load","Load game",[this]{go("load");});if(!title&&!RuneMenu::PlayerDead)item("save","Save game",[this]{go("save");});item("multiplayer","Multiplayer",[this]{go("multiplayer");});}
+  else {if(title&&latestSave>=0)item("continue","Continue",[this]{RuneMenu::Slot=latestSave;request(7);});if(!title&&!RuneMenu::PlayerDead)item("resume","Continue",[this]{close();});if(RuneMenu::PlayerDead)item("retry","Retry checkpoint",[this]{request(4);});item("new","New campaign",[this]{go("campaign-new-laws");});item("load","Load game",[this]{go("load");});if(!title&&!RuneMenu::PlayerDead)item("save","Save game",[this]{go("save");});item("multiplayer","Multiplayer",[this]{go("multiplayer");});}
   item("settings","Settings",[this]{go("settings");});item("quit","Quit Open Rune",[this]{ask("Quit Open Rune? Unsaved progress will be lost.",[this]{game->quit=true;});});
+  if(RuneUpdates::Current().available)button("update-available",{950,810,480,68},"Update available",[this]{go("settings");tab="Support";section="updates";});
   button("about",{1130,908,300,60},"About & support",[this]{go("settings");tab="Support";section.clear();});
  } else {
-  text(88,105,page=="settings"?"SETTINGS":page=="multiplayer"?"MULTIPLAYER":page=="host"?"HOST A MATCH":page=="host-rules"?"MATCH RULES":page=="advanced-join"?"ADVANCED JOINING":page=="find"?"FIND GAMES":page=="characters"?"CHOOSE YOUR WARRIOR":page=="maps"?"MAP ROTATION":page=="about"?"ABOUT OPEN RUNE":page=="save"?"SAVE GAME":"LOAD GAME",46,gold);
+  text(88,105,(page=="campaign-laws"||page=="campaign-new-laws"||page=="host-laws"||page=="match-laws")?"LAWS OF BATTLE":page=="settings"?"SETTINGS":page=="multiplayer"?"MULTIPLAYER":page=="host"?"HOST A MATCH":page=="host-rules"?"MATCH RULES":page=="advanced-join"?"ADVANCED JOINING":page=="find"?"FIND GAMES":page=="characters"?"CHOOSE YOUR WARRIOR":page=="maps"?"MAP ROTATION":page=="about"?"ABOUT OPEN RUNE":page=="save"?"SAVE GAME":"LOAD GAME",46,gold);
   button("back",{86,912,230,64},"Back",[this]{back();});
-  if(page=="settings"){
+  if(page=="campaign-laws"||page=="campaign-new-laws"||page=="host-laws"||page=="match-laws"){
+   bool multiplayer=page=="host-laws"||page=="match-laws",readonly=page=="match-laws";
+   uint32_t mask=readonly?RuneBattleLaws::Multiplayer.load():multiplayer?host.laws:campaignLaws;
+   text(90,163,multiplayer?(readonly?"MULTIPLAYER / Current host rules":"MULTIPLAYER / New hosted match"):"SINGLE PLAYER / Players and eligible enemies",24,gold,1320);
+   scroll=std::clamp(scroll,0,8);scroll=(scroll/4)*4;
+   for(int n=0;n<4;++n){int i=scroll+n;auto law=RuneBattleLaws::Entries[i];double y=192+n*158;
+    bool locked=readonly||(!multiplayer&&law.bit==RuneBattleLaws::Leap)||(multiplayer&&law.bit==RuneBattleLaws::Tactics)||(law.bit==RuneBattleLaws::Cross&&!(mask&RuneBattleLaws::Dual));
+    bool checked=(RuneBattleLaws::Effective(mask)&law.bit)!=0;
+    panel({84,y,1350,146},.96f);
+    button("law:"+std::to_string(i),{84,y,1350,54},std::string(checked?"[x]  ":"[ ]  ")+law.name+(locked?(law.bit==RuneBattleLaws::Cross&&!(mask&RuneBattleLaws::Dual)?" — Requires dual wield":multiplayer&&law.bit==RuneBattleLaws::Tactics?" — Campaign only":!multiplayer?" — Disabled in campaign":" — Host rule"):""),[this,multiplayer,law]{if(multiplayer){host.laws^=law.bit;host.normalBloodlust=(host.laws&RuneBattleLaws::Normal)!=0;}else{campaignLaws^=law.bit;campaignLaws&=~RuneBattleLaws::Leap;apply();}save();},checked,!locked);
+    wrap(108,y+84,law.description,1280,21,3,ivory);
+   }
+   button("laws-prev",{340,912,180,64},"Previous",[this]{scroll-=4;},false,scroll>0);
+   button("laws-next",{540,912,180,64},"Next",[this]{scroll+=4;},false,scroll<8);
+   text(760,950,std::to_string(scroll/4+1)+" / 3",22,muted,140);
+   if(page=="campaign-new-laws")button("begin-campaign",{1030,912,400,64},"Begin campaign",[this]{ask("Start a new campaign with these Laws of Battle? Unsaved progress will be lost.",[this]{apply();save();request(1);});});
+   else if(!readonly)button("laws-physics",{960,912,470,64},"Physics: "+std::string((multiplayer?host.physics:v("physics"))==2?"Chaos":(multiplayer?host.physics:v("physics"))==1?"Cinematic":"Original"),[this,multiplayer]{if(multiplayer){host.physics=(host.physics+1)%3;save();}else change("physics",(v("physics")+1)%3);});
+  }else if(page=="settings"){
    int i=0;for(auto name:{"Video","Audio","Controls","Interface","Gameplay"}){std::string t=name;button("tab:"+t,{84,184.0+i++*78,260,62},t,[this,t]{chooseCategory(t);},tab==t);}
    button("tab:Support",{84,650,260,62},"About & support",[this]{chooseCategory("Support");},tab=="Support");
    const MenuSection* activeSection=nullptr;for(const auto& p:RuneMenuSections())if(p.id==section)activeSection=&p;
@@ -168,10 +191,12 @@ void State::draw(){
     std::string explanation=activeSection->help;if(!helpKey.empty()){auto& option=get(helpKey);explanation=option.name+". "+option.hint;auto requirement=dependency(helpKey);if(!requirement.empty())explanation+=" "+requirement;if(hostControlled(helpKey))explanation+=" This is controlled by the host.";}
     wrap(1132,290,explanation,280,21,18);
     if(section=="effects")button("compare",{382,770,710,64},comparing?"Restore my visuals":"Compare original visuals",[this]{comparing=!comparing;apply();});
+    if(section=="physics"&&!RuneMultiplayer::Active)button("physics-playground",{382,410,710,72},"Enter physics playground",[this]{ask("Replace the live scene with an isolated physics playground? Campaign saves stay separate.",[this]{if(!v("physics"))change("physics",1);request(9);close();});});
     if(section=="campaign")button("campaign-character",{382,410,710,72},"Campaign character & skin",[this]{campaign=true;go("characters");});
     if(section=="gamepad")wrap(402,250,pad>=0?"Controller connected. Left stick moves; right stick looks. A jumps, B crouches, X / RT attacks, LT blocks. Left-stick click uses; Y throws; LB activates Rune Power; right-stick click kicks. Double-tap Block to bash. Start pauses.":"No active controller detected. Connect a controller to use the gamepad bindings. Vibration settings are under Controls → Vibration.",650,25,12);
     if(section=="input")wrap(402,445,"WASD move · mouse look · Space jump · left mouse attack · right mouse block · Ctrl use · Q throw · E Rune Power · F kick · Escape menu",650,23,6);
     if(section=="vibration")button("test-rumble",{382,470,710,72},"Test vibration",[this]{if(setPad&&pad>=0){XINPUT_VIBRATION motors{(WORD)(v("rumbleStrength")*655), (WORD)(v("rumbleStrength")*655)};setPad(pad,&motors);rumbleEnd=GetTickCount64()+400;rumblePriority=100;}});
+    if(section=="updates") {auto r=RuneUpdates::Current();text(402,238,RuneUpdates::Identity(),20,gold,670);wrap(402,290,r.message,650,24,3);button("check-updates",{382,380,340,68},r.busy?"Checking…":"Check for updates",[]{RuneUpdates::Check(true);},false,!r.busy);button("auto-updates",{740,380,352,68},RuneUpdates::Automatic()?"Startup checks: On":"Startup checks: Off",[]{RuneUpdates::SetAutomatic(!RuneUpdates::Automatic());});button("release-page",{382,470,710,68},r.available?"View update & downloads":"Open releases page",[this,r]{if(!RuneUpdates::OpenPage(r.url.empty()?"https://github.com/Mokomis/open-rune/releases":r.url))message="Could not open your browser.";});wrap(402,590,r.notes.empty()?"Only published stable releases are offered. Network protocol and gameplay rules must match the host. Saves, settings and game files are kept separate from updates.":r.notes,650,22,8);}
     if(section=="support"){button("notices",{382,220,710,76},"Open licenses & notices",[this]{auto p=fs::path(OS::executable_path())/"licenses";ShellExecuteW(nullptr,L"open",p.c_str(),nullptr,nullptr,SW_SHOWNORMAL);});wrap(402,410,"Open Rune · SurrealEngine fork. Requires your original Rune game files. Original assets remain the property of their owners.",650,26,6);}
     if(!keys.empty())button("restore",{382,912,300,64},"Reset this section",[this]{ask("Reset only the controls in this section? Other settings and layouts are kept.",[this]{for(auto& k:category(tab))if(!hostControlled(k)){auto& option=get(k);option.value=option.initial;}comparing=false;apply();save();});});
    }
@@ -185,7 +210,7 @@ void State::draw(){
     if(session.Hosting()){button("add-bot",{112,520,610,64},"Add bot ("+std::to_string(session.BotCount())+")",[this]{session.AddBot();message=session.Message;});button("remove-bot",{748,520,650,64},"Remove bot",[this]{session.RemoveBot();message=session.Message;},false,session.BotCount()>0);button("invite",{112,640,610,64},"Invite players",[this]{game->window->SetClipboardText(session.HostKey);message="Host identity copied. Friends can use Find games or Advanced joining.";});}
    }else{
     button("find",{112,300,610,76},"Find games",[this]{go("find");session.Browse();});
-    button("host",{748,300,650,76},"Host game",[this]{host.normalBloodlust=v("normalBloodlust")!=0;host.Normalize(*game);go("host");},false,!session.Hosting());
+    button("host",{748,300,650,76},"Host game",[this]{host.normalBloodlust=(host.laws&RuneBattleLaws::Normal)!=0;host.Normalize(*game);go("host");},false,!session.Hosting());
     button("characters",{112,410,610,76},"Character & skin",[this]{campaign=false;go("characters");});
     if(!session.LastKey.empty())button("rejoin",{748,410,650,76},"Rejoin last match",[this]{session.Join(session.LastKey);go("find");});
     button("advanced-join",{112,520,610,76},"Advanced joining",[this]{go("advanced-join");});
@@ -204,7 +229,7 @@ void State::draw(){
    row(3,"host-players","Player capacity: "+std::to_string(host.players),[this]{host.players=host.players==16?2:host.players+1;host.Normalize(*game);});
    row(4,"host-maps","Map rotation: "+std::to_string(host.maps.size())+" map(s)",[this]{go("maps");});
    row(5,"host-bots","Starting bots: "+std::to_string(host.bots),[this]{host.bots=(host.bots+1)%host.players;});
-   row(6,"host-rules","Match rules",[this]{go("host-rules");});
+   row(6,"host-rules","Match rules",[this]{go("host-rules");});row(7,"host-laws","Laws of Battle",[this]{go("host-laws");});
    wrap(100,735,"Player capacity includes you, other players and bots. The host must stay open while others play. Your selected rules apply to this new match.",1310,25,4);
    button("start-host",{1030,912,400,64},"Start & join",[this]{ask("Start this match? Unsaved campaign progress will be replaced; saved games are kept.",[this]{session.Host(*game,host);});});
   }else if(page=="host-rules"){
@@ -212,7 +237,8 @@ void State::draw(){
    if(host.mode!="dm")row(0,"host-teams",host.mode=="arena"?"Arena team size: "+std::to_string(host.arenaSize):"Teams: "+std::to_string(host.teams),[this]{if(host.mode=="arena")host.arenaSize=host.arenaSize%4+1;else host.teams=host.teams==4?2:host.teams+1;host.Normalize(*game);});
    row(1,"host-score","Score / round limit: "+std::to_string(host.score),[this]{input("Score limit (0 disables)",std::to_string(host.score),[this](std::string v){host.score=std::clamp(std::stoi(v),0,10000);});});
    row(2,"host-time","Time limit: "+std::to_string(host.minutes)+" minutes",[this]{input("Minutes (0 disables)",std::to_string(host.minutes),[this](std::string v){host.minutes=std::clamp(std::stoi(v),0,1440);});});
-   row(3,"host-normal-moves",host.normalBloodlust?"Leap / rush without bloodlust: On":"Leap / rush without bloodlust: Off",[this]{host.normalBloodlust=!host.normalBloodlust;});
+   row(3,"host-laws","Laws of Battle",[this]{go("host-laws");});
+   row(6,"host-physics","Physics: "+std::string(host.physics==2?"Chaos":host.physics==1?"Cinematic":"Original"),[this]{host.physics=(host.physics+1)%3;save();});
    if(!host.publicGame)row(4,"host-address","LAN address: "+host.address,[this]{input("Reachable LAN IPv4 address",host.address,[this](std::string v){if(v.size()>64)throw std::runtime_error("Address is too long.");host.address=v;});});
    if(host.mode=="headball")row(5,"host-limbs",host.limbs?"Limbs score: On":"Limbs score: Off",[this]{host.limbs=!host.limbs;});
    wrap(100,690,"These rules apply to the new hosted match. Campaign preferences are unchanged. At least one score or time limit must be enabled.",1300,25,4);
@@ -256,11 +282,18 @@ void State::draw(){
 }
 
 bool Enabled(const Engine& game){return state&&state->game==&game;}
-void Start(Engine& game,bool title){if(!game.LaunchInfo.IsRune())return;state=std::make_unique<State>();auto& s=*state;s.game=&game;s.title=title;
+void Start(Engine& game,bool title){if(!game.LaunchInfo.IsRune())return;RuneUpdates::Check();state=std::make_unique<State>();auto& s=*state;s.game=&game;s.title=title;
  auto add=[&](std::string key,std::string name,std::string hint,std::vector<std::string> choices,int value,int minimum,int maximum){s.options.push_back({key,name,hint,choices,value,value,minimum,maximum});};
  #include "RuneDesktopSettings.inc"
  s.config=Directory::localAppData()/"SurrealEngine/DesktopMenu.json";fs::create_directories(s.config.parent_path());
- try{if(fs::is_regular_file(s.config)){auto j=JsonValue::parse(File::read_all_text(s.config.string()));for(auto& x:s.options)if(j[x.key].type()==JsonType::number)x.value=std::clamp(j[x.key].to_int(),x.minimum,x.maximum);int multiplayer=j["character"].to_int();if(openrune::validCharacter({(uint8_t)(multiplayer&255),(uint8_t)((multiplayer>>8)&255)}))RuneCharacters::Multiplayer=multiplayer;if(j["campaignCharacter"].type()==JsonType::number){int campaign=j["campaignCharacter"].to_int();if(campaign==-1||openrune::validCharacter({(uint8_t)(campaign&255),(uint8_t)((campaign>>8)&255)}))RuneCharacters::Campaign=campaign;}s.session.LastKey=j["lastKey"].to_string();auto name=j["hostName"].to_string();if(!name.empty())s.host.name=name;}}
+ try{if(fs::is_regular_file(s.config)){auto j=JsonValue::parse(File::read_all_text(s.config.string()));for(auto& x:s.options)if(j[x.key].type()==JsonType::number)x.value=std::clamp(j[x.key].to_int(),x.minimum,x.maximum);if(!j["normalMovesDefaultV2"].to_boolean())s.get("normalBloodlust").value=1;uint32_t migrated=RuneBattleLaws::All & ~RuneBattleLaws::Leap;
+ for(auto pair:{std::pair{"kick",RuneBattleLaws::Kick},{"bash",RuneBattleLaws::Bash},{"dualWield",RuneBattleLaws::Dual},{"tactics",RuneBattleLaws::Tactics},{"normalBloodlust",RuneBattleLaws::Normal}})if(!s.v(pair.first))migrated&=~pair.second;
+ if(!s.v("bloodlustMoves"))migrated&=~RuneBattleLaws::Rush;
+ s.campaignLaws=j["campaignLaws"].type()==JsonType::number?uint32_t(j["campaignLaws"].to_int())&RuneBattleLaws::All&~RuneBattleLaws::Leap:migrated;
+ if(j["hostLaws"].type()==JsonType::number)s.host.laws=uint32_t(j["hostLaws"].to_int())&RuneBattleLaws::All;
+ if(j["hostPhysics"].type()==JsonType::number)s.host.physics=std::clamp(j["hostPhysics"].to_int(),0,2);
+ s.host.normalBloodlust=(s.host.laws&RuneBattleLaws::Normal)!=0;
+ int multiplayer=j["character"].to_int();if(openrune::validCharacter({(uint8_t)(multiplayer&255),(uint8_t)((multiplayer>>8)&255)}))RuneCharacters::Multiplayer=multiplayer;if(j["campaignCharacter"].type()==JsonType::number){int campaign=j["campaignCharacter"].to_int();if(campaign==-1||openrune::validCharacter({(uint8_t)(campaign&255),(uint8_t)((campaign>>8)&255)}))RuneCharacters::Campaign=campaign;}s.session.LastKey=j["lastKey"].to_string();auto name=j["hostName"].to_string();if(!name.empty())s.host.name=name;}}
  catch(const std::exception& e){s.message="Could not read saved menu settings; using defaults.";LogMessage(e.what());}
  s.xinput=LoadLibraryExW(L"xinput1_4.dll",nullptr,LOAD_LIBRARY_SEARCH_SYSTEM32);
  if(s.xinput){s.getPad=(decltype(s.getPad))GetProcAddress(s.xinput,"XInputGetState");s.setPad=(decltype(s.setPad))GetProcAddress(s.xinput,"XInputSetState");}
@@ -287,7 +320,7 @@ void Tick(Engine& game){if(!Enabled(game))return;auto& s=*state;try{
    else if(action=="text"){s.edit.clear();game.OnWindowKeyChar(j["text"].to_string());}
    else if(action=="quit")game.quit=true;
   }}
-  auto j=JsonValue::object();j["id"]=JsonValue::number(s.probeId);j["page"]=JsonValue::string(s.page);j["section"]=JsonValue::string(s.section);j["tab"]=JsonValue::string(s.tab);j["focus"]=JsonValue::string(s.focus);j["comparing"]=JsonValue::boolean(s.comparing);j["hostNormalMoves"]=JsonValue::boolean(s.host.normalBloodlust);j["hostMaps"]=JsonValue::array();for(const auto& m:s.host.maps)j["hostMaps"].items().push_back(JsonValue::string(m));j["message"]=JsonValue::string(s.message);j["discovery"]=JsonValue::string(s.session.Message);j["hosting"]=JsonValue::boolean(s.session.Hosting());j["bots"]=JsonValue::number(s.session.BotCount());j["active"]=JsonValue::boolean(RuneMultiplayer::Active);j["status"]=JsonValue::string(RuneMultiplayer::GetStatus());j["hostKey"]=JsonValue::string(s.session.HostKey);j["rows"]=s.session.Rows;j["hits"]=JsonValue::array();for(auto& h:s.hits)j["hits"].items().push_back(JsonValue::string(h.id));j["open"]=JsonValue::boolean(RuneMenu::Open);j["aa"]=JsonValue::number(game.window->GetRenderDevice()->AntialiasMode);j["scale"]=JsonValue::number(game.window->GetRenderDevice()->ResolutionScale);j["shadowBudget"]=JsonValue::number(RuneShadows::Budget(game.window->GetRenderDevice()->WorldFeatures));j["worldFeatures"]=JsonValue::number(game.window->GetRenderDevice()->WorldFeatures);j["character"]=JsonValue::number(RuneCharacters::Multiplayer);j["campaignCharacter"]=JsonValue::number(RuneCharacters::Campaign);j["settings"]=JsonValue::object();for(auto& option:s.options)j["settings"][option.key]=JsonValue::number(option.value);
+  auto j=JsonValue::object();j["id"]=JsonValue::number(s.probeId);j["page"]=JsonValue::string(s.page);j["section"]=JsonValue::string(s.section);j["tab"]=JsonValue::string(s.tab);j["focus"]=JsonValue::string(s.focus);j["comparing"]=JsonValue::boolean(s.comparing);j["campaignLaws"]=JsonValue::number(s.campaignLaws);j["hostLaws"]=JsonValue::number(s.host.laws);j["effectiveLaws"]=JsonValue::number(RuneBattleLaws::Mask());j["lawsPage"]=JsonValue::number(s.scroll/4);j["hostNormalMoves"]=JsonValue::boolean(s.host.normalBloodlust);j["hostMaps"]=JsonValue::array();for(const auto& m:s.host.maps)j["hostMaps"].items().push_back(JsonValue::string(m));j["message"]=JsonValue::string(s.message);j["discovery"]=JsonValue::string(s.session.Message);j["hosting"]=JsonValue::boolean(s.session.Hosting());j["bots"]=JsonValue::number(s.session.BotCount());j["active"]=JsonValue::boolean(RuneMultiplayer::Active);j["status"]=JsonValue::string(RuneMultiplayer::GetStatus());j["hostKey"]=JsonValue::string(s.session.HostKey);j["rows"]=s.session.Rows;j["hits"]=JsonValue::array();for(auto& h:s.hits)j["hits"].items().push_back(JsonValue::string(h.id));j["open"]=JsonValue::boolean(RuneMenu::Open);j["aa"]=JsonValue::number(game.window->GetRenderDevice()->AntialiasMode);j["scale"]=JsonValue::number(game.window->GetRenderDevice()->ResolutionScale);j["shadowBudget"]=JsonValue::number(RuneShadows::Budget(game.window->GetRenderDevice()->WorldFeatures));j["worldFeatures"]=JsonValue::number(game.window->GetRenderDevice()->WorldFeatures);j["character"]=JsonValue::number(RuneCharacters::Multiplayer);j["campaignCharacter"]=JsonValue::number(RuneCharacters::Campaign);j["settings"]=JsonValue::object();for(auto& option:s.options)j["settings"][option.key]=JsonValue::number(option.value);
   std::ofstream f(s.probe/"state.tmp");f<<j.to_json();f.close();MoveFileExW((s.probe/"state.tmp").c_str(),(s.probe/"state.json").c_str(),MOVEFILE_REPLACE_EXISTING);
  }
  s.scanSaves();s.controller();s.session.Tick();auto invite=s.session.TakeInvite();if(!invite.empty()){if(RuneMultiplayer::Join(invite)){s.title=false;s.lastInvitation=invite;s.save();s.close();}else s.message="Already connected to a match.";}
@@ -305,12 +338,12 @@ bool Draw(Engine& game){if(!Enabled(game)||!RuneMenu::Open)return false;auto& s=
  return true;}
 bool Mouse(Engine& game,const Point& pos,int action,int key){if(!Enabled(game)||!RuneMenu::Open)return false;auto& s=*state;Point old=s.mouse;s.mouse={pos.x*game.window->GetDpiScale()/s.scale-s.offset.x,pos.y*game.window->GetDpiScale()/s.scale-s.offset.y};
  if(action==0&&s.rotating){float delta=(float)(s.mouse.x-old.x)*.018f;s.yaw+=delta;s.spin=std::clamp(delta*90.0f,-15.0f,15.0f);return true;}
- if(action==3){s.scroll+=key==IK_MouseWheelDown?1:-1;s.scroll=std::max(0,s.scroll);return true;}
+ if(action==3){s.scroll+=(s.page.ends_with("laws")?4:1)*(key==IK_MouseWheelDown?1:-1);s.scroll=std::max(0,s.scroll);return true;}
  if(action==1&&key==IK_LeftMouse){if(s.character>=0&&Rect(460,130,620,620).contains(s.mouse)){s.rotating=true;s.spin=0;return true;}s.pressed.clear();for(auto& h:s.hits)if(h.box.contains(s.mouse)){s.pressed=h.id;s.focus=h.id;break;}}
  if(action==2&&key==IK_LeftMouse){if(s.rotating){s.rotating=false;return true;}for(auto& h:s.hits)if(h.id==s.pressed&&h.box.contains(s.mouse)){auto fn=h.action;s.pressed.clear();try{fn();}catch(const std::exception& e){s.message=e.what();}break;}s.pressed.clear();}return true;}
 bool Key(Engine& game,int key,bool down){if(!Enabled(game))return false;auto& s=*state;if(!RuneMenu::Open){if(key==IK_Escape&&down){s.open();return true;}return false;}if(!down)return true;
  try{if(key==IK_Escape){s.back();return true;}if(s.acceptText){if(key==IK_Backspace&&!s.edit.empty())s.edit.pop_back();else if(key==IK_Enter){auto fn=s.acceptText;fn(s.edit);s.acceptText={};}else if(key==IK_A&&(GetKeyState(VK_CONTROL)&0x8000))s.edit.clear();else if(key==IK_V&&(GetKeyState(VK_CONTROL)&0x8000)){auto text=game.window->GetClipboardText();if(s.edit.size()+text.size()<=4096)s.edit+=text;}return true;}
- if(key==IK_PageDown||key==IK_PageUp){s.scroll=std::max(0,s.scroll+(key==IK_PageDown?5:-5));return true;}
+ if(key==IK_PageDown||key==IK_PageUp){s.scroll=std::max(0,s.scroll+(key==IK_PageDown?1:-1)*(s.page.ends_with("laws")?4:5));return true;}
  if(key==IK_Tab||key==IK_Down||key==IK_Up||key==IK_Left||key==IK_Right){
   if(s.hits.empty())return true;auto current=std::find_if(s.hits.begin(),s.hits.end(),[&](const auto& h){return h.id==s.focus;});
   if(key==IK_Tab){size_t index=current==s.hits.end()?0:(size_t(current-s.hits.begin())+1)%s.hits.size();s.focus=s.hits[index].id;}

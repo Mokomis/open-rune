@@ -13,6 +13,7 @@
 
 void UModel::Load(ObjectStream* stream)
 {
+    StaticRenderBounds.clear();CurrentRenderBounds.clear();RenderPostorder.clear();
 	UPrimitive::Load(stream);
 
 	if (stream->GetVersion() <= 61)
@@ -436,6 +437,42 @@ void UModel::Save(PackageStreamWriter* stream)
 
 	stream->WriteInt32(RootOutside);
 	stream->WriteInt32(Linked);
+}
+
+namespace {
+void IncludeRenderBox(BBox& into,const BBox& box) {
+    if(!box.IsValid)return;
+    if(!into.IsValid){into=box;return;}
+    for(int k=0;k<3;++k){into.min[k]=std::min(into.min[k],box.min[k]);into.max[k]=std::max(into.max[k],box.max[k]);}
+}
+}
+const Array<BBox>& UModel::ConservativeRenderBounds() {
+    if(StaticRenderBounds.size()!=Nodes.size()) {
+        StaticRenderBounds.resize(Nodes.size());for(auto& b:StaticRenderBounds)b.IsValid=false;
+        RenderPostorder.clear();
+        std::function<void(int)> visit=[&](int index) {
+            auto& node=Nodes[index];BBox all;all.IsValid=false;
+            if(node.RenderBound>=0)IncludeRenderBox(all,Bounds[node.RenderBound]);
+            for(int child:{node.Front,node.Back})if(child>=0){visit(child);IncludeRenderBox(all,StaticRenderBounds[child]);}
+            for(int at=index;at>=0;at=Nodes[at].Plane) {
+                auto& poly=Nodes[at];
+                for(int v=0;v<poly.NumVertices;++v){auto p=Points[Vertices[poly.VertPool+v].Vertex];IncludeRenderBox(all,BBox(p,p));}
+            }
+            StaticRenderBounds[index]=all;RenderPostorder.push_back(index);
+        };
+        if(!Nodes.empty())visit(0);
+        CurrentRenderBounds=StaticRenderBounds;
+    }
+    return CurrentRenderBounds;
+}
+void UModel::UpdateRenderActorBounds() {
+    ConservativeRenderBounds();CurrentRenderBounds=StaticRenderBounds;
+    for(int index:RenderPostorder) {
+        auto& node=Nodes[index];auto& box=CurrentRenderBounds[index];
+        for(auto* actor=node.ActorList;actor;actor=actor->BspInfo.Next)
+            if(!actor->bDeleteMe() && !actor->bHidden() && actor->DrawType()!=DT_None)IncludeRenderBox(box,actor->BspInfo.BoundingBox);
+        for(int child:{node.Front,node.Back})if(child>=0)IncludeRenderBox(box,CurrentRenderBounds[child]);
+    }
 }
 
 PointRegion UModel::FindRegion(const vec3& point, UZoneInfo* levelZoneInfo)

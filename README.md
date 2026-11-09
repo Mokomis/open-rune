@@ -1,3 +1,5 @@
+Current build: **0.1.0-dev.7**. See the [November 8 client consolidation](Docs/RunePort/CLIENT-SYNC-20261108.md) for deployment, tests and platform limitations. Surreal is the active engine; the Unity experiment is archived.
+
 # Open Rune
 
 Release status: **unreleased v1**. Both development repositories are private. Public source publication is deferred until the owner is ready to release v1. This is the clean distribution-source snapshot. Original-game research, recovered scripts and upstream history are excluded. Keeping this repository private is a release-stage decision.
@@ -22,7 +24,7 @@ For builds and current deployment scope, start with [Android build guidance](And
 
 The primary tested device is the OPPO Pad Mini OPD2515. Native Vulkan rendering at 2520×1680 with 4× MSAA is a validation baseline; fresh Android settings now default to 50% Hardware Scaling. Original artwork and optional WIP replacements can be switched in Video. See [scaling behavior](Docs/RunePort/SYSTEM-SCALING.md).
 
-Selected encounters, natural opening transitions and save/load paths have bounded validation. Laptop automation covers 44 multiplayer maps and 157 supported map/variant combinations, including 16-player match loops; human fairness, audio and endurance playtesting remain. The November 3 Mac, Windows and Android builds share multiplayer protocol/ALPN 22 and native rules 22; peers must use matching builds. See the [client deployment checkpoint](Docs/RunePort/CLIENT-SYNC-20261103.md) for scope and verification. Performance depends on scene, effects, scaling and device conditions; a 120/144 FPS target is not a sustained-FPS guarantee. See [campaign coverage](Docs/RunePort/CAMPAIGN-ROUTE.md), [multiplayer evidence](Docs/RunePort/PRIVATE-MULTIPLAYER-STATUS.md) and [measured renderer work](Docs/RunePort/RENDER-LIGHTING-PERFORMANCE.md).
+Selected encounters, natural opening transitions and save/load paths have bounded validation. Laptop automation covers 44 multiplayer maps and 157 supported map/variant combinations, including 16-player match loops; human fairness, audio and endurance playtesting remain. The November 8 dev.7 Mac, Windows and Android builds share multiplayer protocol/ALPN 25 and native rules 34; peers must use matching builds. See the [client deployment checkpoint](Docs/RunePort/CLIENT-SYNC-20261103.md) for scope and verification. Performance depends on scene, effects, scaling and device conditions; a 120/144 FPS target is not a sustained-FPS guarantee. See [campaign coverage](Docs/RunePort/CAMPAIGN-ROUTE.md), [multiplayer evidence](Docs/RunePort/PRIVATE-MULTIPLAYER-STATUS.md) and [measured renderer work](Docs/RunePort/RENDER-LIGHTING-PERFORMANCE.md).
 
 ## Source and assets
 

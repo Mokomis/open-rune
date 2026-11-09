@@ -1,5 +1,8 @@
+#include "RuneBattleLaws.h"
 #include "RuneDesktopMenu.h"
 #include "Precomp.h"
+#include "RuneUpdates.h"
+#include "RunePhysics.h"
 #include "RuneSnow.h"
 #include "RuneMultiplayer.h"
 #include "RuneNetworkCamera.h"
@@ -133,6 +136,7 @@ struct Invite
     uint16_t port=0,players=2;
     GameMode mode=GameMode::Deathmatch;
     uint8_t teams=2,arenaTeamSize=1,limbsScore=0;
+    uint32_t laws=RuneBattleLaws::All;
     EntityRef owned;
     InvitationKey key{};
 };
@@ -168,8 +172,8 @@ void createInvitationDirectory(const std::filesystem::path& directory)
 }
 void writeInvite(const std::filesystem::path& path,const Invite& invite)
 {
-    std::ostringstream out;out<<"OPEN-RUNE-INVITE-4\n"<<invite.address<<' '<<invite.port<<'\n'
-        <<invite.map<<'\n'<<invite.owned.id<<' '<<invite.owned.generation<<'\n'<<invite.identity<<'\n'<<hex(invite.key)<<'\n'<<invite.players<<'\n'<<int(invite.mode)<<'\n'<<int(invite.teams)<<' '<<int(invite.arenaTeamSize)<<' '<<int(invite.limbsScore)<<'\n';
+    std::ostringstream out;out<<"OPEN-RUNE-INVITE-5\n"<<invite.address<<' '<<invite.port<<'\n'
+        <<invite.map<<'\n'<<invite.owned.id<<' '<<invite.owned.generation<<'\n'<<invite.identity<<'\n'<<hex(invite.key)<<'\n'<<invite.players<<'\n'<<int(invite.mode)<<'\n'<<int(invite.teams)<<' '<<int(invite.arenaTeamSize)<<' '<<int(invite.limbsScore)<<'\n'<<invite.laws<<'\n';
     auto text=out.str();
 #ifdef _WIN32
     HANDLE file=CreateFileW(path.c_str(),GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);
@@ -187,18 +191,19 @@ Invite readInvite(const std::string& path)
 {
     require(std::filesystem::file_size(path)<=1024,"invitation is too large");
     std::ifstream input(path);std::string magic,key,trailing;Invite invite;unsigned port=0;
-    require(bool(std::getline(input,magic)) && (magic=="OPEN-RUNE-INVITE-1" || magic=="OPEN-RUNE-INVITE-2" || (magic=="OPEN-RUNE-INVITE-3" || magic=="OPEN-RUNE-INVITE-4")),"unsupported invitation");
+    require(bool(std::getline(input,magic)) && (magic=="OPEN-RUNE-INVITE-1" || magic=="OPEN-RUNE-INVITE-2" || (magic=="OPEN-RUNE-INVITE-3" || (magic=="OPEN-RUNE-INVITE-4" || magic=="OPEN-RUNE-INVITE-5"))),"unsupported invitation");
     require(bool(input>>invite.address>>port>>invite.map>>invite.owned.id>>invite.owned.generation>>invite.identity>>key) &&
         port>0 && port<=65535 && (invite.map.starts_with("DM-") || invite.map.starts_with("AR-") || invite.map.starts_with("HB-")) && invite.map.size()<=48 &&
         std::all_of(invite.map.begin(),invite.map.end(),[](unsigned char c){return std::isalnum(c) || c=='-' || c=='_';}) && invite.owned.id &&
         invite.owned.generation && invite.identity.size()==32 && key.size()==64,"invalid invitation fields");
-    if(magic=="OPEN-RUNE-INVITE-2" || (magic=="OPEN-RUNE-INVITE-3" || magic=="OPEN-RUNE-INVITE-4"))require(bool(input>>invite.players),"missing player count");
-    if((magic=="OPEN-RUNE-INVITE-3" || magic=="OPEN-RUNE-INVITE-4")){unsigned mode=0;require(bool(input>>mode) && mode>=1 && mode<=4,"invalid game mode");invite.mode=GameMode(mode);}
-    if(magic=="OPEN-RUNE-INVITE-4") {
+    if(magic=="OPEN-RUNE-INVITE-2" || (magic=="OPEN-RUNE-INVITE-3" || (magic=="OPEN-RUNE-INVITE-4" || magic=="OPEN-RUNE-INVITE-5")))require(bool(input>>invite.players),"missing player count");
+    if((magic=="OPEN-RUNE-INVITE-3" || (magic=="OPEN-RUNE-INVITE-4" || magic=="OPEN-RUNE-INVITE-5"))){unsigned mode=0;require(bool(input>>mode) && mode>=1 && mode<=4,"invalid game mode");invite.mode=GameMode(mode);}
+    if((magic=="OPEN-RUNE-INVITE-4" || magic=="OPEN-RUNE-INVITE-5")) {
         unsigned teams=0,arena=0,limbs=0;
         require(bool(input>>teams>>arena>>limbs) && teams>=2 && teams<=4 && arena>=1 && arena<=4 && limbs<=1,"invalid invitation variants");
         invite.teams=uint8_t(teams);invite.arenaTeamSize=uint8_t(arena);invite.limbsScore=uint8_t(limbs);
     }
+    if(magic=="OPEN-RUNE-INVITE-5")require(bool(input>>invite.laws) && !(invite.laws&~RuneBattleLaws::All),"invalid Laws of Battle");
     require(!(input>>trailing) && invite.players>=2 && invite.players<=16 && invite.owned.id<=invite.players,"invalid invitation roster");
     invite.port=uint16_t(port);
     auto digit=[](char c)->int {return c>='0' && c<='9'?c-'0':c>='a' && c<='f'?c-'a'+10:-1;};
@@ -285,7 +290,7 @@ void RunRuneMultiplayerServer(Engine& game,const std::string& directory)
     const int timeLimit=commandline->GetArgInt("","--rune-net-time-limit",600);
     const int intermission=commandline->GetArgInt("","--rune-net-intermission",8);
     require(playerCount>=2 && playerCount<=16 && fragLimit>=0 && fragLimit<=10000 &&
-        timeLimit>=0 && timeLimit<=86400 && (fragLimit || timeLimit) && intermission>=2 && intermission<=60,"invalid multiplayer limits (2..16 players)");
+        timeLimit>=0 && timeLimit<=86400 && intermission>=2 && intermission<=60,"invalid multiplayer limits (2..16 players)");
     std::vector<std::string> maps;std::istringstream mapInput(commandline->GetArg("","--rune-net-maps",mode==GameMode::HeadBall?"HB-Agora":mode==GameMode::Arena?"AR-Champions":teamMode(mode)?"DM-Team_ships":"DM-Hildir,DM-Thorstadt"));
     for(std::string map;std::getline(mapInput,map,',');) {
         require(map.starts_with(mode==GameMode::HeadBall?"HB-":mode==GameMode::Arena?"AR-":"DM-") && map.size()<=48 &&
@@ -293,7 +298,19 @@ void RunRuneMultiplayerServer(Engine& game,const std::string& directory)
         maps.push_back(map);
     }
     require(!maps.empty() && maps.size()<=32,"invalid map rotation");
-    game.NetworkAuthority=true;RuneBloodlust::AllowNormal=commandline->HasArg("","--rune-normal-bloodlust-moves");
+    int selectedLaws=commandline->GetArgInt("","--rune-battle-laws",RuneBattleLaws::All);
+    require(selectedLaws>=0 && !(uint32_t(selectedLaws)&~RuneBattleLaws::All),"invalid Laws of Battle mask");
+    if(commandline->GetArg("","--rune-normal-bloodlust-moves","1")=="0")selectedLaws&=~RuneBattleLaws::Normal;
+    for(unsigned i=0;i<RuneBattleLaws::Keys.size();++i){
+        std::string option=std::string("--rune-law-")+RuneBattleLaws::Keys[i];
+        if(commandline->HasArg("",option)){
+            auto value=commandline->GetArg("",option,"1");
+            require(value=="0"||value=="1","Laws of Battle options must be 0 or 1");
+            if(value=="1")selectedLaws|=1u<<i;else selectedLaws&=~(1u<<i);
+        }
+    }
+    RuneBattleLaws::MatchScope lawsScope{uint32_t(selectedLaws)};
+    game.NetworkAuthority=true;RuneBloodlust::AllowNormal=commandline->GetArg("","--rune-normal-bloodlust-moves","1")!="0";
     auto bindAddress=commandline->GetArg("","--rune-net-address","127.0.0.1");
     std::vector<std::unique_ptr<PeerSlot>> slots;
     for(int i=0;i<playerCount;++i)slots.push_back(std::make_unique<PeerSlot>(bindAddress));
@@ -392,6 +409,7 @@ void RunRuneMultiplayerServer(Engine& game,const std::string& directory)
     auto match=contracts[0];
     for(size_t i=0;i<slots.size();++i) {
         slots[i]->invite.teams=uint8_t(teamCount);slots[i]->invite.arenaTeamSize=uint8_t(arenaTeamSize);slots[i]->invite.limbsScore=limbsScore;
+        slots[i]->invite.laws=RuneBattleLaws::Multiplayer.load();
         slots[i]->invite.map=maps[0];slots[i]->invite.mode=mode;slots[i]->invite.players=uint16_t(playerCount);
         writeInvite(std::filesystem::path(directory)/("player"+std::to_string(i+1)+".rune-invite"),slots[i]->invite);
     }
@@ -432,6 +450,7 @@ void RunRuneMultiplayerServer(Engine& game,const std::string& directory)
     FixedSimulation simulation;bool running=false;uint64_t snapshots=0,actions=0,contacts=0;
     const bool diagnostics=commandline->HasArg("","--rune-net-diagnostics");
     TimingWindow tickTimings;uint64_t nextDiagnostics=started+2000;
+    double stageInputMs=0,stageLevelMs=0,stagePhysicsMs=0,stageSnapshotMs=0;unsigned stageTicks=0,stageSnapshots=0;
     MatchStatus state;state.mode=mode;state.teams=teamMode(mode)?4:2;state.fragLimit=uint32_t(fragLimit);
     std::optional<MatchStatus> lastStatus;uint64_t endedAt=0,travelAt=0,roundStartedAt=0;uint32_t round=1;
     auto readScores=[&] {
@@ -500,7 +519,7 @@ void RunRuneMultiplayerServer(Engine& game,const std::string& directory)
                             auto fresh=readInvite((std::filesystem::path(directory)/("player"+std::to_string(slot->invite.owned.id)+".rune-invite")).string());
                             if(fresh.owned!=slot->invite.owned || fresh.port!=slot->invite.port || fresh.map!=slot->invite.map ||
                                 fresh.players!=slot->invite.players || fresh.mode!=slot->invite.mode || fresh.teams!=slot->invite.teams ||
-                                fresh.arenaTeamSize!=slot->invite.arenaTeamSize || fresh.limbsScore!=slot->invite.limbsScore)return;
+                                fresh.laws!=slot->invite.laws || fresh.arenaTeamSize!=slot->invite.arenaTeamSize || fresh.limbsScore!=slot->invite.limbsScore)return;
                             if(slot->invite.identity!=fresh.identity)slot->savedScore=PlayerScore{};
                             slot->invite.key=fresh.key;slot->invite.identity=fresh.identity;
                         }catch(...){return;}
@@ -600,6 +619,7 @@ void RunRuneMultiplayerServer(Engine& game,const std::string& directory)
         if(running && !endedAt)simulation.advance(now*1000,[&](uint64_t tick,float dt)
         {
             MeasuredTick measured{diagnostics?&tickTimings:nullptr};
+            auto stageStart=diagnostics?std::chrono::steady_clock::now():std::chrono::steady_clock::time_point{};
             if(endedAt)return;
             authority->beginTick(tick,now);
             if(commandline->HasArg("","--rune-net-tag-fixture") && tick==1) {
@@ -788,8 +808,11 @@ void RunRuneMultiplayerServer(Engine& game,const std::string& directory)
                     ExpressionValue::NameValue("Crushed"),ExpressionValue::VectorValue(slots[1]->pawn->Location())});
                 std::cout<<"OPEN_RUNE_TEST_DEATH health="<<slots[1]->pawn->Health()<<std::endl;
             }
+            if(diagnostics)stageInputMs+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-stageStart).count();
+            auto levelStart=diagnostics?std::chrono::steady_clock::now():std::chrono::steady_clock::time_point{};
             game.TotalTime+=dt;game.LevelInfo->TimeSeconds()+=dt;
             game.Level->Tick(dt,false);
+            if(diagnostics){stageLevelMs+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-levelStart).count();stagePhysicsMs+=RunePhysics::Stats().stepMs;++stageTicks;}
             if(mode==GameMode::HeadBall && !headBallStartTick && game.GameInfo->GetBool("bGameStarted")) {
                 headBallStartTick=tick;std::cout<<"OPEN_RUNE_HEADBALL_STARTED tick="<<tick<<std::endl;
             }
@@ -810,9 +833,11 @@ void RunRuneMultiplayerServer(Engine& game,const std::string& directory)
             require(!authority->combatFaulted(),"combat stream fault");
             if(tick%2==0)
             {
+                auto captureStart=diagnostics?std::chrono::steady_clock::now():std::chrono::steady_clock::time_point{};
                 require(authority->capture(world),"world capture failed");
                 for(size_t i=0;i<slots.size();++i)if(slots[i]->joined)require(slots[i]->peer->snapshots.capture(world,tick+1,authority->movementAck(i+1)),"snapshot enqueue failed");
                 ++snapshots;
+                if(diagnostics){stageSnapshotMs+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-captureStart).count();++stageSnapshots;}
             }
             for(auto& cue:authority->drainSounds())for(auto& slot:slots)if(slot->joined && slot->pawn) {
                 vec3 at(float(cue.position[0])/8,float(cue.position[1])/8,float(cue.position[2])/8);
@@ -862,7 +887,10 @@ void RunRuneMultiplayerServer(Engine& game,const std::string& directory)
         if(diagnostics && now>=nextDiagnostics) {
             nextDiagnostics=now+2000;auto timing=tickTimings.summary(nowMs());
             std::cout<<"OPEN_RUNE_SERVER_DIAGNOSTICS tick_samples="<<timing.count<<" tick_mean_ms="<<timing.mean
-                <<" tick_p95_ms="<<timing.p95<<" tick_max_ms="<<timing.maximum<<" entities="<<world.size()<<std::endl;
+                <<" tick_p95_ms="<<timing.p95<<" tick_max_ms="<<timing.maximum<<" entities="<<world.size()
+                <<" input_ms="<<stageInputMs/std::max(1u,stageTicks)<<" level_ms="<<stageLevelMs/std::max(1u,stageTicks)
+                <<" physics_ms="<<stagePhysicsMs/std::max(1u,stageTicks)<<" snapshot_ms="<<stageSnapshotMs/std::max(1u,stageSnapshots)<<std::endl;
+            stageInputMs=stageLevelMs=stagePhysicsMs=stageSnapshotMs=0;stageTicks=stageSnapshots=0;
             for(size_t i=0;i<slots.size();++i)if(slots[i]->joined && slots[i]->session)if(auto* stats=slots[i]->session->transportStats()) {
                 auto snapshot=slots[i]->peer->snapshots.stats();
                 std::cout<<"OPEN_RUNE_PEER_DIAGNOSTICS player="<<i+1<<" rtt_ms="<<stats->observedRttMs<<" rtt_samples="<<stats->rttSamples
@@ -904,7 +932,7 @@ void RunRuneMultiplayerClient(Engine& game,const std::string& invitationFile)
     }} reset{game,bool(game.viewport->bWindowsMouseAvailable()),bool(game.viewport->bShowWindowsMouse())};
     RuneMultiplayer::Active=true;RuneMultiplayer::Leave=false;RuneMultiplayer::Respawn=false;
     RuneCombat::Ready=false;RuneMenu::PlayerDead=false;
-    auto invite=readInvite(invitationFile);const uint32_t ownedSlot=invite.owned.id;
+    auto invite=readInvite(invitationFile);RuneBattleLaws::MatchScope lawsScope{invite.laws};const uint32_t ownedSlot=invite.owned.id;
     sockaddr_in remote{};remote.sin_family=AF_INET;remote.sin_port=htons(invite.port);
     require(inet_pton(AF_INET,invite.address.c_str(),&remote.sin_addr)==1 && remote.sin_addr.s_addr!=INADDR_ANY,"invalid invitation address");
     game.NetworkClient=true;
@@ -917,6 +945,10 @@ void RunRuneMultiplayerClient(Engine& game,const std::string& invitationFile)
 #endif
     game.OpenWindow();
     game.audiodev->InitDevice();game.render=std::make_unique<RenderSubsystem>(game.window->GetRenderDevice());
+    }
+    if(!embedded && commandline->HasArg("","--rune-net-fullscreen")) {
+        require(commandline->HasArg("","--save-directory"),"fullscreen fixture requires isolated saves");
+        game.window->ShowFullscreen();
     }
     game.window->SetWindowTitle("Open Rune — Joining multiplayer");
     auto url=game.GetDefaultURL(invite.map);url.Options.push_back(std::string("game=")+gameClass(invite.mode));game.LoadMap(url);
@@ -1057,7 +1089,7 @@ void RunRuneMultiplayerClient(Engine& game,const std::string& invitationFile)
             (player->GetUObject("Weapon")?player->GetUObject("Weapon")->Class->Name.ToString():"None")+"   Rune power "+std::to_string(player->GetInt("RunePower"))+"/"+std::to_string(player->GetInt("MaxPower")),vec4(.92f,.88f,.77f,1));
         if(nowMs()<feedbackUntil)draw(148,feedbackText,vec4(1,.7f,.3f,1));
         draw(96,mouseReleased?"Controls released — Escape to resume":"WASD move | Mouse look | LMB attack | RMB block (double tap: bash)",vec4(.85f,.79f,.65f,1));
-        draw(122,"Space jump (double: rage leap) | Block+attack: shield rush | F kick | E power | Ctrl use | Q throw | 1–4 weapons",vec4(.85f,.79f,.65f,1));
+        draw(122,"Space jump (2× + attack: heavy slam / rage leap) | Block+attack: shield rush | F kick | E power | Ctrl use | Q throw | 1–4 weapons",vec4(.85f,.79f,.65f,1));
         std::istringstream rows(scoreboard);float y=160;
         for(std::string row;std::getline(rows,row);y+=26)draw(y,row,vec4(.92f,.88f,.77f,1));
     };
@@ -1106,14 +1138,17 @@ void RunRuneMultiplayerClient(Engine& game,const std::string& invitationFile)
     float pendingDrawTime=0;bool coveredWasOpen=false;
     const auto nativeFixture=commandline->GetArg("","--rune-net-native-fixture","");
     require(nativeFixture.empty() || nativeFixture=="dual" || nativeFixture=="blood" || nativeFixture=="bash","invalid native client fixture");
+    const bool smoothLeapHandoff=commandline->GetArgInt("","--rune-net-leap-handoff",1)!=0;
+    const bool smoothCameraBoom=commandline->GetArgInt("","--rune-net-camera-boom",1)!=0;
     const bool smoothStairs=commandline->GetArgInt("","--rune-net-stair-smoothing",1)!=0;
     const bool stairTest=commandline->HasArg("","--rune-net-stair-input");
+    const int stairRunMs=std::clamp(commandline->GetArgInt("","--rune-net-stair-run-ms",3000),500,3000);
     const auto stairTracePath=commandline->GetArg("","--rune-net-stair-trace","");
     const auto stairCapturePath=commandline->GetArg("","--rune-net-stair-captures","");
     require((!stairTest && stairTracePath.empty() && stairCapturePath.empty()) || commandline->HasArg("","--save-directory"),"stair diagnostics require isolated saves");
     std::ofstream stairTrace;if(!stairTracePath.empty()) {
         stairTrace.open(stairTracePath);require(bool(stairTrace),"cannot write stair trace");
-        stairTrace<<"ms,x,y,z,visual_z,camera_x,camera_y,camera_z,server_z,grounded,predicted,sequence,phase,pose_x,pose_z,replica_x,replica_z,camera_blocked\n";
+        stairTrace<<"ms,x,y,z,visual_z,camera_x,camera_y,camera_z,server_z,grounded,predicted,sequence,phase,pose_x,pose_z,replica_x,replica_z,camera_blocked,combat_phase,handoff\n";
     }
     std::ofstream motionTrace;
     if(commandline->HasArg("","--rune-net-motion-trace")) {
@@ -1122,6 +1157,14 @@ void RunRuneMultiplayerClient(Engine& game,const std::string& invitationFile)
         motionTrace<<"ms,owned,entity,life,grounded,mode,snapshot,tick,server_x,server_y,server_z,x,y,z,body,phase,delay_ms,buffered_ms\n";
     }
     uint64_t stairCaptureAt=0;unsigned stairCaptureIndex=0;
+    const bool combatPlayback=commandline->GetArgInt("","--rune-combat-playback",1)!=0;
+    std::ofstream animationTrace;
+    if(commandline->HasArg("","--rune-net-animation-trace")) {
+        require(commandline->HasArg("","--save-directory"),"animation trace requires isolated saves");
+        animationTrace.open(commandline->GetArg("","--rune-net-animation-trace",""));
+        require(bool(animationTrace),"cannot open animation trace");
+        animationTrace<<"ms,entity,life,snapshot,body,body_frame,torso,torso_frame,auth_torso,rate,loop,preview,owned,left\n";
+    }
     unsigned nativeSeen=0,nativeCaptured=0;
     const auto nativeCaptures=commandline->GetArg("","--rune-net-native-captures","");
     std::array<bool,12> nativeEvents{};
@@ -1135,8 +1178,8 @@ void RunRuneMultiplayerClient(Engine& game,const std::string& invitationFile)
     const bool sparringDefender=commandline->HasArg("","--rune-net-sparring-defender");
     bool sparringBlock=false;
     uint64_t sparringNext=0;unsigned sparringMove=0;
-    vec3 initial(0);double maxMovement=0;RuneNetworkCameraHeight cameraHeight;
-    vec3 lastPredictedPosition{},predictionHandoff{};uint32_t lastPredictedLife=0;bool hadPredictedPosition=false,wasPredicting=false;
+    vec3 initial(0);double maxMovement=0;RuneNetworkCameraHeight cameraHeight;RuneNetworkCameraBoom cameraBoom;
+    vec3 lastPredictedPosition{},lastPresentedVelocity{},predictionHandoff{};uint32_t lastPredictedLife=0;bool hadPredictedPosition=false,wasPredicting=false,wasLeaping=false;
     while(!game.quit && !RuneMultiplayer::Leave.load() && (!seconds || nowMs()-started<uint64_t(seconds)*1000))
     {
         auto frameStart=std::chrono::steady_clock::now();
@@ -1164,7 +1207,7 @@ void RunRuneMultiplayerClient(Engine& game,const std::string& invitationFile)
 #endif
         value=VisualComparison::RequestedMode.exchange(-1);if(value>=0)device->VisualEnhanced=value!=0;
         VisualComparison::AppliedMode=device->VisualEnhanced?1:0;
-        value=VisualComparison::RequestedWorldFeatures.exchange(-1);if(value>=0)device->WorldFeatures=value&65535;
+        value=VisualComparison::RequestedWorldFeatures.exchange(-1);if(value>=0)device->WorldFeatures=value&262143;
         VisualComparison::AppliedWorldFeatures=device->WorldFeatures;
         value=VisualComparison::RequestedTexturePack.exchange(-1);
         if(value>=0 && value!=device->TexturePackQuality){device->Flush(false);device->TexturePackQuality=std::clamp(value,0,2);}
@@ -1195,7 +1238,7 @@ void RunRuneMultiplayerClient(Engine& game,const std::string& invitationFile)
             const auto travel=*peer->requestedTravel();
             require(travel.match.maxPlayers==invite.players && travel.match.mode==invite.mode && travel.match.map.starts_with(invite.mode==GameMode::HeadBall?"HB-":invite.mode==GameMode::Arena?"AR-":"DM-"),"invalid travel roster/map");
             status="Loading "+travel.match.map;RuneMultiplayer::SetStatus(status);RuneCombat::Ready=false;
-            held.fill(false);pending.clear();prediction.reset();presentation.reset();cameraHeight.reset();hadPredictedPosition=false;replica=RuneNetworkReplica{};
+            held.fill(false);pending.clear();prediction.reset();presentation.reset();cameraHeight.reset();cameraBoom.reset();hadPredictedPosition=false;replica=RuneNetworkReplica{};
             player=nullptr;game.viewport->Actor()=nullptr;game.CameraActor=nullptr;
             connected=false;ownedLife=1;headReadyAt=0;headPumpAt=0;playingAt=lastSnapshot=pendingSince=lastBlock=lastJump=0;testEvents.fill(false);reportedStatus.reset();diagnostics.reset();taggedPawns.clear();
             invite.map=travel.match.map;
@@ -1222,7 +1265,7 @@ void RunRuneMultiplayerClient(Engine& game,const std::string& invitationFile)
                 LogMessage("OPEN_RUNE_CONNECTION handshake_retry=started");
             }
         } else if(session->failed() || peer->matchMismatch() || peer->remoteClosed())
-        {status=peer->matchMismatch()?"Cannot join: content or gameplay rules differ":peer->remoteClosed()?"The host ended the match. Ask for a new invitation.":"Connection lost. Reconnect to the network, then rejoin the match.";release();ended=true;RuneCombat::Ready=false;}
+        {status=peer->matchMismatch()?"Cannot join: game files or gameplay rules differ. Update the client and host to compatible releases.":peer->remoteClosed()?"The host ended the match. Ask for a new invitation.":"Connection lost. Reconnect to the network, then rejoin the match.";release();ended=true;RuneCombat::Ready=false;}
         if(!ended && !connected && peer->matchAgreed())status="Loading the match";
         if(!connected && now>=joinStarted+45000){status="Could not reach the match. Check the invitation and host.";release();ended=true;}
         const bool matchPlaying=peer->status() && peer->status()->phase==MatchPhase::Playing;
@@ -1343,8 +1386,9 @@ void RunRuneMultiplayerClient(Engine& game,const std::string& invitationFile)
                     press(0,2400,IK_RightMouse,true);press(1,2500,IK_LeftMouse,true);
                     press(2,2600,IK_LeftMouse,false);press(3,4000,IK_RightMouse,false);
                 }
-                unsigned seen=nativeSeen;
+                unsigned seen=nativeSeen;bool physicalSeen=false;
                 if(auto* installed=peer->world.installed())for(const auto& e:installed->world) {
+                    if(e.physical.kind==1){seen|=256;physicalSeen=true;}
                     if(e.combat.offhand.id)seen|=1;if(e.combat.flags&1)seen|=2;
                     if(e.combat.guard>=200)seen|=4;if(e.combat.phase==RuneBloodlust::Leaping)seen|=8;
                     if(e.combat.phase==RuneBloodlust::Charging)seen|=16;if(e.combat.flags&4)seen|=32;
@@ -1353,6 +1397,7 @@ void RunRuneMultiplayerClient(Engine& game,const std::string& invitationFile)
                         if(a->AnimSequence()=="S1_painFront")seen|=128;
                     }
                 }
+                if((nativeSeen&256)&&!physicalSeen)seen|=512;
                 if(seen!=nativeSeen){nativeSeen=seen;LogMessage("OPEN_RUNE_NATIVE_SEEN mask="+std::to_string(seen));}
             }
             if(test && playingAt)
@@ -1369,7 +1414,7 @@ void RunRuneMultiplayerClient(Engine& game,const std::string& invitationFile)
             }
             if(stairTest && playingAt && ownedSlot==1) {
                 mouseReleased=false;held.fill(false);auto t=now-playingAt;
-                held[IK_W]=t>=1500 && t<4500;held[IK_S]=t>=5500 && t<8500;
+                held[IK_W]=t>=1500 && t<1500+stairRunMs;held[IK_S]=t>=5500 && t<5500+stairRunMs;
             }
             auto pad=mouseReleased?RuneController::Axes{}:RuneController::Get();
             yaw+=pad.yaw*30000.0*dt;pitch+=pad.pitch*30000.0*dt;
@@ -1463,9 +1508,19 @@ void RunRuneMultiplayerClient(Engine& game,const std::string& invitationFile)
             auto localAlpha=std::clamp(double(now-lastSnapshot)/double(spacing),0.0,1.0);
             auto visual=presentation.sample(now);
             if(adaptiveEnabled() && visual.before && visual.after)
-                replica.presentAdaptive(*visual.before,*visual.after,visual.alpha,invite.owned,localAlpha);
-            else replica.present(localAlpha);
+                replica.presentAdaptive(*visual.before,*visual.after,visual.alpha,invite.owned,localAlpha,
+                    combatPlayback?double(now)/1000:-1);
+            else replica.present(localAlpha,combatPlayback?double(now)/1000:-1);
             replica.presentAnticipation(now);
+            if(animationTrace.is_open())for(const auto& visualEntity:snapshot->world) {
+                auto* a=replica.actor(visualEntity.ref);
+                auto* proxy=a && a->HasProperty("AnimProxy")?UObject::TryCast<UActor>(a->GetUObject("AnimProxy")):nullptr;
+                if(visualEntity.kind!=EntityKind::Pawn || !a || !proxy || visualEntity.health<=0)continue;
+                animationTrace<<std::setprecision(9)<<now<<','<<visualEntity.ref.id<<','<<visualEntity.life<<','<<snapshot->id<<','
+                    <<visualEntity.bodyAnimation<<','<<a->AnimFrame()<<','<<visualEntity.torsoAnimation<<','<<proxy->AnimFrame()<<','
+                    <<double(visualEntity.torsoPhase)/32767<<','<<double(visualEntity.torsoRate)/256<<','<<bool(visualEntity.flags&16)<<','
+                    <<proxy->RuneCombatPreviewWeight<<','<<(visualEntity.ref==invite.owned)<<','<<bool(visualEntity.combat.flags&1)<<'\n';
+            }
             if(arenaTestInput && peer->world.installed())for(const auto& e:peer->world.installed()->world)if(e.kind==EntityKind::Mover) {
                 auto* a=replica.actor(e.ref);auto* brush=GetMovingBrush(a);
                 require(brush && brush->Brush(),"replica lost authored brush");
@@ -1480,31 +1535,42 @@ void RunRuneMultiplayerClient(Engine& game,const std::string& invitationFile)
             }
             auto replicaPosition=player->Location(),predictedPosition=replicaPosition;
             const bool predicting=predict && prediction.active();
-            const bool walking=(entity->flags&3)==3 && entity->health>0;
+            const bool walking=(entity->flags&3)==3 && entity->health>0 && !entity->physical.kind;
+            const bool leaping=smoothLeapHandoff && entity->combat.phase==RuneBloodlust::Leaping && entity->health>0 && !entity->physical.kind;
+            const bool smoothMotion=walking||leaping;
             MovementPose pose;
-            pose.mode=walking?MovementWalking:MovementUnsupported;
+            pose.mode=leaping?MovementFalling:walking?MovementWalking:MovementUnsupported;
             for(int axis=0;axis<3;++axis){pose.position[axis]=player->Location()[axis];pose.velocity[axis]=player->Velocity()[axis];}
             if(predicting)pose=prediction.present(now,predictionStep);
             predictedPosition=vec3(pose.position[0],pose.position[1],pose.position[2]);
             const bool continuous=hadPredictedPosition && lastPredictedLife==entity->life && dt<=.2f &&
                 length(predictedPosition-lastPredictedPosition)<160.f;
-            // A stalled input history can temporarily disable prediction. Bridge
-            // that handoff instead of snapping to the delayed server timeline.
-            // Death, jumping, teleport and map/life changes never retain an offset.
-            if(!continuous || !walking)predictionHandoff=vec3(0);
-            else if(predicting!=wasPredicting)predictionHandoff=lastPredictedPosition-predictedPosition;
-            predictionHandoff*=std::exp(-dt/.065f);
+            // Leap is authoritative special motion, so prediction deliberately
+            // stops. Preserve presentation continuity through that source change,
+            // including landing, instead of rewinding to an older server sample.
+            // Death, physics knockdowns, teleports and life changes reset normally.
+            const bool handoff=continuous && smoothMotion &&
+                (predicting!=wasPredicting || (smoothLeapHandoff && leaping!=wasLeaping));
+            const bool leapHandoff=smoothLeapHandoff && handoff && (leaping||wasLeaping);
+            if(!continuous || !smoothMotion)predictionHandoff=vec3(0);
+            else if(handoff)predictionHandoff=lastPredictedPosition+
+                (leapHandoff?lastPresentedVelocity*dt:vec3(0))-predictedPosition;
+            // Continue the previous visual velocity for this frame rather than
+            // freezing or partially retaining the backward pop. The same swept
+            // presentation resolver clips this continuation against map geometry.
+            if(!leapHandoff)predictionHandoff*=std::exp(-dt/.065f);
             for(int axis=0;axis<3;++axis)pose.position[axis]+=predictionHandoff[axis];
             // Remote interpolation may put the local pawn inside a riser.
             // Sweep from its last resolved local position, never from that
             // older interpolated point. Keep both timelines collision-safe.
-            if(predicting || walking) {
+            if(predicting || smoothMotion) {
                 if(continuous)player->Location()=lastPredictedPosition;
                 else cameraHeight.reset();
                 PresentRunePredictedMovement(player,pose);
             }
             lastPredictedPosition=player->Location();lastPredictedLife=entity->life;
-            hadPredictedPosition=true;wasPredicting=predicting;
+            lastPresentedVelocity=vec3(pose.velocity[0],pose.velocity[1],pose.velocity[2]);
+            hadPredictedPosition=true;wasPredicting=predicting;wasLeaping=leaping;
             if(predicting) {
                 ++predictedFrames;
                 if(pose.mode==MovementFalling || pose.mode==3)++predictedAirFrames;
@@ -1525,10 +1591,29 @@ void RunRuneMultiplayerClient(Engine& game,const std::string& invitationFile)
             player->NetworkStairOffset=smoothStairs?smoothAnchor.z-anchor.z:0;
 
             auto desired=smoothAnchor-direction*185.0f;
-            vec3 hit,normal;auto* blocker=player->Trace(hit,normal,desired,anchor,false,vec3(10));
-            game.CameraLocation=blocker?hit+normal*4.0f:desired;
+            vec3 hit,normal;auto* blocker=player->Trace(hit,normal,desired,smoothCameraBoom?smoothAnchor:anchor,false,vec3(10));
+            if(!smoothCameraBoom)game.CameraLocation=blocker?hit+normal*4.0f:desired;
+            else {
+                float clear=blocker?std::clamp(dot(smoothAnchor-hit,direction)-2.f,0.f,185.f):185.f,preview=clear;
+                // Only anticipate grounded travel. Sample the actual next floor
+                // heights so descending steps do not feed a flat extrapolation
+                // into the camera probe. No actor/VM movement is performed.
+                if(walking&&!leaping&&length(vec3(player->Velocity().xy(),0))>10){
+                    for(float ahead:{.08f,.16f}){
+                        auto at=smoothAnchor+vec3(player->Velocity().xy(),0)*ahead;
+                        auto foot=at-vec3(0,0,35+player->CollisionHeight());vec3 floor,floorNormal;
+                        if(!player->Trace(floor,floorNormal,foot-vec3(0,0,96),foot+vec3(0,0,64),false,vec3(10,10,0))||floorNormal.z<.7f)continue;
+                        at.z=floor.z+player->CollisionHeight()+35+(smoothAnchor.z-anchor.z);
+                        vec3 nextHit,nextNormal;
+                        if(player->Trace(nextHit,nextNormal,at-direction*185.f,at,false,vec3(10)))
+                            preview=std::min(preview,std::clamp(dot(at-nextHit,direction)-2.f,0.f,185.f));
+                    }
+                }
+                auto arm=cameraBoom.update(clear,preview,entity->life,continuous,dt);
+                game.CameraLocation=smoothAnchor-direction*arm;
+            }
             if(stairTrace && playingAt)stairTrace<<now-playingAt<<','<<player->Location().x<<','<<player->Location().y<<','<<player->Location().z<<','<<player->Location().z+player->NetworkStairOffset<<','
-                <<game.CameraLocation.x<<','<<game.CameraLocation.y<<','<<game.CameraLocation.z<<','<<float(entity->position[2])/8<<','<<((entity->flags&3)==3)<<','<<prediction.active()<<','<<player->AnimSequence().ToString()<<','<<player->AnimFrame()<<','<<predictedPosition.x<<','<<predictedPosition.z<<','<<replicaPosition.x<<','<<replicaPosition.z<<','<<bool(blocker)<<'\n';
+                <<game.CameraLocation.x<<','<<game.CameraLocation.y<<','<<game.CameraLocation.z<<','<<float(entity->position[2])/8<<','<<((entity->flags&3)==3)<<','<<prediction.active()<<','<<player->AnimSequence().ToString()<<','<<player->AnimFrame()<<','<<predictedPosition.x<<','<<predictedPosition.z<<','<<replicaPosition.x<<','<<replicaPosition.z<<','<<bool(blocker)<<','<<int(entity->combat.phase)<<','<<handoff<<'\n';
             float distance=length(game.CameraLocation-anchor);
             player->SetBool("bClientSideAlpha",distance<70);player->SetFloat("ClientSideAlphaScale",std::clamp((distance-15.0f)/55.0f,0.0f,1.0f));
             game.CameraFovAngle=RuneView::Adjust(90,90,float(game.window->GetPixelWidth())/std::max(game.window->GetPixelHeight(),1),RuneView::FieldOfView.load(),RuneView::AutomaticAspect.load(),false);
@@ -1680,7 +1765,7 @@ void RunRuneMultiplayerClient(Engine& game,const std::string& invitationFile)
 void RunRuneMultiplayerBot(Engine& game,const std::string& invitationFile)
 {
     require(commandline->HasArg("","--save-directory"),"bot needs isolated saves");
-    auto invite=readInvite(invitationFile);const uint32_t ownedSlot=invite.owned.id;
+    auto invite=readInvite(invitationFile);RuneBattleLaws::MatchScope lawsScope{invite.laws};const uint32_t ownedSlot=invite.owned.id;
     const bool motionOnly=commandline->HasArg("","--rune-net-bot-motion");
     const bool scripted=motionOnly || commandline->HasArg("","--rune-net-bot-stress") || commandline->HasArg("","--rune-net-bot-idle") || commandline->HasArg("","--rune-net-test-headball-input");
     const uint32_t botSeed=uint32_t(commandline->GetArgInt("","--probe-seed",int(nowMs()))) ^ (ownedSlot*0x9e3779b9u);
@@ -1724,7 +1809,8 @@ void RunRuneMultiplayerBot(Engine& game,const std::string& invitationFile)
         socket.receive([&](const sockaddr_in& source,std::span<const uint8_t> bytes){if(sameAddress(source,remote))session.receiveDatagram(bytes);});
         session.step(now);peer.step();
         if(peer.status())for(const auto& score:peer.status()->scores)if(score.player==ownedSlot && score.pawn.id)invite.owned=score.pawn;
-        require(!session.failed() && !peer.matchMismatch(),"bot connection failed");
+        require(!peer.matchMismatch(),"bot game files or Laws of Battle differ from host");
+        require(!session.failed(),"bot connection failed");
         if(peer.remoteClosed())break;
         if(peer.requestedTravel()) {
             auto travel=*peer.requestedTravel();invite.map=travel.match.map;

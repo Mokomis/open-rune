@@ -69,6 +69,11 @@ public:
                 CallEvent(p,"ClientMessage",{ExpressionValue::StringValue("AUTOMATED CORPSE TEST: "+phase)});
             }
         }else if(frame==ThrowFrame())CallEvent(p,"Throw");
+        if(commandline->HasArg("","--corpse-motion-demo")) {
+            if(frame==PickupFrame()+20)game.InputEvent(EInputKey::IK_W,IST_Press);
+            if(frame>=PickupFrame()+50 && frame<PickupFrame()+95){p->ViewRotation().Yaw+=160;p->Rotation().Yaw=p->ViewRotation().Yaw;}
+            if(frame==PickupFrame()+100)game.InputEvent(EInputKey::IK_W,IST_Release);
+        }
     }
     void After(Engine& game,int frame) {
         if(!commandline->HasArg("","--probe-corpse") || frame<PickupFrame()+1)return;
@@ -84,6 +89,8 @@ public:
         if(Demo() && frame==PickupFrame()+120)Capture(game,"carrying");
         if(Demo() && frame==ThrowFrame()+15)Capture(game,"throw-windup");
         if(Demo() && frame==ThrowFrame()+45)Capture(game,"released");
+        if(commandline->HasArg("","--corpse-motion-demo") && frame>=PickupFrame()+40 && frame<=PickupFrame()+140 && frame%20==10)
+            Capture(game,("motion-"+std::to_string(frame-PickupFrame())).c_str());
         ++checks;
     }
     void Finish() {if(checks)LogMessage("RUNE_CORPSE_RENDER_OK checks="+std::to_string(checks));}

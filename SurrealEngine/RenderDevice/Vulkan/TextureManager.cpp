@@ -43,12 +43,12 @@ std::string TextureManager::TextureIdentity(TextureInfo* info) const
         if(index>package->GetExportCount() || !visited.insert(index).second) return {};
         name=package->GetName(package->GetExportEntry(index)->ObjName).ToString()+(name.empty()?"":"."+name);
     }
-    return TexturePack::Key(package->GetPackageName().ToString()+"."+name);
+    return TexturePack::IdentityKey(package->GetPackageName().ToString()+"."+name);
 }
 
 std::string TextureManager::ReplacementKey(TextureInfo* info)
 {
-    if (!renderer->TexturePackQuality || !info || !info->Texture || !info->Texture->package ||
+    if (!info || !info->Texture || !info->Texture->package ||
         info->Format!=TextureFormat::P8 || !info->Palette || info->NumMips<1 ||
         info->Texture->bRealtime() || info->Texture->AnimNext() || info->bRealtimeChanged) return {};
     auto existing=PackKeys.find(info->CacheID);
@@ -82,9 +82,26 @@ std::string TextureManager::ReplacementKey(TextureInfo* info)
 
 bool TextureManager::UploadReplacement(CachedTexture* target, TextureInfo* info, const char* channel)
 {
+    // Original artwork may use prepared 1x material data, but never a replacement
+    // color/mask. Missing channels in older packs retain the procedural fallback.
+    bool material=std::string(channel)=="normal" || std::string(channel)=="response" || std::string(channel)=="relief";
+    if (!renderer->TexturePackQuality && !material) return false;
     auto name=ReplacementKey(info);if(name.empty()) return false;
+    int quality=renderer->TexturePackQuality;
+    if(material && quality)
+    {
+        // Partial packs/budget fallback can leave this asset's color original.
+        // Match the color that was actually uploaded, not only the global menu.
+        bool colorKnown=false,replaced=false;
+        for(auto& cache:TextureCache)
+        {
+            auto color=cache.find(info->CacheID);
+            if(color!=cache.end() && color->second) {colorKnown=true;replaced|=color->second->IsReplacement;}
+        }
+        if(colorKnown && !replaced) quality=0;
+    }
     auto root=ReplacementRoot()/name/
-        (renderer->TexturePackQuality==2?"4x":"2x");
+        (quality==2?"4x":quality==1?"2x":"1x");
     for(bool compressed : {true,false})
     {
         bool uploading=false;
@@ -100,7 +117,7 @@ bool TextureManager::UploadReplacement(CachedTexture* target, TextureInfo* info,
             vkGetPhysicalDeviceFormatProperties(renderer->Device->PhysicalDevice.Device,format,&properties);
             auto required=VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT|VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT|VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
             if((properties.optimalTilingFeatures&required)!=required) continue;
-            int scale=renderer->TexturePackQuality==2?4:2;
+            int scale=quality==2?4:quality==1?2:1;
             while(std::max(info->USize,info->VSize)*scale>2048) scale/=2;
             if(image.levels[0].width!=info->USize*scale || image.levels[0].height!=info->VSize*scale ||
                 uint32_t(image.levels[0].width)>renderer->Device->PhysicalDevice.Properties.Properties.limits.maxImageDimension2D ||
@@ -125,7 +142,7 @@ bool TextureManager::UploadReplacement(CachedTexture* target, TextureInfo* info,
             PackBytes+=charge;++PackLoaded;
             VisualComparison::TexturePackBytes.store(PackBytes);VisualComparison::TexturePackLoaded.store(PackLoaded);
             LogMessage("RUNE_TEXTURE_PACK_LOADED id="+name+" channel="+channel+" format="+(image.format==TexturePack::RGBA8?"rgba8":"astc")+
-                " size="+std::to_string(upload.USize)+"x"+std::to_string(upload.VSize)+" mips="+std::to_string(upload.NumMips)+" budget_bytes="+std::to_string(PackBytes));
+                " size="+std::to_string(upload.USize)+"x"+std::to_string(upload.VSize)+" mips="+std::to_string(upload.NumMips)+" budget_bytes="+std::to_string(PackBytes)+" tier="+std::to_string(scale));
             return true;
         }
         catch(const std::exception& e)
@@ -139,7 +156,7 @@ bool TextureManager::UploadReplacement(CachedTexture* target, TextureInfo* info,
 
 CachedTexture* TextureManager::GetMaterialResponseMap(TextureInfo* info)
 {
-    if(!info || !renderer->TexturePackQuality) return nullptr;
+    if(!info || info->WetGore) return nullptr;
     auto found=ResponseCache.find(info->CacheID);if(found!=ResponseCache.end())return found->second.get();
     auto texture=std::make_unique<CachedTexture>();
     if(!UploadReplacement(texture.get(),info,"response")) texture.reset();
@@ -149,24 +166,40 @@ CachedTexture* TextureManager::GetMaterialResponseMap(TextureInfo* info)
 void TextureManager::ValidateReplacementUploads()
 {
     // Opt-in fixture: real owned assets, normal upload/descriptors, no package edits.
-    if(renderer->TexturePackQuality!=2) throw std::runtime_error("Texture probe requires 4x pack");
-    for(auto pair : {std::pair{"Players","Ragnarragv_head"}, {"weapons","handaxehandaxe"}, {"Brckston","Brck14_d"}, {"Village","VArchDoor"}})
+    bool materialProbe=commandline->HasArg("", "--probe-material-pack");
+    if(!materialProbe && renderer->TexturePackQuality!=2) throw std::runtime_error("Texture probe requires 4x pack");
+    std::vector<std::pair<std::string,std::string>> samples={{"Players","Ragnarragv_head"}, {"weapons","handaxehandaxe"}, {"Brckston","Brck14_d"}, {"Village","VArchDoor"}};
+    auto originalOnly=commandline->GetArg("", "--probe-original-material", "");
+    if(materialProbe && !originalOnly.empty())
+    {
+        auto dot=originalOnly.find('.');
+        if(dot==std::string::npos) throw std::runtime_error("Original material probe needs package.texture");
+        samples.push_back({originalOnly.substr(0,dot),originalOnly.substr(dot+1)});
+    }
+    for(auto pair : samples)
     {
         auto* texture=UObject::Cast<UTexture>(engine->packages->GetPackage(pair.first)->GetUObject("Texture",pair.second));
         TextureInfo info;engine->render->UpdateTextureInfo(info,texture);
         auto original=info;auto data=info.Mips[0].Data;
         auto* color=GetTexture(&info,false);auto* masked=GetTexture(&info,true);
         auto* normal=GetMaterialMap(&info);auto* response=GetMaterialResponseMap(&info);
-        for(auto* uploaded : {color,masked,normal,response})
+        std::vector<CachedTexture*> maps=materialProbe?std::vector<CachedTexture*>{normal,response,GetRelief(&info)}:
+            std::vector<CachedTexture*>{color,masked,normal,response};
+        for(auto* uploaded : maps)
         {
             if(!uploaded || !uploaded->IsReplacement) throw std::runtime_error("Missing sample replacement");
             renderer->DescriptorSets->GetTextureArrayIndex(0,uploaded);
         }
+        if(materialProbe && !renderer->TexturePackQuality && (color->IsReplacement || masked->IsReplacement))
+            throw std::runtime_error("Original artwork was replaced by material-only pack");
+        if(materialProbe && pair.first+"."+pair.second==originalOnly && (color->IsReplacement || masked->IsReplacement))
+            throw std::runtime_error("Original-only fixture must not contain remastered color");
         if(info.USize!=original.USize || info.VSize!=original.VSize || info.UScale!=original.UScale ||
             info.VScale!=original.VScale || info.Mips!=original.Mips || info.Mips[0].Data!=data)
             throw std::runtime_error("Texture probe: source or UV metadata changed");
     }
-    LogMessage("RUNE_TEXTURE_PACK_PROBE_OK assets=4 channels=4 original_uv_and_pixels=preserved");
+    LogMessage(materialProbe?"RUNE_MATERIAL_PACK_PROBE_OK assets="+std::to_string(samples.size())+" channels=3 original_uv_and_pixels=preserved":
+        "RUNE_TEXTURE_PACK_PROBE_OK assets=4 channels=4 original_uv_and_pixels=preserved");
 }
 
 void TextureManager::UpdateTextureRect(TextureInfo* info, int x, int y, int w, int h)
@@ -222,6 +255,13 @@ CachedTexture* TextureManager::GetRelief(TextureInfo* info)
     if (!info || !info->Texture || !info->Texture->package || info->Format != TextureFormat::P8 ||
         !info->Palette || info->NumMips < 1 || info->USize < 4 || info->VSize < 4 ||
         info->USize > 1024 || info->VSize > 1024 || info->Texture->bRealtime() || info->Texture->AnimNext()) return nullptr;
+    auto found=ReliefCache.find(info->CacheID);
+    if(found!=ReliefCache.end()) return found->second.get();
+    auto authored=std::make_unique<CachedTexture>();
+    if(UploadReplacement(authored.get(),info,"relief"))
+    {
+        auto* result=authored.get();ReliefCache[info->CacheID]=std::move(authored);return result;
+    }
     auto package = info->Texture->package->GetPackageName();
     if (package != "Wood" && package != "Rock" && package != "Brckston") return nullptr;
     auto& cached = ReliefCache[info->CacheID];

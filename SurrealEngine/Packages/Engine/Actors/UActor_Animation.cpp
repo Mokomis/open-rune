@@ -8,6 +8,7 @@
 #include "Packages/Engine/Resources/Mesh/USkelModel.h"
 #include "Engine.h"
 #include "RuneBash.h"
+#include "RuneKick.h"
 #include "RuneBloodlust.h"
 
 bool UActor::HasAnim(const NameString& sequence)
@@ -73,6 +74,7 @@ NameString UActor::GetAnimGroup(const NameString& sequence)
 
 void UActor::PlayAnim(const NameString& sequence, float rate, float tweenTime)
 {
+    RuneKick::PrepareAnimation(this,sequence,rate,tweenTime); // Retiming must retain authored kick notifies.
     bool bashAnimation=RuneBloodlust::PrepareAnimation(this,sequence,rate,tweenTime) || RuneBash::PrepareAnimation(this,sequence,rate,tweenTime);
 	if (GetRuneDisplayMesh(this))
 	{

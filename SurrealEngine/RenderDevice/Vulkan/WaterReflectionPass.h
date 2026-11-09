@@ -1,3 +1,31 @@
+// Enhanced water is a single surface pass; no wave-simulation thread or mirror view.
+bool VulkanRenderDevice::UsesModernWater() const
+{
+#ifdef _WIN32
+    constexpr int defaultModel=1;
+#else
+    constexpr int defaultModel=0; // Other platforms require separate qualification.
+#endif
+    static const bool enabled=commandline->GetArgInt("","--water-model",defaultModel)!=0;
+    return (WorldFeatures&2048) && !(WorldFeatures&8192) && enabled;
+}
+void VulkanRenderDevice::PrepareModernWater(float height,float time,const vec4& environment,const vec4& lightDirection,const vec4& lightColor)
+{
+    // Approximate modes do not need the reflection matrix. Reuse its four columns
+    // for compact environment/light data without growing the shared shadow UBO.
+    mat4 data=mat4::null();
+    data[0]=environment.x;data[1]=environment.y;data[2]=environment.z;data[3]=environment.w;
+    data[4]=lightDirection.x;data[5]=lightDirection.y;data[6]=lightDirection.z;data[7]=lightDirection.w;
+    data[8]=lightColor.x;data[9]=lightColor.y;data[10]=lightColor.z;data[11]=lightColor.w;
+    Buffers->ShadowLighting->WaterWorldToClip=data;
+    Buffers->ShadowLighting->WaterParameters=vec4(time,height,1,2);
+}
+void VulkanRenderDevice::PrepareWaterSky(TextureInfo* info)
+{
+    if(!info || !UsesModernWater())return;
+    auto* texture=Textures->GetTexture(info,false);
+    if(texture)Buffers->ShadowLighting->WaterWorldToClip[12]=float(DescriptorSets->GetTextureArrayIndex(0,texture)+1);
+}
 void VulkanRenderDevice::PrepareApproximateWater(float height,float time)
 {
     // No offscreen image, scene traversal or draw submission for this mode.
@@ -45,6 +73,7 @@ void VulkanRenderDevice::CreateWaterTargets()
 }
 void VulkanRenderDevice::BeginWaterPass(bool continuation)
 {
+    Commands->SetProfilePass(CommandBufferManager::GpuPass::Water);
     auto cmd=Commands->GetDrawCommands();
     PipelineBarrier barrier;
     auto colorAccess=VK_ACCESS_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;

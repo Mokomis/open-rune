@@ -1503,3 +1503,5 @@ void PackageManager::RegisterNativeClass(const NameString& packageName, const Na
 	nativeClass.CreateFunc = [](const NameString& name, UClass* cls, ObjectFlags flags) -> UObject* { return GC::Alloc<T>(name, cls, flags); };
 	NativeClasses[className] = std::move(nativeClass);
 }
+
+void PackageManager::SetSaveFolderPath(const fs::path& path){if(!path.is_absolute())Exception::Throw("Save directory must be absolute");fs::create_directories(path);if(!fs::is_directory(path))Exception::Throw("Invalid save directory");gameSaveFolderPath=path.lexically_normal();}

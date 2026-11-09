@@ -35,7 +35,7 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
     private static native boolean nativeMultiplayerJoin(String file);
     private static native String nativeMultiplayerStatus();
     private static native void nativeMultiplayerAction(int action);
-    private boolean wasMultiplayer, respawning, networkWasDead, bloodlustTouchScheduled;
+    private boolean wasMultiplayer, respawning, networkWasDead, bloodlustTouchScheduled,slamTouchScheduled;
     private RuneHosting hosting;
     private RuneDiscovery discovery;
     private String discoveryKey(){return getSharedPreferences("multiplayer",0).getString("discoveryKey","");}
@@ -171,7 +171,7 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
     private long deathObservedAt;
     public void controllerConnectionChanged(){updateTouchVisibility();}
     private void updateTouchVisibility(){
-        if(options!=null&&controls!=null)controls.configure(options.get("touch")!=0&&(controller==null||!controller.connected()),(options.get("kick")!=0||multiplayer()));
+        if(options!=null&&controls!=null)controls.configure(options.get("touch")!=0&&(controller==null||!controller.connected()),(((multiplayer()?nativeBattleLaws():RuneBattleLaws.campaign(options))&1)!=0));
     }
     public void touchKey(int code,boolean down){key(code,down);if(getIntent().getBooleanExtra("controllerProbe",false))android.util.Log.i("RuneTouch","key="+code+" down="+down);}
     private float touchX,touchY,touchYaw,touchPitch;
@@ -283,18 +283,21 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
         updateTouchVisibility();
         if(fpsLabel!=null)fpsLabel.setVisibility(View.GONE);
         nativeMenuSetting(8,options.get("hud"));
-        nativeMenuSetting(9,options.get("kick"));
-        nativeMenuSetting(10,options.get("bash"));
-        nativeMenuSetting(13,options.get("tactics"));
-        nativeMenuSetting(14,options.get("dualWield"));
-        nativeMenuSetting(15,options.get("bloodlustMoves"));nativeMenuSetting(21,options.get("normalBloodlust"));
+        nativeMenuSetting(26,RuneBattleLaws.campaign(options));
+        nativeMenuSetting(9,1);
+        nativeMenuSetting(10,1);
+        nativeMenuSetting(13,1);
+        nativeMenuSetting(14,1);
+        nativeMenuSetting(15,1);nativeMenuSetting(21,1);
         nativeMenuSetting(16,original?0:options.get("fireEffects"));
         nativeMenuSetting(18,original?0:options.get("snow"));
         nativeMenuSetting(24,original?0:options.get("gore"));
+        nativeMenuSetting(25,getIntent().hasExtra("physicsMode")?getIntent().getIntExtra("physicsMode",0):options.get("physics"));
         if(hud!=null){hud.modern=options.get("hud")!=0;hud.canvas.invalidate();}
         if(rumble!=null&&(changed.equals("initial")||changed.startsWith("rumble")))rumble.configure(options.get("rumble")!=0,options.get("rumbleStrength"),options.get("rumbleOutput"));
         syncFeedback();
     }
+    static native int nativeBattleLaws();
     public String cameraStatus(){
         float h=nativeGetViewFov();
         float aspect=mSurface!=null&&mSurface.getHeight()>0?(float)mSurface.getWidth()/mSurface.getHeight():4f/3f;
@@ -362,6 +365,9 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
             if(ready==3&&!bloodlustTouchScheduled&&getIntent().hasExtra("saveTest")&&getIntent().hasExtra("bloodlustGesture")){
                 bloodlustTouchScheduled=true;String gesture=getIntent().getStringExtra("bloodlustGesture");
                 controls.postDelayed(()->{if(!menuOpen&&!busySession)RuneTouchProbe.bloodlust(controls,gesture);},5000);
+            }
+            if(!slamTouchScheduled && !menuOpen && !busySession && nativeCombatReady() && getIntent().hasExtra("saveTest") && getIntent().getBooleanExtra("slamTouchProbe",false)) {
+                slamTouchScheduled=true;controls.postDelayed(()->{if(!menuOpen&&!busySession)RuneTouchProbe.slam(controls);},3500);
             }
         }
         hud.postDelayed(this,33);
@@ -558,6 +564,12 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
     @Override protected String[] getArguments() {
         ArrayList<String> args=new ArrayList<>();
         args.add("--direct");
+        args.add("--rune-physics="+getIntent().getIntExtra("physicsMode",options==null?0:options.get("physics")));
+        if(getIntent().hasExtra("physicsImpacts")&&getIntent().hasExtra("saveTest")&&getIntent().getIntExtra("frames",0)>0){int value=getIntent().getIntExtra("physicsImpacts",1);if(value!=0&&value!=1)throw new IllegalArgumentException("Invalid isolated impact comparison");args.add("--physics-impacts="+value);}
+        if(getIntent().getBooleanExtra("physicsEnvironment",false)&&getIntent().hasExtra("saveTest")&&getIntent().getIntExtra("frames",0)>0)args.add("--physics-environment");
+        if(getIntent().getBooleanExtra("physicsTouch",false)&&getIntent().hasExtra("saveTest")&&getIntent().getIntExtra("frames",0)>0)args.add("--physics-touch");
+        if(getIntent().getBooleanExtra("physicsRepeat",false)&&getIntent().hasExtra("saveTest")&&getIntent().getIntExtra("frames",0)>0)args.add("--physics-repeat");
+        if(getIntent().getBooleanExtra("physicsPlayground",false)&&getIntent().hasExtra("saveTest")){args.add("--physics-playground");args.add("--physics-captures="+new File(getFilesDir(),"physics-stage").getAbsolutePath());}
         args.add("--sound-remaster="+getIntent().getIntExtra("soundRemaster",options==null?0:options.get("soundRemaster")));
         args.add("--snow="+(options!=null&&!options.comparing?options.get("snow"):0));
         args.add("--rune-effects="+(options!=null?options.get("fireEffects"):1));
@@ -618,14 +630,32 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
             if(getIntent().hasExtra("networkPrediction")) args.add("--rune-net-prediction="+getIntent().getIntExtra("networkPrediction",1));
         }
         if(getIntent().hasExtra("probeTickHz")) args.add("--probe-tick-hz="+getIntent().getIntExtra("probeTickHz",0));
+        if(getIntent().getBooleanExtra("localStairProbe",false)) {
+            if(saveTest==null || frames<1100 || frames>1500)
+                throw new IllegalArgumentException("Local stair check requires bounded isolated saves");
+            args.add("--probe-local-stairs="+new File(getFilesDir(),"local-stairs.csv").getAbsolutePath());
+            args.add("--probe-local-stair-captures="+new File(getFilesDir(),"local-stairs").getAbsolutePath());
+            args.add("--rune-local-stair-smoothing="+(getIntent().getBooleanExtra("localStairSmoothing",true)?1:0));
+        }
+        if(getIntent().getBooleanExtra("slamGestureProbe",false) || getIntent().getBooleanExtra("slamTouchProbe",false)) {
+            boolean touch=getIntent().getBooleanExtra("slamTouchProbe",false);
+            if(saveTest==null || frames<(touch?900:500) || frames>1500)throw new IllegalArgumentException("Slam check requires bounded isolated saves");
+            args.add("--probe-slam-gesture");
+            args.add("--probe-slam-captures="+new File(getFilesDir(),"slam-stage").getAbsolutePath());
+            if(touch)args.add("--probe-slam-touch");
+            if(getIntent().getBooleanExtra("slamSideView",false))args.add("--probe-slam-side-view");
+        }
         int profile=getIntent().getIntExtra("profile",0);
         if(profile>0) args.add("--profile-frames="+profile);
+        if(profile>0 && frames>0 && saveTest!=null && getIntent().getBooleanExtra("profilePasses",false))
+            args.add("--profile-passes=1");
         if(getIntent().getBooleanExtra("lightingCompare",false)) args.add("--capture-lighting-comparison");
         if(getIntent().getBooleanExtra("textureProbe",false)) args.add("--probe-texture-pack");
         if(getIntent().getBooleanExtra("textureCompare",false)) args.add("--capture-texture-comparison");
         if(getIntent().getBooleanExtra("vulkanProbe",false)) args.add("--probe-vulkan");
         if(getIntent().getBooleanExtra("shadowBudgetProbe",false)) args.add("--probe-shadow-budget");
         if(getIntent().getBooleanExtra("traceShadows",false)) args.add("--trace-shadows");
+        if(getIntent().getBooleanExtra("traceShadowTransitions",false)&&saveTest!=null)args.add("--trace-shadow-transitions");
         if(getIntent().hasExtra("opaqueEarlyDepth")) args.add("--render-opaque-early-depth="+getIntent().getIntExtra("opaqueEarlyDepth",1));
         if(getIntent().hasExtra("fullPrecisionLighting")) args.add("--render-full-precision-lighting="+getIntent().getIntExtra("fullPrecisionLighting",0));
         if(getIntent().hasExtra("shadowReceivers")) args.add("--render-shadow-receivers="+getIntent().getIntExtra("shadowReceivers",1));
@@ -638,6 +668,8 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
         if(getIntent().hasExtra("liftProbe")&&getIntent().hasExtra("saveTest")) args.add("--probe-lift="+getIntent().getStringExtra("liftProbe"));
         if(getIntent().hasExtra("omitHit")) args.add("--render-omit-hit="+getIntent().getIntExtra("omitHit",0));
         if(getIntent().hasExtra("inpassResolve")) args.add("--render-inpass-resolve="+getIntent().getIntExtra("inpassResolve",0));
+        if(saveTest!=null && frames>0 && getIntent().hasExtra("specializedLighting"))
+            args.add("--render-specialized-lighting="+getIntent().getIntExtra("specializedLighting",0));
         if(getIntent().hasExtra("discardHit")) args.add("--render-discard-hit="+getIntent().getIntExtra("discardHit",1));
         if(getIntent().getBooleanExtra("validation",false)) args.add("--vulkan-validation");
         if(getIntent().hasExtra("overlap")) args.add("--render-overlap="+getIntent().getIntExtra("overlap",0));

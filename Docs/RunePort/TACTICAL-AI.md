@@ -176,3 +176,44 @@ reviewed. Desktop and Android ARM64 builds completed; the APK's v3 signature was
 verified. `evidence/tactical-ai/build-validation.json` records final executable
 and APK hashes and validation limits. That record predates the Android installation
 and device results above.
+
+
+### November 4 navigation follow-up (candidate, not deployed)
+
+Native wall recovery used one-unit trial/destination offsets, and normal point
+movement could finish before a capsule cleared a corner. Rune walking NPCs now
+use body-sized, collision-checked side steps and precise point arrival. Jumping
+requires a demonstrated low obstacle, headroom, landing support and bCanJump.
+The original Engine.dll PickWallAdjust export was inspected for its clearance
+contract; this is a scoped walking correction, not a replacement for its flying
+or swimming branches. Pawn pursuit and player movement keep their arrival rules.
+Tactical walking now uses full-height clearance and releases to original Charging
+when intended movement makes no actual progress; committed moves and knockback
+remain protected.
+
+Hildir has disconnected authored route groups. LostCrypt has navigation actors
+but no linked NavigationPointList. This does not prove every absent route is a
+bug: some require doors, lifts or jumps. Spawned ScriptPawns and multiplayer
+input bots have different pursuit layers; RuneBot already has supplemental
+routing. A shared ScriptPawn fallback tries bounded, incremental local walking
+search only after the original actor route fails. Original target acquisition,
+HomeBase/HuntDistance, scripted states and door/lift behavior remain responsible
+for gameplay. It follows LastSeenPos when its enemy is hidden. No teleportation,
+collision exemptions or fabricated jump/lift links are introduced.
+
+Searches share a cooperative 2 ms engine-tick budget (checked periodically, not
+a hard scheduling deadline), with node/range limits and retry backoff. Private
+hidden movement-goal actors preserve the existing MoveToward/save contract;
+source destruction cleans them up. Protocol/ALPN25 and snapshot schema7 stay
+unchanged; native rules29 require matching hosts/clients when deployed.
+
+Mac isolated navigation regression passes 12 wall cases, five existing pursuit
+routes, six additional room cases, the stuck-plan watchdog and save/reload/goal
+cleanup. Six Viking/Goblin/Dwarf tactical cases across seeds17/73 also pass.
+These are accelerated real-map simulations, not rendered FPS or all-map proof.
+Evidence: outputs/ai-navigation-20261104/final-navigation and tactics-local.
+Android ARM builds; installation and rendered device checks are pending. Windows candidate build, physics-world checks and the same five navigation
+regression groups pass; installed clients remain on the preceding version. The all44-multiplayer-map graph inventory is complete; bounded Qwen review
+is complete, reviewed and stopped. See [the verified repairs and limits](NAVIGATION-AUDIT.md). See
+Tools/RuneWorker/Reference/20261104 and outputs/navigation-worker-20261104.
+This is static triage, not confirmation of44 playable navigation routes. Preserve worker reports; static warnings require runtime confirmation.

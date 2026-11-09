@@ -24,6 +24,16 @@ final class RuneTouchView extends FrameLayout {
     int selected=RuneTouchLayout.ATTACK,cornerX=1,cornerY=1;
     float startX,startY,startLeft,startTop,startW,startH,startSize,cursorX=800,cursorY=450,axisX,axisY;
     long lastTime;
+    boolean cameraJumpHeld;
+    final HashSet<Integer> publishedKeys=new HashSet<>();
+    final Runnable finishCameraJump=()->{cameraJumpHeld=false;publishKey(KeyEvent.KEYCODE_SPACE);};
+    void publishKey(int code){
+        if(code==0)return;boolean down=code==KeyEvent.KEYCODE_SPACE&&cameraJumpHeld;
+        for(Control b:buttons)if(b!=null&&b.keyHeld&&CODES[b.id]==code)down=true;
+        if(down?publishedKeys.add(code):publishedKeys.remove(code))host.touchKey(code,down);
+    }
+    void cameraJump(){if(editing||!shown)return;cameraJumpHeld=true;publishKey(KeyEvent.KEYCODE_SPACE);removeCallbacks(finishCameraJump);postDelayed(finishCameraJump,80);}
+
     int bloodlustMoves;
     void setBloodlustMoves(int mask){
         int repaint=bloodlustMoves|mask;bloodlustMoves=mask;
@@ -58,7 +68,7 @@ final class RuneTouchView extends FrameLayout {
     Button button(String s,int x,int y,int w,int h,Runnable r){Button b=new Button(getContext());b.setText(s);b.setAllCaps(false);b.setTextColor(IVORY);b.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,20);b.setPadding(2,0,2,0);b.setBackground(new RuneMenuView.Iron(false,false));b.setOnClickListener(v->r.run());place(inspector,b,x,y,w,h);return b;}
     SeekBar slider(String name,int x,int y,int w,int h,int max){SeekBar b=new SeekBar(getContext());b.setMax(max);b.setContentDescription(name);b.setProgressTintList(ColorStateList.valueOf(GOLD));b.setThumbTintList(ColorStateList.valueOf(GOLD));place(inspector,b,x,y,w,h);return b;}
     SeekBar.OnSeekBarChangeListener listener(boolean size){return new SeekBar.OnSeekBarChangeListener(){public void onProgressChanged(SeekBar b,int p,boolean user){if(user&&!updating){if(size)layout.items[selected].size=(p+50)/100f;else layout.items[selected].opacity=(p+20)/100f;refresh();}}public void onStartTrackingTouch(SeekBar b){}public void onStopTrackingTouch(SeekBar b){}};}
-    float unit(){return Math.max(.1f,Math.min(getWidth()/1600f,getHeight()/900f));}
+    float unit(){return Math.max(.1f,Math.min(getWidth()/1600f,getHeight()/1080f));}
     float vw(){return getWidth()/unit();}float vh(){return getHeight()/unit();}
     void arrange(){if(getWidth()==0||getHeight()==0)return;float u=unit();for(int i=0;i<RuneTouchLayout.COUNT;i++){float s=layout.scale(i,vw(),vh());FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(Math.round(RuneTouchLayout.WIDTH[i]*s*u),Math.round(RuneTouchLayout.HEIGHT[i]*s*u));p.leftMargin=Math.round(layout.left(i,vw(),vh())*u);p.topMargin=Math.round(layout.top(i,vw(),vh())*u);buttons[i].setLayoutParams(p);buttons[i].invalidate();}
         inspector.setPivotX(0);inspector.setPivotY(0);inspector.setScaleX(u);inspector.setScaleY(u);inspector.setTranslationX((getWidth()-540*u)/2);inspector.setTranslationY(100*u);
@@ -72,7 +82,7 @@ final class RuneTouchView extends FrameLayout {
     void begin(){release();layout=saved.copy();editing=true;grabbing=false;controllerCursor=false;inspector.setVisibility(VISIBLE);panels.setVisibility(GONE);setVisibility(VISIBLE);select(4);requestFocus();}
     void finish(boolean save){release();if(save){saved=layout.copy();saved.save(prefs);}layout=saved;editing=false;inspector.setVisibility(GONE);panels.setVisibility(GONE);refresh();host.closeTouchEditor();}
     void select(int i){selected=i;refresh();}
-    void release(){for(Control b:buttons)if(b!=null)b.release();axisX=axisY=0;grabbing=false;removeCallbacks(cursorTick);}
+    void release(){removeCallbacks(finishCameraJump);cameraJumpHeld=false;for(Control b:buttons)if(b!=null)b.release();publishKey(KeyEvent.KEYCODE_SPACE);axisX=axisY=0;grabbing=false;removeCallbacks(cursorTick);}
     boolean pick(float x,float y){
         Control b=buttons[selected];float u=unit();float l=b.getLeft()/u,t=b.getTop()/u,r=b.getRight()/u,bot=b.getBottom()/u;
         resizing=(Math.abs(x-l)<22||Math.abs(x-r)<22)&&(Math.abs(y-t)<22||Math.abs(y-bot)<22);
@@ -97,15 +107,28 @@ final class RuneTouchView extends FrameLayout {
     final class Control extends Button {
         final int id;final Paint p=new Paint(3);final Path path=new Path();
         final HashSet<Integer> pointers=new HashSet<>();int owner=-1;float lastX,lastY,stickX,stickY;
+        boolean keyHeld,centerTap;long tapDownAt,lastTapUp;float tapX,tapY;
+        boolean center(float x,float y){return Math.hypot(x-getWidth()*.5f,y-getHeight()*.5f)<=Math.min(getWidth(),getHeight())*.18f;}
+        void beginTap(MotionEvent e,float x,float y){centerTap=center(x,y);tapDownAt=e.getEventTime();tapX=x;tapY=y;if(!centerTap)lastTapUp=0;}
+        void moveTap(float x,float y){float slop=Math.max(ViewConfiguration.get(getContext()).getScaledTouchSlop(),Math.min(getWidth(),getHeight())*.035f);if(!center(x,y)||Math.hypot(x-tapX,y-tapY)>slop){centerTap=false;lastTapUp=0;}}
+        void endTap(MotionEvent e,float x,float y){
+            moveTap(x,y);long now=e.getEventTime();
+            if(centerTap&&now-tapDownAt<=220){
+                if(lastTapUp>0&&tapDownAt>=lastTapUp&&tapDownAt-lastTapUp<=ViewConfiguration.getDoubleTapTimeout()){lastTapUp=0;cameraJump();}
+                else lastTapUp=now;
+            }else lastTapUp=0;
+            centerTap=false;
+        }
+        void setKey(boolean down){keyHeld=down;publishKey(CODES[id]);}
         Control(Context c,int id){super(c);this.id=id;setText(RuneTouchLayout.NAMES[id]);setAllCaps(false);setContentDescription(RuneTouchLayout.NAMES[id]);setBackgroundColor(Color.TRANSPARENT);setPadding(0,0,0,0);setMinWidth(0);setMinimumWidth(0);setMinHeight(0);setMinimumHeight(0);setStateListAnimator(null);setFocusable(false);setOnClickListener(v->{if(id==1&&!editing)host.touchMenu();});}
-        void release(){if(!pointers.isEmpty()&&CODES[id]!=0)host.touchKey(CODES[id],false);if(owner!=-1){if(id==0)host.touchMove(0,0);else if(id==10)host.touchCamera(0,0);}pointers.clear();owner=-1;stickX=stickY=0;setPressed(false);invalidate();}
+        void release(){setKey(false);centerTap=false;lastTapUp=0;if(owner!=-1){if(id==0)host.touchMove(0,0);else if(id==10)host.touchCamera(0,0);}pointers.clear();owner=-1;stickX=stickY=0;setPressed(false);invalidate();}
         void stick(float x,float y){float r=Math.min(getWidth(),getHeight())*.36f;float sx=(x-getWidth()/2)/r,sy=(y-getHeight()/2)/r;float len=(float)Math.hypot(sx,sy);if(len>1){sx/=len;sy/=len;}stickX=sx;stickY=sy;float mag=(float)Math.hypot(sx,sy),gain=mag<=.12f?0:(mag-.12f)/(.88f*mag);if(id==0)host.touchMove(sx*gain,-sy*gain);else host.touchCamera(sx*gain,-sy*gain);invalidate();}
         @Override public boolean onTouchEvent(MotionEvent e){if(editing)return false;if(!isEnabled()||(!shown&&id!=1))return false;int a=e.getActionMasked(),index=e.getActionIndex(),pid=e.getPointerId(index);
-            if(a==MotionEvent.ACTION_DOWN||a==MotionEvent.ACTION_POINTER_DOWN){boolean empty=pointers.isEmpty();pointers.add(pid);setPressed(true);if(empty){owner=pid;lastX=e.getX(index);lastY=e.getY(index);if(id==0||id==10)stick(lastX,lastY);else if(CODES[id]!=0)host.touchKey(CODES[id],true);}}
-            else if(a==MotionEvent.ACTION_MOVE){int i=e.findPointerIndex(owner);if(i>=0){float x=e.getX(i),y=e.getY(i);if(id==0||id==10)stick(x,y);else if(id==9)host.touchLook(x-lastX,y-lastY);lastX=x;lastY=y;}}
+            if(a==MotionEvent.ACTION_DOWN||a==MotionEvent.ACTION_POINTER_DOWN){boolean empty=pointers.isEmpty();pointers.add(pid);setPressed(true);if(empty){owner=pid;lastX=e.getX(index);lastY=e.getY(index);if(id==10)beginTap(e,lastX,lastY);if(id==0||id==10)stick(lastX,lastY);else setKey(true);}else if(id==10){centerTap=false;lastTapUp=0;}}
+            else if(a==MotionEvent.ACTION_MOVE){int i=e.findPointerIndex(owner);if(i>=0){float x=e.getX(i),y=e.getY(i);if(id==10)moveTap(x,y);if(id==0||id==10)stick(x,y);else if(id==9)host.touchLook(x-lastX,y-lastY);lastX=x;lastY=y;}}
             else if(a==MotionEvent.ACTION_CANCEL)release();
-            else if(a==MotionEvent.ACTION_UP||a==MotionEvent.ACTION_POINTER_UP){pointers.remove(pid);if(pointers.isEmpty()){boolean click=id==1&&a==MotionEvent.ACTION_UP; // Release before Menu clears the whole overlay.
-                    if(CODES[id]!=0)host.touchKey(CODES[id],false);if(id==0)host.touchMove(0,0);else if(id==10)host.touchCamera(0,0);owner=-1;stickX=stickY=0;setPressed(false);if(click)performClick();}
+            else if(a==MotionEvent.ACTION_UP||a==MotionEvent.ACTION_POINTER_UP){if(id==10&&pointers.size()==1)endTap(e,e.getX(index),e.getY(index));pointers.remove(pid);if(pointers.isEmpty()){boolean click=id==1&&a==MotionEvent.ACTION_UP; // Release before Menu clears the whole overlay.
+                    setKey(false);if(id==0)host.touchMove(0,0);else if(id==10)host.touchCamera(0,0);owner=-1;stickX=stickY=0;setPressed(false);if(click)performClick();}
                 else if(owner==pid){owner=pointers.iterator().next();int i=e.findPointerIndex(owner);lastX=e.getX(i);lastY=e.getY(i);if(id==0||id==10)stick(lastX,lastY);}}
             invalidate();return true;
         }
@@ -113,28 +136,28 @@ final class RuneTouchView extends FrameLayout {
         void icon(Canvas c){p.setColor(IVORY);p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(4);p.setStrokeCap(Paint.Cap.ROUND);p.setStrokeJoin(Paint.Join.ROUND);
             if(id==4){line(c,-17,20,19,-22,24,-25,23,-15,-13,23);line(c,-19,10,-4,24);line(c,-20,25,-12,16);}
             else if(id==3){line(c,0,-26,23,-17,20,6,12,20,0,28,-12,20,-20,6,-23,-17,0,-26);line(c,0,-20,0,22);}
-            else if(id==5){ // Forward-kicking boot: shin, ankle, heel, long toe and sole.
-                path.reset();path.moveTo(-16,-27);path.lineTo(-2,-22);path.lineTo(-9,3);
-                path.lineTo(1,8);path.lineTo(22,9);path.quadTo(31,9,32,19);
-                path.lineTo(32,24);path.lineTo(-8,24);path.lineTo(-8,20);
-                path.lineTo(-22,20);path.lineTo(-24,10);path.lineTo(-16,-27);path.close();
-                p.setStyle(Paint.Style.FILL);c.drawPath(path,p);p.setStyle(Paint.Style.STROKE);
-                p.setColor(0xff181b1c);p.setStrokeWidth(2);line(c,-15,-18,-5,-14);line(c,-18,15,-7,15,1,19,27,19);
-                p.setColor(IVORY);p.setStrokeWidth(3);line(c,-35,-5,-26,-5);line(c,-37,4,-29,4);
+            else if(id==5){ // Side-on kicking figure, extended boot and planted rear foot.
+                p.setStyle(Paint.Style.FILL);c.drawCircle(-14,-23,5.5f,p);
+                p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(6);
+                line(c,-14,-12,-8,2,-20,24);line(c,-24,26,-12,26);
+                line(c,-8,2,7,-6,23,0);line(c,-12,-9,-27,-2);line(c,-11,-9,2,-15);
+                path.reset();path.moveTo(19,-4);path.lineTo(28,-3);path.lineTo(32,5);path.lineTo(20,5);path.close();
+                p.setStyle(Paint.Style.FILL);c.drawPath(path,p);
             }
             else if(id==6){ // Three ascending tiers; longest at the bottom.
                 p.setStrokeWidth(5);line(c,-26,18,26,18);line(c,-17,0,17,0);line(c,-8,-18,8,-18);
             }
-            else if(id==7){ // Bent forearm and fist around a raised axe, poised to throw.
-                p.setStrokeWidth(5);line(c,0,26,7,-27);
-                path.reset();path.moveTo(7,-25);path.lineTo(28,-29);path.quadTo(20,-17,29,-6);
-                path.lineTo(6,-12);path.close();p.setStyle(Paint.Style.FILL);c.drawPath(path,p);
-                p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(3.5f);
-                path.reset();path.moveTo(-29,26);path.lineTo(-17,8);path.lineTo(-17,0);
-                path.quadTo(-17,-5,-12,-4);path.lineTo(-1,-2);path.quadTo(5,-1,4,5);
-                path.lineTo(2,14);path.quadTo(1,19,-8,17);path.lineTo(-16,31);c.drawPath(path,p);
-                line(c,-14,3,3,6);line(c,-13,8,2,11);line(c,-11,13,0,15);
-                p.setStrokeWidth(2);path.reset();path.moveTo(-28,-12);path.quadTo(-19,-29,-4,-29);c.drawPath(path,p);
+            else if(id==7){ // Raised axe gripped in a solid fist; arc shows the throwing motion.
+                p.setStrokeWidth(5);line(c,-4,26,8,-23);
+                path.reset();path.moveTo(7,-25);path.lineTo(28,-27);path.quadTo(21,-16,29,-5);path.lineTo(5,-12);path.close();
+                p.setStyle(Paint.Style.FILL);c.drawPath(path,p);
+                path.reset();path.moveTo(-25,26);path.lineTo(-15,12);path.lineTo(-15,6);path.lineTo(-10,1);
+                path.lineTo(1,3);path.lineTo(6,9);path.lineTo(3,17);path.lineTo(-6,20);path.lineTo(-13,29);path.close();c.drawPath(path,p);
+                p.setStyle(Paint.Style.STROKE);p.setColor(0xff181b1c);p.setStrokeWidth(2.5f);
+                line(c,-10,7,2,9);line(c,-11,12,0,14);line(c,-6,3,4,8);
+                p.setColor(IVORY);p.setStrokeWidth(3);
+                path.reset();path.moveTo(-29,-5);path.quadTo(-25,-24,-10,-29);c.drawPath(path,p);
+                line(c,-17,-29,-10,-29,-11,-22);
             }
             else if(id==8){ // Head-first dive: straight trailing legs, torso, arms reaching ahead.
                 p.setStyle(Paint.Style.FILL);c.drawCircle(14,0,6,p);
@@ -152,14 +175,15 @@ final class RuneTouchView extends FrameLayout {
             }
         }
         @Override protected void onDraw(Canvas c){float w=getWidth(),h=getHeight();if(id==9){if(editing){p.setColor(0x18d3af70);p.setStyle(Paint.Style.FILL);c.drawRect(0,0,w,h,p);label(c,"Look area",w/2,h/2,22*unit());}else return;}
-            else{float cut=id==1?Math.min(w,h)*.22f:Math.min(w,h)*.28f;path.reset();if(id==0||id==10)path.addCircle(w/2,h/2,Math.min(w,h)/2-2,Path.Direction.CW);else{path.moveTo(cut,2);path.lineTo(w-cut,2);path.lineTo(w-2,cut);path.lineTo(w-2,h-cut);path.lineTo(w-cut,h-2);path.lineTo(cut,h-2);path.lineTo(2,h-cut);path.lineTo(2,cut);path.close();}p.setStyle(Paint.Style.FILL);boolean cue=bloodlustCue(id);float pulse=cue?.5f+.5f*(float)Math.sin(SystemClock.uptimeMillis()*Math.PI*2/1100):0;
+            else{path.reset();if(id==1)path.addRoundRect(2,2,w-2,h-2,7*unit(),7*unit(),Path.Direction.CW);else path.addCircle(w/2,h/2,Math.min(w,h)/2-2,Path.Direction.CW);p.setStyle(Paint.Style.FILL);boolean cue=bloodlustCue(id);float pulse=cue?.5f+.5f*(float)Math.sin(SystemClock.uptimeMillis()*Math.PI*2/1100):0;
                 p.setColor(cue?Color.argb(220,75+(int)(65*pulse),46+(int)(35*pulse),12):(isPressed()?0xe0473821:0xd0181b1c));c.drawPath(path,p);p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(1.7f*unit());p.setColor(cue?Color.rgb(255,165+(int)(55*pulse),38):(isPressed()?0xffffd58b:GOLD));c.drawPath(path,p);
-                if(id==0||id==10){p.setStrokeWidth(2*unit());p.setColor(GOLD);float r=w*.16f;c.drawCircle(w/2+stickX*w*.22f,h/2+stickY*h*.22f,r,p);}
+                c.save();c.clipPath(path);
+                if(id==0||id==10){p.setStrokeWidth(2*unit());p.setColor(GOLD);float r=w*.16f;if(isPressed())c.drawCircle(w/2+stickX*w*.22f,h/2+stickY*h*.22f,r,p);label(c,id==0?"Move":"Look",w/2,h*.55f,h*.12f);}
                 else if(id==1){p.setStrokeWidth(2*unit());line(c,w*.17f,h*.32f,w*.34f,h*.32f);line(c,w*.17f,h*.5f,w*.34f,h*.5f);line(c,w*.17f,h*.68f,w*.34f,h*.68f);label(c,"Menu",w*.64f,h*.65f,h*.37f);}
-                else{c.save();c.translate(w/2,h*.41f);float s=Math.min(w,h)*.009f;c.scale(s,s);icon(c);c.restore();label(c,cue?(id==6?"Leap · 2×":id==3?"Hold Block":"+ Attack"):RuneTouchLayout.NAMES[id],w/2,h*.82f,h*(cue?.14f:.18f));
-                    p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(unit());p.setColor(GOLD);line(c,5,h*.43f,12,h*.5f,5,h*.57f,5,h*.43f);line(c,w-5,h*.43f,w-12,h*.5f,w-5,h*.57f,w-5,h*.43f);}}
+                else{c.save();c.translate(w/2,h*.37f);float s=Math.min(w,h)*.0085f;c.scale(s,s);icon(c);c.restore();if(id==RuneTouchLayout.DIVE||id==RuneTouchLayout.POWER){label(c,id==RuneTouchLayout.DIVE?"Crouch /":"Rune",w/2,h*.69f,h*.14f);label(c,id==RuneTouchLayout.DIVE?"Dive":"Power",w/2,h*.84f,h*.14f);}else label(c,cue?(id==6?"Leap · 2×":id==3?"Hold Block":"+ Attack"):RuneTouchLayout.NAMES[id],w/2,h*.77f,h*(cue?.13f:.16f));
+                    }c.restore();}
             if(editing){p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(1.5f*unit());p.setColor(selected==id?0xffffd27c:GOLD);p.setPathEffect(new DashPathEffect(new float[]{7*unit(),5*unit()},0));c.drawRect(3,3,w-3,h-3,p);p.setPathEffect(null);if(selected==id){p.setStyle(Paint.Style.FILL);float r=7*unit();for(float x:new float[]{r,w-r})for(float y:new float[]{r,h-r})c.drawRect(x-r,y-r,x+r,y+r,p);}}
         }
-        void label(Canvas c,String s,float x,float y,float size){p.setStyle(Paint.Style.FILL);p.setColor(IVORY);p.setTypeface(RuneMenuView.BODY_FONT);p.setTextSize(size);p.setTextAlign(Paint.Align.CENTER);c.drawText(s,x,y,p);}
+        void label(Canvas c,String s,float x,float y,float size){p.setStyle(Paint.Style.FILL);p.setColor(IVORY);p.setTypeface(RuneMenuView.BODY_FONT);p.setTextSize(size);float width=p.measureText(s),available=getWidth()*.74f;if(width>available)p.setTextSize(size*available/width);p.setTextAlign(Paint.Align.CENTER);c.drawText(s,x,y,p);}
     }
 }

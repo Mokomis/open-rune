@@ -1,3 +1,45 @@
+November 8: dev.7/build7 is installed with the original certificate. See [matching client consolidation](../Docs/RunePort/CLIENT-SYNC-20261108.md) and [circular touch layout](../Docs/RunePort/TOUCH-CONTROLS.md). Normal saves and non-layout preferences are preserved. Only the Surreal production package remains for testing; Unity candidates are archived on Windows. Older deployment statements below describe earlier milestones.
+
+November 7 Android pass-profiling follow-up COMPLETE; user requested stopping after
+current feature tests. Optional --profile-passes=1 requires --profile-frames and adds
+GPU timestamps at existing pass boundaries, without splitting render passes. Android
+intent profilePasses is restricted to bounded, isolated diagnostics. 480 complete
+samples per profiled case, zero dropped; pass sums match aggregate GPU interval.
+Main scene accounts for 95-97% GPU time in the tested native2520x1680/4x-AA LostCrypt,
+village and underwater water-wheel views; shadow maps0.09-0.17ms, presentation~0.4ms.
+Bloom and reflected-water passes were inactive in these controlled views: zero time
+is not a claim that those optional effects are free. Profiled static captures are
+pixel-identical; underwater particles/animation vary between runs.
+Two targeted trials were rejected and fully removed: extra world-only pipelines
+1.85% frame/1.09% GPU gain (not worth additional pipelines); interpolated world lighting
+coordinates3.76% frame/3.14% GPU gain with tiny shadow-edge pixel changes. No new rendering
+optimization is retained. Existing qualified specialization/in-pass resolve defaults remain.
+Android final APK adf55637ae4bd9f0d87676d9bc8280ed606f2086261d0b035342c965ce9197b3 is
+installed with the original key. Final native4x default check83.60FPS, capture pixel-identical
+to prior accepted deployment; saves, both preferences and both SE INIs byte-unchanged.
+Normal title/scaling restored; profiler inactive normally. Windows primary source holds
+the diagnostic changes, but Windows/Mac clients were not redeployed in this Android-only
+follow-up. Evidence: ~/OpenRuneArtifacts/AndroidPassOptimization-20261107 and matching
+C:/OpenRune/outputs/android-pass-optimization-20261107. No commits/pushes. Work stopped;
+do not start another optimization or resume unrelated automation without user direction.
+
+November 7 shader deployment: the Windows-host ARM64 build uses SDK build-tools 36.0.0,
+platform 35, NDK 27.0.12077973 and SDL 2.32.10. The APK is aligned/notice-verified on
+Windows and signed on the Mac with the original installed certificate. The signing
+key now has a protected local backup outside iCloud; do not include it in source,
+artifacts transferred to Windows, or distributions. `build_apk.py --unsigned` supports
+this split build/sign workflow; `--keystore` accepts an existing key without replacing it.
+Windows response-file handling and portable notice/manifest paths are verified by packaging.
+Native 2520x1680, 4x-AA ABBA comparisons on OPD2515/Qualcomm Adreno 829 showed 7.4-8.7%
+lower mean frame time in LostCrypt and RagnarVillage with pixel-identical captures.
+In-pass resolve and lighting specialization default on for this GPU/proprietary driver;
+other Android GPUs and Turnip retain their previous defaults. Diagnostic intent
+`specializedLighting` requires bounded frames and isolated `saveTest`. Existing
+packed HDR, overlap, optional Turnip payload and user scaling/refresh choices are preserved.
+Evidence: C:/OpenRune/outputs/shader-deployment-20261107 and Mac
+~/OpenRuneArtifacts/ShaderDeployment-20261107. This is representative rendering
+qualification, not a new full campaign or multiplayer certification.
+
 # Current deployment — November 3, 2026
 
 The [matching client update](../Docs/RunePort/CLIENT-SYNC-20261103.md) is installed on OPD2515 with the existing signing key. It includes the mover fixes, material lighting/probes, enhanced gore and proportion-preserving corpse carry/throw poses. Protocol/ALPN and native rules are 22. Saved graphics/audio choices and original saves were preserved; no new texture or sound pack was deployed. Older not-built/not-installed statements below describe earlier checkpoints.

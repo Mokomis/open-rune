@@ -39,8 +39,17 @@ public:
     }
     bool BeginLightShadow(SceneNode*, const vec3&, const vec3&, float, int slot = 0) override;
     void EndLightShadow(bool more = false) override;
+    void SetLightShadowStrength(int slot,float strength) override {
+        if(slot>=0 && slot<RuneShadows::Capacity)Buffers->ShadowLighting->Shadows[slot].LightPosition.w=std::clamp(strength,0.f,1.f);
+    }
     bool IsShadowPass() const override { return DrawingShadow; }
     void PrepareApproximateWater(float, float) override;
+    bool UsesModernWater() const override;
+    void PrepareModernWater(float, float, const vec4&, const vec4&, const vec4&) override;
+    void SetWaterView(bool submerged, float time) override { WaterSubmerged=submerged; WaterViewTime=time; }
+    void PrepareWaterSky(TextureInfo*) override;
+    bool WaterSubmerged=false;
+    float WaterViewTime=0;
     bool ReuseWaterReflection(float, float, const vec3&) override;
     void InvalidateWaterReflection() override { CachedWaterValid=false; }
     bool BeginWaterReflection(SceneNode*, float, float) override;

@@ -63,7 +63,7 @@ final class RuneHosting {
             Files.write(new File(next,"setup.json").toPath(),info.toString().getBytes(StandardCharsets.UTF_8));
             Intent intent=new Intent(activity,RuneHostService.class).putExtra("session",next.getName()).putExtra("address",address)
                 .putExtra("matchName",config.matchName).putExtra("discoverable",config.discoverable).putExtra("mode",config.mode).putExtra("players",config.players).putExtra("teams",config.teams).putExtra("arenaSize",config.arenaSize)
-                .putExtra("normalBloodlust",config.normalBloodlust).putExtra("bots",config.bots).putExtra("score",config.score).putExtra("minutes",config.minutes).putExtra("limbs",config.limbs).putExtra("maps",config.maps.toArray(new String[0]));
+                .putExtra("laws",config.laws).putExtra("physics",config.physics).putExtra("normalBloodlust",config.normalBloodlust).putExtra("bots",config.bots).putExtra("score",config.score).putExtra("minutes",config.minutes).putExtra("limbs",config.limbs).putExtra("maps",config.maps.toArray(new String[0]));
             activity.startForegroundService(intent);
         }catch(Exception e){throw new IllegalStateException("Could not start hosting: "+e.getMessage(),e);}
         session=next;this.address=address;discoverable=config.discoverable;players=config.players;state="starting";message="Preparing the match…";autoJoin=true;stopRequested=false;started=System.currentTimeMillis();

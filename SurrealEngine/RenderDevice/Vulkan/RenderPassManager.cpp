@@ -2,9 +2,39 @@
 #include "Precomp.h"
 #include "RenderPassManager.h"
 #include "VulkanRenderDevice.h"
+#include "ShaderOptimizationDefaults.h"
 #include "Packages/Engine/Resources/Level/UModel.h"
 #include <surrealgpu/vulkanbuilders.h>
 #include <surrealgpu/vulkanswapchain.h>
+
+#include "Utils/CommandLine.h"
+#include "Utils/Logger.h"
+#include <unordered_map>
+
+namespace {
+using ScenePipelineSet = decltype(RenderPassManager::Scene)::PipelineSet;
+struct SpecializedLightingPipelines { ScenePipelineSet sets[2]; };
+// RenderDevice and its pipelines are used on the engine thread. Keep optional
+// variants out of the public object layout and release them before its layouts.
+std::unordered_map<const RenderPassManager*,std::unique_ptr<SpecializedLightingPipelines>> specializedLighting;
+bool LightingSpecializationEnabled(VulkanRenderDevice* renderer)
+{
+    const int defaultEnabled = UsesQualifiedShaderDefaults(*renderer->Device) ? 1 : 0;
+    return commandline->GetArgInt("","--render-specialized-lighting",defaultEnabled)!=0;
+}
+ScenePipelineSet& ActiveScenePipelines(RenderPassManager* owner,VulkanRenderDevice* renderer,
+                                     ScenePipelineSet* generic)
+{
+    auto found=specializedLighting.find(owner);
+    // Match the packet producer and the actual bound shadow-lighting data.
+    // Other modes, including Original, continue through the generic shaders.
+    bool eligible=(renderer->WorldFeatures&65536)!=0 && renderer->Buffers->ShadowLighting &&
+        renderer->Buffers->ShadowLighting->CameraPosition.w>0.5f;
+    if(eligible && found!=specializedLighting.end())return found->second->sets[renderer->OmitsHitOutput()];
+    return generic[renderer->OmitsHitOutput()];
+}
+}
+
 
 RenderPassManager::RenderPassManager(VulkanRenderDevice* renderer) : renderer(renderer)
 {
@@ -18,6 +48,7 @@ RenderPassManager::RenderPassManager(VulkanRenderDevice* renderer) : renderer(re
 
 RenderPassManager::~RenderPassManager()
 {
+    specializedLighting.erase(this);
 }
 
 void RenderPassManager::CreateSceneBindlessPipelineLayout()
@@ -51,7 +82,7 @@ void RenderPassManager::CreateBloomPipelineLayout()
 PipelineState* RenderPassManager::GetPipeline(uint32_t PolyFlags, bool water, bool cameraFade)
 {
     if(water) {
-        auto& set=Scene.Pipelines[renderer->OmitsHitOutput()];
+        auto& set=ActiveScenePipelines(this,renderer,Scene.Pipelines);
         return (PolyFlags&PF_Highlighted)?&set.WaterTransparent:&set.WaterOpaque;
     }
 	int index;
@@ -93,8 +124,8 @@ PipelineState* RenderPassManager::GetPipeline(uint32_t PolyFlags, bool water, bo
     // Coverage fading always writes surviving depth with opaque blending.
     // Masked coverage already uses the discard-capable alpha-test shader.
     if(cameraFade && !(PolyFlags&PF_Masked))
-        return &Scene.Pipelines[renderer->OmitsHitOutput()].CameraFade[(PolyFlags&PF_Invisible)!=0];
-	return &Scene.Pipelines[renderer->OmitsHitOutput()].Pipeline[index];
+        return &ActiveScenePipelines(this,renderer,Scene.Pipelines).CameraFade[(PolyFlags&PF_Invisible)!=0];
+	return &ActiveScenePipelines(this,renderer,Scene.Pipelines).Pipeline[index];
 }
 
 PipelineState* RenderPassManager::GetEndFlashPipeline()
@@ -104,10 +135,15 @@ PipelineState* RenderPassManager::GetEndFlashPipeline()
 
 void RenderPassManager::CreatePipelines()
 {
-	for (int noHit = 0; noHit < 2; noHit++)
+	const bool enable=LightingSpecializationEnabled(renderer);
+    if(enable && !specializedLighting.count(this))specializedLighting[this]=std::make_unique<SpecializedLightingPipelines>();
+    if(!enable)specializedLighting.erase(this);
+    LogMessage("RUNE_LIGHTING_SPECIALIZATION enabled="+std::to_string(enable));
+    for(int specialized=0;specialized<(enable?2:1);++specialized)
+    for (int noHit = 0; noHit < 2; noHit++)
 	{
 		auto& shaders = noHit ? renderer->Shaders->SceneNoHit : renderer->Shaders->Scene;
-		auto& pipelines = Scene.Pipelines[noHit];
+		auto& pipelines = specialized?specializedLighting.at(this)->sets[noHit]:Scene.Pipelines[noHit];
 		const std::vector<uint32_t>& vertShader = shaders.VertexShader;
 		const std::vector<uint32_t>& fragShader = shaders.FragmentShader;
 		const std::vector<uint32_t>& fragShaderAlphaTest = shaders.FragmentShaderAlphaTest;
@@ -121,7 +157,7 @@ void RenderPassManager::CreatePipelines()
             const int i=water?(variant==33?11:2):cameraFade?(variant==35?11:15):variant;
             auto& activeShaders=water?(noHit?renderer->Shaders->WaterNoHit:renderer->Shaders->Water):shaders;
 			GraphicsPipelineBuilder builder;
-			builder.AddVertexShader(activeShaders.VertexShader);
+			builder.AddVertexShader(activeShaders.VertexShader).AddConstant(1002,uint32_t(specialized));
 			builder.Viewport(0.0f, 0.0f, (float)renderer->Textures->Scene->Width, (float)renderer->Textures->Scene->Height);
 			builder.Scissor(0, 0, renderer->Textures->Scene->Width, renderer->Textures->Scene->Height);
 			builder.Topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
@@ -198,13 +234,15 @@ void RenderPassManager::CreatePipelines()
 				if (!noHit) builder.AddColorBlendAttachment(ColorBlendAttachmentBuilder().Create());
 			}
 
-			builder.RasterizationSamples(renderer->Textures->Scene->SceneSamples);
+			builder.AddConstant(1001,uint32_t(specialized)).AddConstant(1002,uint32_t(specialized));
+            builder.RasterizationSamples(renderer->Textures->Scene->SceneSamples);
 			builder.DebugName(debugName);
 
 			auto& target=water?(variant==33?pipelines.WaterOpaque:pipelines.WaterTransparent):cameraFade?pipelines.CameraFade[variant-35]:pipelines.Pipeline[i];
             target.Pipeline = builder.Create(renderer->Device.get());
 		}
 
+		if(specialized)continue; // Lines/points keep the generic, mode-independent path.
 		// Line pipeline
 		for (int i = 0; i < 2; i++)
 		{

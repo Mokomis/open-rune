@@ -23,9 +23,17 @@ inline std::string Key(std::string name)
     for (char& c : name)
     {
         if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
-        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '-')) return {};
+        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '-' || c == '~')) return {};
     }
+    for(size_t i=0;(i=name.find('~',i))!=std::string::npos;i+=3)
+        if(name.substr(i,3)!="~20" && name.substr(i,3)!="~7e") return {};
     return name;
+}
+inline std::string IdentityKey(const std::string& identity)
+{
+    std::string encoded;
+    for(char c:identity) encoded += c==' ' ? "~20" : c=='~' ? "~7e" : std::string(1,c);
+    return Key(encoded);
 }
 struct Level { int width, height; std::vector<uint8_t> bytes; };
 struct Image { uint32_t format = 0; size_t bytes = 0; std::vector<Level> levels; };
@@ -77,9 +85,15 @@ inline std::map<std::string,Entry> ReadIndex(const std::filesystem::path& path)
     if (!f) return {};
     if (f.tellg()>1024*1024) throw std::runtime_error("Texture index too large");
     f.seekg(0);std::string line;
-    if (!std::getline(f,line) || line!="OPENRUNE_TEXTURES_1") throw std::runtime_error("Texture index version");
+    // The index is portable text. Binary streams retain CR from Windows CRLF.
+    auto readLine=[&]() {
+        if (!std::getline(f,line)) return false;
+        if (!line.empty() && line.back()=='\r') line.pop_back();
+        return true;
+    };
+    if (!readLine() || line!="OPENRUNE_TEXTURES_1") throw std::runtime_error("Texture index version");
     std::map<std::string,Entry> entries;
-    while (std::getline(f,line))
+    while (readLine())
     {
         std::istringstream row(line);std::string name,extra;Entry entry;
         if (!(row>>name>>entry.width>>entry.height>>std::hex>>entry.hash) || row>>extra || Key(name)!=name || name.empty() ||

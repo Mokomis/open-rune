@@ -1,5 +1,7 @@
 
 #include "Precomp.h"
+#include "RunePhysics.h"
+#include "RuneNavigation.h"
 #include "RuneParticles.h"
 #include "UActor.h"
 #include "Packages/Core/UClass.h"
@@ -48,6 +50,7 @@ UActor* UActor::Spawn(UClass* SpawnClass, std::optional<UActor*> SpawnOwner, std
 	static std::map<NameString, int> nextIndex;
 	NameString name = SpawnClass->Name.ToString() + std::to_string(nextIndex[SpawnClass->Name]++);
 	UActor* actor = UObject::Cast<UActor>(engine->LevelPackage->NewObject(name, UObject::Cast<UClass>(SpawnClass), ObjectFlags::Transient, true));
+    actor->RuneSpawnedDuringPlay=Level()->bBegunPlay() && !Level()->bStartup();
 
 	actor->Outer() = XLevel()->Outer();
 	actor->XLevel() = XLevel();
@@ -122,6 +125,8 @@ bool UActor::Destroy()
 	if (bDeleteMe())
 		return true;
 
+    RuneNavigation::OnDestroy(this);
+    RunePhysics::OnDestroy(this);
     RuneCorpse::OnDestroy(this);
 	bDeleteMe() = true;
 
@@ -169,9 +174,27 @@ bool UActor::Destroy()
 	return true;
 }
 
+namespace {
+void SettleRuntimeWeapon(UActor* a) {
+    if(!engine->LaunchInfo.IsRune() || !a->RuneSpawnedDuringPlay || a->NetworkReplica || !a->IsA("Weapon") || a->bStatic() || a->bDeleteMe())return;
+    if(a->bHidden() || a->Owner() || a->bCarriedItem() || a->GetStateName()!="Pickup"){a->RunePickupPending=true;return;}
+    if(!a->RunePickupPending || a->Physics()!=PHYS_None)return;
+    a->RunePickupPending=false;
+    if(a->HasProperty("StabbedActor") && a->GetUObject("StabbedActor"))return;
+    vec3 hit,normal;auto at=a->Location();
+    auto* support=a->Trace(hit,normal,at-vec3(0,0,256),at,false,vec3(0));
+    if(support && normal.z>.5f && at.z-hit.z<=a->CollisionHeight()+2)return;
+    // Summoned/spawned weapons inherit Pickup/PHYS_None, and Sleeping returns
+    // there without restoring gravity. Use ordinary falling and Landed, once
+    // per pickup appearance, instead of leaving a motionless weapon in midair.
+    a->bCollideWorld()=true;a->Velocity()=vec3(0);a->SetPhysics(PHYS_Falling);
+    LogMessage("RUNE_PICKUP_SETTLE actor="+a->Name.ToString());
+}
+}
+
 void UActor::Tick(float elapsed)
 {
-    if(RuneCorpse::TickBody(this,elapsed))return;
+    if(!RunePhysics::Controls(this) && RuneCorpse::TickBody(this,elapsed))return;
 	if (engine->LaunchInfo.IsDeusEx())
 	{
 		DistanceFromPlayer() = length(engine->viewport->Actor()->Location() - Location());
@@ -212,13 +235,14 @@ void UActor::Tick(float elapsed)
 				StateFrame->SetLatentState(LatentRunState::Continue);
 		}
 
-		if (Role() >= ROLE_SimulatedProxy && StateFrame->GetLatentState() == LatentRunState::Continue)
+        if ((!RunePhysics::Controls(this) || IsA("Carcass")) && Role() >= ROLE_SimulatedProxy && StateFrame->GetLatentState() == LatentRunState::Continue)
 		{
 			StateFrame->Tick();
 		}
 	}
 
-	TickPhysics(elapsed);
+    SettleRuntimeWeapon(this);
+	if(!RunePhysics::Controls(this))TickPhysics(elapsed);
 	TickRuneDynamics(this, elapsed);
 	UpdateRuneAttachments(this);
 

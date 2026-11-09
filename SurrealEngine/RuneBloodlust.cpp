@@ -1,4 +1,6 @@
+#include "RuneBattleLaws.h"
 #include "Precomp.h"
+#include "RunePhysics.h"
 #include "RuneBloodlust.h"
 #include "RuneRushPose.h"
 #include "RuneDualWield.h"
@@ -12,19 +14,22 @@
 #include "Packages/Engine/Actors/Pawn/UPlayerPawn.h"
 #include "Packages/Engine/Actors/Inventory/UWeapon.h"
 #include "Packages/Engine/Actors/Info/ULevelInfo.h"
+#include "Packages/Engine/Actors/Info/UGameInfo.h"
 #include "Packages/Engine/Actors/Info/UZoneInfo.h"
 #include "Packages/Engine/Resources/Level/ULevel.h"
 #include "Packages/Engine/Resources/Mesh/USkelModel.h"
 #include "Packages/Core/UFunction.h"
 #include "VM/Frame.h"
 #include "VM/ScriptCall.h"
+#include "Utils/CommandLine.h"
 #include <algorithm>
 #include <cmath>
 namespace RuneBloodlust {
 namespace {
-constexpr float ChargeDistance=560.f,ChargeSpeed=900.f;
+constexpr float ChargeDistance=800.f,ChargeSpeed=1150.f;
 bool Alive(UPawn* p){return p && !p->bDeleteMe() && !p->bHidden() && p->Health()>0;}
 bool Player(UPawn* p){return p && p->IsA("RunePlayer");}
+bool Campaign(){return !engine || !engine->GameInfo || engine->GameInfo->IsA("RuneSinglePlayer");}
 vec3 Forward(UPawn* p){float a=p->Rotation().YawRadians();return {std::cos(a),std::sin(a),0};}
 UPawn* Owner(UObject* o){if(auto* p=UObject::TryCast<UPawn>(o))return p;auto* a=UObject::TryCast<UActor>(o);return a && a->IsA("AnimationProxy")?UObject::TryCast<UPawn>(a->Owner()):nullptr;}
 UActor* Shield(UPawn* p){
@@ -55,7 +60,7 @@ const MeshAnimSeq* Sequence(UPawn* p,const NameString& name){
 }
 float Meter(UPawn* p){return Player(p)?100.f*p->GetInt("Strength")/std::max(1,(int)p->GetInt("MaxStrength")):p->Bloodlust.rage;}
 void Spend(UPawn* p){
-    if(Active(p) && Meter(p)>=50){
+    if(!RuneBattleLaws::NormalMoves(AllowNormal.load()) && Active(p) && Meter(p)>=50){
     if(Player(p)) {p->SetInt("Strength",std::max(0,(int)p->GetInt("Strength")-((int)p->GetInt("MaxStrength")+1)/2));if(p->GetInt("Strength")==0){p->SetInt("Strength",1);CallEvent(p,"StrengthDecay",{ExpressionValue::FloatValue(999)});}}
     else p->Bloodlust.rage=std::max(0.f,p->Bloodlust.rage-50);
     }
@@ -79,12 +84,14 @@ void Animate(UPawn* p,const NameString& name){
     p->Bloodlust.animation=name;
     if(Sequence(p,name))CallEvent(p,"PlayUninterruptedAnim",{ExpressionValue::NameValue(name)});
 }
-bool Landing(UPawn* p,vec3 dir,float distance){
+bool Landing(UPawn* p,vec3 dir,float distance,float* centerZ=nullptr){
     auto end=p->Location()+dir*distance;vec3 hit,normal;
     if(!p->Trace(hit,normal,end-vec3(0,0,220),end+vec3(0,0,80),false,vec3(p->CollisionRadius()*.6f,p->CollisionRadius()*.6f,0)) || normal.z<.7f)return false;
     if(hit.z>p->Location().z+60 || hit.z<p->Location().z-p->CollisionHeight()-120)return false;
     auto zone=p->Level()->GetLocZone(hit+vec3(0,0,p->CollisionHeight()),{}).Zone;
-    return zone && !zone->bPainZone() && !zone->bWaterZone();
+    if(!zone || zone->bPainZone() || zone->bWaterZone())return false;
+    if(centerZ)*centerZ=hit.z+p->CollisionHeight();
+    return true;
 }
 // Rush retains its fixed heading, but uses the walking step-height and floor
 // attachment rules. Every leg of the step is swept; no collision teleporting.
@@ -114,9 +121,29 @@ CollisionHit GroundRush(UPawn* p,vec3 delta){
 }
 void Launch(UPawn* p){
     auto& s=p->Bloodlust;s.phase=Leaping;s.age=0;s.origin=p->Location();s.travel=0;
-    p->SetPhysics(PHYS_Falling);p->Velocity()=s.direction*(s.limit>0?800.f:0.f)+vec3(0,0,650);p->Acceleration()=vec3(0);
+    // Native pawn falling applies ZoneGravity once per second (its 2x scale
+    // and half acceleration step cancel). Keep the authored vertical impulse,
+    // but distribute horizontal travel across the whole supported landing arc.
+    // The former fixed 800 speed reached short fallback ranges in midair and
+    // the safety cap then abruptly removed all forward momentum.
+    float speed=s.limit>0?800.f:0.f,landingZ=p->Location().z;
+    const float gravity=-p->Region().Zone->ZoneGravity().z;
+    const auto wall=s.limit>0?p->TryMove(s.direction*(s.limit+4.f),true):CollisionHit{};
+    const bool ledgeApproach=s.limit>0 && wall.Fraction<1.f && std::abs(wall.Normal.z)<.2f &&
+        std::abs((s.limit+4.f)*wall.Fraction-s.limit)<5.f;
+    s.leapToLedge=ledgeApproach;
+    // A wall/ledge approach needs the original quick arrival while rising so
+    // the existing grab can catch it. Solid collision already limits that path.
+    if(!ledgeApproach && s.limit>0 && gravity>1.f && std::isfinite(gravity) && Landing(p,s.direction,s.limit,&landingZ)) {
+        const float discriminant=650.f*650.f+2.f*gravity*(p->Location().z-landingZ);
+        if(discriminant>0 && std::isfinite(discriminant)) {
+            const float flight=(650.f+std::sqrt(discriminant))/gravity;
+            if(flight>.05f && flight<2.f)speed=std::min(800.f,s.limit/(flight*1.02f));
+        }
+    }
+    p->SetPhysics(PHYS_Falling);p->Velocity()=s.direction*speed+vec3(0,0,650);p->Acceleration()=vec3(0);
     if(!Player(p))CallEvent(p,"PlayJumping",{ExpressionValue::FloatValue(.1f)});
-    s.leaps++;LogMessage("RUNE_BLOOD_LEAP actor="+p->Name.ToString());
+    s.leaps++;LogMessage("RUNE_BLOOD_LEAP actor="+p->Name.ToString()+" limit="+std::to_string(s.limit)+" speed="+std::to_string(speed)+" gravity="+std::to_string(gravity)+" landing_z="+std::to_string(landingZ)+" xyz="+std::to_string(p->Location().x)+","+std::to_string(p->Location().y)+","+std::to_string(p->Location().z));
 }
 void Gain(UPawn* p,float amount){
     if(!Eligible(p) || Player(p) || p->Bloodlust.active || amount<=0)return;
@@ -137,13 +164,13 @@ bool Eligible(UPawn* p){
     uint32_t hash=2166136261u;for(unsigned char c:p->Name.ToString())hash=(hash^(c>='a'&&c<='z'?c-32:c))*16777619u;
     return hash%3==1;
 }
-bool Busy(UPawn* p){return p && p->Bloodlust.phase!=0;}
+bool Busy(UPawn* p){return p && (p->Bloodlust.phase!=0 || RuneSlam::Busy(p));}
 bool Active(UPawn* p){return Alive(p) && (p->NetworkReplica?p->Bloodlust.active:Eligible(p) && (Player(p)?p->GetBool("bBloodLust"):p->Bloodlust.active));}
 unsigned Readiness(UPawn* p){
     if(!p || p->NetworkReplica || RuneCorpse::Busy(p))return 0;
-    if(!Enabled.load() || !Eligible(p) || (!AllowNormal.load() && (!Active(p) || Meter(p)<50)) || Busy(p) || p->Bloodlust.cooldown>0 || !StateAllows(p) || !Idle(p))return 0;
-    unsigned mask=(p->Physics()==PHYS_Walking || (p->Physics()==PHYS_Falling && p->Bloodlust.tap>=0 && engine->LevelInfo->TimeSeconds()-p->Bloodlust.tap<=.32f))?1:0;
-    if(p->Physics()==PHYS_Walking && Shield(p) && RuneRushPose::Supported(p))mask|=2;
+    if(!(RuneBattleLaws::InMatch||Enabled.load()) || !Eligible(p) || (!RuneBattleLaws::NormalMoves(AllowNormal.load()) && (!Active(p) || Meter(p)<50)) || Busy(p) || p->Bloodlust.cooldown>0 || !StateAllows(p) || !Idle(p))return 0;
+    unsigned mask=(RuneBattleLaws::Allowed(RuneBattleLaws::Leap) && !Campaign() && (p->Physics()==PHYS_Walking || (p->Physics()==PHYS_Falling && p->Bloodlust.tap>=0 && engine->LevelInfo->TimeSeconds()-p->Bloodlust.tap<=.32f)))?1:0;
+    if(RuneBattleLaws::Allowed(RuneBattleLaws::Rush) && p->Physics()==PHYS_Walking && Shield(p) && RuneRushPose::Supported(p))mask|=2;
     return mask;
 }
 bool Leap(UPawn* p,vec3 direction){
@@ -179,8 +206,9 @@ bool Charge(UPawn* p){
     LogMessage("RUNE_BLOOD_CHARGE_WINDUP actor="+p->Name.ToString());return true;
 }
 bool JumpPressed(UPawn* p){
-    if(!Enabled.load() || !Eligible(p))return false;
+    if(!(RuneBattleLaws::InMatch||Enabled.load()) || !Eligible(p))return false;
     if(Busy(p))return true;
+    if(Campaign())return false;
     auto& s=p->Bloodlust;float now=engine->LevelInfo->TimeSeconds();
     bool twice=s.tap>=0 && now-s.tap<=.32f;
     if(twice){
@@ -197,13 +225,15 @@ void Tick(UPawn* p,float elapsed){
         if(auto* eyes=UObject::TryCast<UActor>(p->GetUObject("BloodLustEyes")))eyes->bHidden()=true;
     }
     auto& s=p->Bloodlust;float dt=std::clamp(elapsed,0.f,.1f);s.cooldown=std::max(0.f,s.cooldown-dt);
-    if(s.active && (!Alive(p) || !Enabled.load() || (s.rage=std::max(0.f,s.rage-5*dt))<=0)){s.active=false;}
+    if(RuneSlam::Busy(p))return;
+    if(s.active && (!Alive(p) || (!RuneBattleLaws::InMatch&&!Enabled.load()) || (s.rage=std::max(0.f,s.rage-5*dt))<=0)){s.active=false;}
     if(Busy(p)) {
         // PlayerPawn.Uninterrupted freezes physics in its latent Begin label.
         // These moves still need walking collision/gravity after that label runs.
         if(Alive(p) && p->GetStateName()=="Uninterrupted" && p->Physics()==PHYS_None)p->SetPhysics(PHYS_Walking);
-        if(!Enabled.load() || !Eligible(p) || (s.phase!=Leaping && p->Physics()!=PHYS_Walking) || (p->GetStateName()!="Uninterrupted" && !StateAllows(p))) {LogMessage("RUNE_BLOOD_CANCEL actor="+p->Name.ToString()+" phase="+std::to_string(s.phase)+" state="+p->GetStateName().ToString()+" physics="+std::to_string(p->Physics())+" health="+std::to_string(p->Health())+" hidden="+std::to_string((bool)p->bHidden())+" index="+std::to_string(p->Index)+" eligible="+std::to_string(Eligible(p))+" enabled="+std::to_string(Enabled.load())+" walking="+std::to_string(PHYS_Walking));Finish(p);return;}
+        if(!(RuneBattleLaws::InMatch||Enabled.load()) || !Eligible(p) || (s.phase!=Leaping && p->Physics()!=PHYS_Walking) || (p->GetStateName()!="Uninterrupted" && !StateAllows(p))) {LogMessage("RUNE_BLOOD_CANCEL actor="+p->Name.ToString()+" phase="+std::to_string(s.phase)+" state="+p->GetStateName().ToString()+" physics="+std::to_string(p->Physics())+" health="+std::to_string(p->Health())+" hidden="+std::to_string((bool)p->bHidden())+" index="+std::to_string(p->Index)+" eligible="+std::to_string(Eligible(p))+" enabled="+std::to_string(Enabled.load())+" walking="+std::to_string(PHYS_Walking));Finish(p);return;}
         s.age+=dt;p->Acceleration()=vec3(0);
+        if((s.rushing&&!RuneBattleLaws::Allowed(RuneBattleLaws::Rush))||(!s.rushing&&!RuneBattleLaws::Allowed(RuneBattleLaws::Leap))){Finish(p);return;}
         if(s.phase==LeapWindup) {p->Velocity()=vec3(0);if(s.age>=.45f)Launch(p);}
         else if(s.phase==ChargeWindup || s.phase==Charging) {
             p->Velocity()=vec3(0);p->SetRotation(Rotator::FromVector(s.direction));
@@ -214,13 +244,13 @@ void Tick(UPawn* p,float elapsed){
             if(p->Physics()!=PHYS_Falling && s.age>.08f){Recover(p);}
             else if(s.age>2){Finish(p);}
         } else if(s.phase==Recovery && s.age>=(s.rushing?RuneRushPose::RecoverSeconds:.3f))Finish(p);
-    } else if(Enabled.load() && Eligible(p) && !Player(p) && (Active(p) || AllowNormal.load()) && StateAllows(p) && Idle(p)) {
+    } else if((RuneBattleLaws::InMatch||Enabled.load()) && Eligible(p) && !Player(p) && (Active(p) || RuneBattleLaws::NormalMoves(AllowNormal.load())) && StateAllows(p) && Idle(p)) {
         s.think-=dt;
         if(s.think<=0){s.think=.6f;auto* enemy=p->Enemy();
             if(Alive(enemy) && RuneTactics::MayCommit(p) && p->FastTrace(enemy->Location(),p->Location())) {
                 auto d=enemy->Location()-p->Location();d.z=0;float distance=length(d);
-                if(distance>130 && distance<400 && dot(Forward(p),normalize(d))>.9f && Shield(p))Charge(p);
-                else if(distance>180 && distance<380)Leap(p,d);
+                if(RuneBattleLaws::Allowed(RuneBattleLaws::Rush) && distance>130 && distance<400 && dot(Forward(p),normalize(d))>.9f && Shield(p))Charge(p);
+                else if(RuneBattleLaws::Allowed(RuneBattleLaws::Leap) && !Campaign() && distance>180 && distance<380)Leap(p,d);
             }
         }
     }
@@ -230,8 +260,12 @@ void Move(UPawn* p,float elapsed){
     auto& s=p->Bloodlust;if(!Busy(p) || !Alive(p))return;
     float dt=std::clamp(elapsed,0.f,.05f);
     if(s.phase==Leaping){
+        if(commandline->HasArg("","--rune-leap-trace"))LogMessage("RUNE_LEAP_FLIGHT age="+std::to_string(s.age)+" z="+std::to_string(p->Location().z)+" vz="+std::to_string(p->Velocity().z)+" speed="+std::to_string(length(p->Velocity().xy()))+" gravity="+std::to_string(p->Region().Zone->ZoneGravity().z));
         auto d=p->Location()-s.origin;d.z=0;s.travel=length(d);
-        if(s.travel>=s.limit || s.age>1.2f)p->Velocity().x=p->Velocity().y=0;
+        if(s.travel>=(s.leapToLedge?600.f:s.limit)){
+            if(length(p->Velocity().xy())>1.f)LogMessage("RUNE_BLOOD_LEAP_RANGE_STOP actor="+p->Name.ToString()+" limit="+std::to_string(s.limit)+" travel="+std::to_string(s.travel)+" age="+std::to_string(s.age)+" vz="+std::to_string(p->Velocity().z));
+            p->Velocity().x=p->Velocity().y=0;
+        }
         return;
     }
     if(s.phase!=Charging)return;
@@ -251,6 +285,14 @@ void Move(UPawn* p,float elapsed){
             if(!sourceShield || Shield(p)!=sourceShield)return;
             if(!resistant)CallEvent(target,"JointDamaged",{ExpressionValue::IntValue(defended?3:15),ExpressionValue::ObjectValue(p),ExpressionValue::VectorValue(target->Location()),ExpressionValue::VectorValue(vec3(0)),ExpressionValue::NameValue("blunt"),ExpressionValue::IntValue(0)});
             if(Alive(target)){target->RuneKickRecoil=direction*(defended||resistant?8.f:100.f);target->RuneKickRecoilTime=.18f;}
+            // The shield can reduce damage and halt the rush; its physical
+            // impact still topples eligible living opponents. Authority owns
+            // the ragdoll, including when ambient cinematic physics is off.
+            if(Alive(target) && !resistant) {
+                if(RunePhysics::ShieldRushKnockdown(target,p,direction*560.f+vec3(0,0,170))){
+                    target->RuneKickRecoilTime=0;target->RuneKickRecoil=vec3(0);
+                }
+            }
             RuneFeedback::Impact(p,target,defended,true);
             if((defended || resistant) && p->Bloodlust.phase==Charging)Recover(p);
         };
@@ -271,7 +313,7 @@ bool ScriptCall(UFunction* f,UObject* object,const ArrayView<ExpressionValue>& a
     auto name=f->Name;
     static const NameString calls[]={"Jump","Attack","JointDamaged","DamageBodyPart","PawnDamageModifier","PlayerMove","WeaponActivate","SwipeEffectStart","UseNotify","Throw","ThrowWeapon","DropWeapon","SwitchWeapon","InstantStow"};
     if(std::find(std::begin(calls),std::end(calls),name)==std::end(calls))return false;
-    auto* p=Owner(object);if(!p || !Enabled.load() || !Eligible(p))return false;
+    auto* p=Owner(object);if(!p || (!RuneBattleLaws::InMatch&&!Enabled.load()) || !Eligible(p))return false;
     if(p->Bloodlust.rushing && Busy(p) && (name=="Throw" || name=="ThrowWeapon" || name=="DropWeapon" || name=="SwitchWeapon" || name=="InstantStow"))return true;
     if(name=="Jump" && object==p) {
 #ifdef OPENRUNE_ENABLE_NETWORK

@@ -13,6 +13,9 @@
 #include "VM/ScriptCall.h"
 #include "VM/Frame.h"
 #include <sstream>
+#include <fstream>
+#include "RenderDevice/RenderDevice.h"
+#include "GameWindow.h"
 
 // Isolated fixture: actual double-tap Block starts player bashes.
 class RuneBashProbe {
@@ -90,6 +93,18 @@ public:
    if(RuneBash::Start(attacker))Exception::Throw("Bash cooldown allowed duplicate start");
    if(!mob && !CallEvent(enemy,"InDangerFromAttack").ToBool())Exception::Throw("Enemy did not recognize bash threat");}
   if(victim->RuneBashPhase==2)stunTime=std::max(stunTime,victim->RuneBashAge);
+  auto prefix=commandline->GetArg("","--probe-bash-captures","");
+  if(!prefix.empty()) {
+   int stage=attacker->RuneBashPhase==1 && attacker->AnimFrame()>.10f && attacker->AnimFrame()<.25f?0:
+     victim->RuneBashImpactStrength>0 && game.LevelInfo->TimeSeconds()-victim->RuneBashImpactAt>.045f && game.LevelInfo->TimeSeconds()-victim->RuneBashImpactAt<.1f?1:-1;
+   if(stage>=0 && !(captures&(1<<stage))) {
+    auto* d=game.window->GetRenderDevice();int w=d->GetRenderWidth(),h=d->GetRenderHeight();Array<TextureColor> pixels;pixels.resize(size_t(w)*h);
+    bool gamma=d->GammaCorrectScreenshots;d->GammaCorrectScreenshots=true;d->ReadPixels(pixels.data());d->GammaCorrectScreenshots=gamma;
+    std::ofstream f(prefix+"-"+std::to_string(stage)+".ppm",std::ios::binary);f<<"P6\n"<<w<<' '<<h<<"\n255\n";
+    for(auto c:pixels){const char rgb[]={char(c.R),char(c.G),char(c.B)};f.write(rgb,3);}captures|=1<<stage;
+   }
+  }
+
   if(seen){maxDistance=std::max(maxDistance,length((victim->Location()-origin).xy()));
    if(game.LevelInfo->TimeSeconds()-startTime>1.6f){
     if(attacker->RuneBashHits!=1 || attacker->RuneBashBlocks!=(blocked?1:0))Exception::Throw("Bash expected one correctly blocked/unblocked impact");
@@ -105,5 +120,5 @@ public:
   }
  }
 private:
- std::string mode;UPawn *enemy=nullptr,*attacker=nullptr,*victim=nullptr;vec3 origin;int health=0,ready=0;float startTime=0,maxDistance=0,stunTime=0;bool started=false,seen=false,complete=false,firstBlock=false;
+ int captures=0;std::string mode;UPawn *enemy=nullptr,*attacker=nullptr,*victim=nullptr;vec3 origin;int health=0,ready=0;float startTime=0,maxDistance=0,stunTime=0;bool started=false,seen=false,complete=false,firstBlock=false;
 };

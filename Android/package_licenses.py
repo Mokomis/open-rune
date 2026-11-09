@@ -52,13 +52,14 @@ def stage_licenses(root, sdl, build, assets, discovery=None):
         'resample.txt': 'Thirdparty/resample/LICENSE',
         'miniz.txt': 'Thirdparty/miniz/LICENSE',
         'OpenMPT.txt': 'Thirdparty/openmpt/LICENSE',
+        'JoltPhysics-MIT.txt': 'Thirdparty/JoltPhysics/LICENSE',
     }
     for name, path in required.items():
         add(name, root / path)
     add('SDL2.txt', sdl / 'LICENSE.txt')
     if discovery is not None:
         runtime = Path(discovery)
-        inventory = json.loads((runtime / 'manifest.json').read_text())
+        inventory = json.loads((runtime / 'manifest.json').read_text(encoding='utf-8'))
         for name, expected in inventory['sha256'].items():
             file = runtime / name
             if digest(file.read_bytes()) != expected:
@@ -66,28 +67,28 @@ def stage_licenses(root, sdl, build, assets, discovery=None):
         add('HyperDHT/manifest.json', runtime / 'manifest.json')
         for file in sorted((runtime / 'notices').rglob('*')):
             if file.is_file():
-                add('HyperDHT/' + str(file.relative_to(runtime / 'notices')), file)
+                add('HyperDHT/' + file.relative_to(runtime / 'notices').as_posix(), file)
 
-    cache = (build / 'CMakeCache.txt').read_text()
+    cache = (build / 'CMakeCache.txt').read_text(encoding='utf-8')
     adreno = re.search(r'^OPENRUNE_ADRENOTOOLS_SOURCE:PATH=(.+)$', cache, re.M)
     if adreno:
         adreno_root = Path(adreno.group(1))
         add('AdrenoTools.txt', adreno_root / 'LICENSE')
         add('LinkerNamespaceBypass.txt', adreno_root / 'lib/linkernsbypass/LICENSE')
         add('Mesa-Turnip.txt', root / 'Android/Turnip-LICENSE.txt')
-    if 'OPENRUNE_ENABLE_NETWORK:BOOL=ON' in (build / 'CMakeCache.txt').read_text():
+    if 'OPENRUNE_ENABLE_NETWORK:BOOL=ON' in (build / 'CMakeCache.txt').read_text(encoding='utf-8'):
         add('MbedTLS.txt', root / 'Network/thirdparty-notices/MbedTLS-LICENSE.txt')
         add('MbedTLS-framework.txt', root / 'Network/thirdparty-notices/MbedTLS-framework-LICENSE.txt')
     # Preserve all separately licensed OpenMPT source components, even optional ones.
     for path in sorted((root / 'Thirdparty/openmpt').rglob('*')):
         if path.is_file() and path.name.lower().startswith(('license', 'copying', 'authors', 'notice')):
-            add('OpenMPT/' + str(path.relative_to(root / 'Thirdparty/openmpt')), path)
+            add('OpenMPT/' + path.relative_to(root / 'Thirdparty/openmpt').as_posix(), path)
     for name, path in [('PFFFT.txt', 'Thirdparty/resample/pffft.cpp'),
                        ('TinySHA1.txt', 'Thirdparty/TinySHA1/TinySHA1.hpp')]:
-        text = (root / path).read_text()
+        text = (root / path).read_text(encoding='utf-8')
         notices[name] = (text[text.index('/*'):text.index('*/') + 2] + '\n').encode()
     for name in ('dr_flac', 'dr_wav', 'stb_vorbis'):
-        text = (root / f'Thirdparty/{name}.h').read_text()
+        text = (root / f'Thirdparty/{name}.h').read_text(encoding='utf-8')
         start = text.rfind('ALTERNATIVE ')
         # Keep the entire final dual-license comment, not just one license choice.
         start = text.rfind('/*', 0, start)
@@ -109,7 +110,7 @@ def stage_licenses(root, sdl, build, assets, discovery=None):
         if path.is_symlink() or not path.is_file():
             raise ValueError(f'Unsupported source entry: {name}')
         sources[name] = path.read_bytes()
-    cmake = (root / 'CMakeLists.txt').read_text()
+    cmake = (root / 'CMakeLists.txt').read_text(encoding='utf-8')
     video = re.search(r'set\(SURREALVIDEO_SOURCES\s+(.*?)\n\)', cmake, re.S)
     if not video:
         raise ValueError('Cannot identify SurrealVideo build sources')

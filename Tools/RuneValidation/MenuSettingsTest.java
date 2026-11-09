@@ -102,10 +102,10 @@ public final class MenuSettingsTest {
         blood.set("bloodlustMoves",0);blood=new RuneSettings(memory(bloodDisk),0,0,false,false);
         check(blood.get("bloodlustMoves")==0,"Bloodlust toggle persists");
         blood.reset(new String[]{"bloodlustMoves"});check(blood.get("bloodlustMoves")==1,"Bloodlust reset");
-        check(blood.get("normalBloodlust")==0,"Normal-combat leap/rush defaults off");
-        blood.set("normalBloodlust",1);blood=new RuneSettings(memory(bloodDisk),0,0,false,false);
-        check(blood.get("normalBloodlust")==1,"Normal-combat leap/rush persists");
-        blood.reset(new String[]{"normalBloodlust"});check(blood.get("normalBloodlust")==0,"Normal-combat rule reset");
+        check(blood.get("normalBloodlust")==1,"Normal-combat leap/rush defaults on");
+        blood.set("normalBloodlust",0);blood=new RuneSettings(memory(bloodDisk),0,0,false,false);
+        check(blood.get("normalBloodlust")==0,"Normal-combat leap/rush opt-out persists");
+        blood.reset(new String[]{"normalBloodlust"});check(blood.get("normalBloodlust")==1,"Normal-combat rule reset");
         Map<String,Object> tacticsDisk=new HashMap<>();
         RuneSettings tactics=new RuneSettings(memory(tacticsDisk),0,0,false,false);
         check(tactics.get("tactics")==1,"New tactics default");

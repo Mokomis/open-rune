@@ -48,6 +48,7 @@ struct GouraudVertex
 struct SurfaceFacet
 {
 	bool Water = false;
+    const float* WaterDepth = nullptr; // Immediate draw; cached static bathymetry in source vertex order.
 	vec3 ReliefLightDirection = vec3(0.0f);
 	Coords MapCoords;
 	vec3* Vertices;
@@ -125,11 +126,16 @@ public:
     virtual bool ReuseWaterReflection(float, float, const vec3&) { return false; }
     virtual void InvalidateWaterReflection() {}
     virtual void PrepareApproximateWater(float height, float time) {}
+    virtual bool UsesModernWater() const { return false; }
+    virtual void PrepareModernWater(float height, float time, const vec4& environment, const vec4& lightDirection, const vec4& lightColor) {}
+    virtual void SetWaterView(bool submerged, float time) {}
+    virtual void PrepareWaterSky(TextureInfo*) {}
     virtual bool BeginWaterReflection(SceneNode*, float, float) { return false; }
     virtual void EndWaterReflection() {}
     virtual bool IsWaterReflection() const { return false; }
     virtual bool BeginLightShadow(SceneNode*, const vec3&, const vec3&, float, int slot = 0) { return false; }
     virtual void EndLightShadow(bool more = false) {}
+    virtual void SetLightShadowStrength(int slot,float strength) {}
     virtual bool IsShadowPass() const { return false; }
 	virtual void DrawGouraudPolygon(SceneNode* Frame, TextureInfo& Info, const GouraudVertex* Pts, int NumPts, uint32_t PolyFlags) = 0;
 	virtual void DrawTile(SceneNode* Frame, TextureInfo& Info, float X, float Y, float XL, float YL, float U, float V, float UL, float VL, float Z, vec4 Color, vec4 Fog, uint32_t PolyFlags) = 0;

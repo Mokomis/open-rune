@@ -23,7 +23,7 @@ for _ in range(200):
     n = rng.randrange(65)
     valid.append(header(2)+struct.pack('!QB', 100, n)+b''.join(struct.pack('!QB', i+1, rng.randrange(1,11)) for i in range(n)))
     n = 512 if _ == 0 else rng.randrange(40)
-    b = struct.pack('!HQQQHHB',6,1,0,100,n,0,0)
+    b = struct.pack('!HQQQHHB',7,1,0,100,n,0,0)
     for i in range(n):
         b += struct.pack('!IIBBhIiiihhhHHHHHhhhhIIIIIIB', i+1,1,1,3,100,1, i*8,-30,42, -4,0,4, 0,32768,65535, 1,2,16384,256, 0,0,0,0,0,0,0,0,255)
     valid.append(b)
@@ -77,17 +77,41 @@ def entity(ref, kind=1, flags=3, owner=0, weapon=0, attach=255):
         0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,owner,int(bool(owner)),weapon,int(bool(weapon)),0,0,attach)
 def native(off=3,flags=3,guard=255,meter=0,phase=0,age=0,cooldown=0,ready=0,rune_power=0,rune_capacity=0):
     return struct.pack('!IIBBBBHHBBB',off,int(bool(off)),flags,guard,meter,phase,age,cooldown,ready,rune_power,rune_capacity)
-prefix=struct.pack('!HQQQHHB',6,1,0,100,3,0,0)+entity(1,flags=67,weapon=2)
+prefix=struct.pack('!HQQQHHB',7,1,0,100,3,0,0)+entity(1,flags=67,weapon=2)
 suffix=entity(2,kind=2,owner=1,attach=12)+entity(3,kind=2,owner=1,attach=13)
 valid.append(prefix+native()+suffix)
 valid.append(prefix+native(flags=12,guard=0,meter=50,phase=3,age=520,cooldown=4000)+suffix)
 valid.append(prefix+native(rune_power=75,rune_capacity=100)+suffix)
 valid.append(prefix+native(ready=1)+suffix)
+valid.append(prefix+native(off=0,flags=0,guard=0,phase=6,age=225)+suffix)
+valid.append(prefix+native(off=0,flags=0,guard=0,phase=7,age=100)+suffix)
 for args in [dict(off=2),dict(off=9),dict(flags=16),dict(meter=101),dict(phase=6),dict(age=1),dict(cooldown=4001),dict(ready=1,cooldown=1),dict(ready=1,phase=1)]:
     invalid.append(prefix+native(**args)+suffix)
 # Canonical empty extension and pre-extension schema are rejected.
-invalid.append(struct.pack('!HQQQHHB',6,1,0,100,1,0,0)+entity(1,flags=67)+native(off=0,flags=0,guard=0))
+invalid.append(struct.pack('!HQQQHHB',7,1,0,100,1,0,0)+entity(1,flags=67)+native(off=0,flags=0,guard=0))
 invalid.append(struct.pack('!HQQQHHB',5,1,0,100,1,0,0)+entity(1))
+# Independently assembled protocol-25 physical poses: the kind high bit marks
+# an optional bounded extension without adding bytes to ordinary actors.
+base_entity=entity(1)
+def physical_entity(kind, extension):
+    raw=entity(1,kind=kind)
+    return raw[:8]+bytes([kind|128])+raw[9:]+extension
+physical_prefix=struct.pack('!HQQQHHB',7,1,0,100,1,0,0)
+rag=bytes([1])+struct.pack('!hhhBHHHHHH',-40,80,7,2,65000,127,32900,0,65535,900)
+rigid=bytes([2])+struct.pack('!hhhhhhh',-8,11,23,0,0,0,32767)
+valid += [physical_prefix+physical_entity(1,rag),physical_prefix+physical_entity(5,rigid)]
+invalid += [physical_prefix+physical_entity(5,rag),physical_prefix+physical_entity(1,bytes([0])),
+            physical_prefix+physical_entity(1,bytes([1])+struct.pack('!hhhB',0,0,0,65)+bytes(65*6)),
+            physical_prefix+physical_entity(5,bytes([2])+bytes(14))]
+basis=struct.pack('!BBhhhHHH',1,1,-125,240,1000,4096,4096,2048)
+seeded=bytes([3])+rag[1:]+basis
+valid.append(physical_prefix+physical_entity(1,seeded))
+invalid += [physical_prefix+physical_entity(1,bytes([3])+rag[1:]+bytes([0])),
+            physical_prefix+physical_entity(1,bytes([3])+rag[1:]+bytes([65])),
+            physical_prefix+physical_entity(1,bytes([3])+rag[1:]+struct.pack('!BBhhhHHH',1,2,0,0,0,4096,4096,4096)),
+            physical_prefix+physical_entity(1,bytes([3])+rag[1:]+struct.pack('!BBhhhHHH',1,1,0,0,0,0,4096,4096)),
+            physical_prefix+physical_entity(1,bytes([3])+rag[1:]+struct.pack('!BBhhhHHH',1,1,0,0,0,16385,4096,4096)),
+            physical_prefix+physical_entity(1,bytes([3])+rag[1:]+bytes([2])+basis[1:]+basis[1:])]
 for b in valid:
     invalid += [b[:rng.randrange(len(b))], b+b'\0']
 # Bounds/reserved fields/wrong epoch are independent negative fixtures.
@@ -97,7 +121,7 @@ invalid += [header(1)+struct.pack('!BBQQQB',9,0,0,0,0,0),
             header(1)+struct.pack('!BBQQQB',0,0,0,0,1,0),
             header(1)+struct.pack('!BBQQQB',0,0,0,0,0,2),
             struct.pack('!4sBI',b'ORR1',1,8)+struct.pack('!BBQQQB',0,0,0,0,0,0),
-            struct.pack('!HQQQHHB',6,1,0,1,513,0,0)]
+            struct.pack('!HQQQHHB',7,1,0,1,513,0,0)]
 # Two bounded skin batches carry authoritative skeletal appearance independently
 # of interpolation snapshots. Texture references are package-local exports.
 visual = header(6)+struct.pack('!QIIBBBB',1,1,1,3,1,0,8)+struct.pack('!BIHB',0,0,1024,2)+struct.pack('!BI',0,0)+struct.pack('!16i',*range(16))+bytes(range(50))

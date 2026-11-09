@@ -64,13 +64,19 @@ final class RuneSettings {
         add("networkDiagnostics","Network diagnostics","Multiplayer frame times, acknowledged round-trip time, snapshot gaps and transport timeouts. Timeouts are not a packet-loss measurement.",SWITCH,0);
         add("networkSmoothing","Network smoothing","Adaptive smooths remote movement against packet jitter with a bounded buffer. Local controls stay responsive; gameplay remains server controlled.",new String[]{"Original","Adaptive"},1);
         add("hud","HUD style","Themed meters with independently saved positions and sizes.",new String[]{"Original","Open Rune"},1);
+        add("physics","Cinematic physics","Articulated bodies, recoverable knockdowns and throwable props. Chaos increases force and bounce. Bosses and scripted scenes are protected. Multiplayer follows host rules.",new String[]{"Original","Cinematic","Chaos"},0);
         add("kick","Combat kicks","F / right-stick click. Raised shields absorb damage and most knockback.",SWITCH,1);
         add("bash","Shield bash","Double-tap Block. Brief stagger and small shove; raised shields counter it.",SWITCH,1);
-        add("normalBloodlust","Leap & rush without bloodlust","Allow giant leap and shield rush outside bloodlust. Outside bloodlust no meter is spent; the shared 4-second cooldown and shield requirement remain. Host setting applies to new matches.",SWITCH,0);
-        add("bloodlustMoves","Bloodlust moves","While bloodlust is active: double-tap Jump for a giant leap; hold Block and press Attack for shield charge. Each costs half a meter, with a 4-second cooldown. Amber controls show readiness. Selected Dark Vikings can use them too. Online matches use the host rules.",new String[]{"Off","On"},1);
+        add("normalBloodlust","Leap & rush availability","Normal combat is the default: neither move needs or spends bloodlust. The shared 4-second cooldown and shield requirement remain. Choose Bloodlust only to restore the old requirement. Multiplayer follows the host.",new String[]{"Bloodlust only","Normal combat"},1);
+        add("bloodlustMoves","Giant leap & shield rush","Giant leap is multiplayer-only: double-tap Jump. Shield rush works in campaign and multiplayer: hold Block and press Attack. Available without bloodlust by default, with a shared 4-second cooldown. Rush requires a shield. Eligible enemies and bots can use them too. Multiplayer follows the host.",new String[]{"Off","On"},1);
         add("dualWield","Dual wield","Use two light weapons and a weaker crossed block. Your shield stays in inventory; turn this off to use it again. Compatible Vikings can dual wield too.",new String[]{"Off","On"},1);
         add("tactics","Enemy tactics","Tactical humanoids use spacing, delayed defense, kicks and shield bashes. Bosses and scripted scenes keep their original behavior.",new String[]{"Original","Tactical"},1);
         add("difficulty","New campaign difficulty","Applies when you start a new campaign. Saves retain their difficulty.",new String[]{"Easy","Medium","Hard","Very hard"},1);
+        // Adopt the requested normal-combat default once, preserving later opt-outs.
+        if(!prefs.getBoolean("menu.normalMovesDefaultV2",false)){
+            items.get("normalBloodlust").value=1;
+            prefs.edit().putInt("menu.normalBloodlust",1).putBoolean("menu.normalMovesDefaultV2",true).apply();
+        }
         // Existing installs retain their choices; old enabled relief equals Medium.
         if(!prefs.contains("menu.resolution") && prefs.contains("upscale")) {
             items.get("resolution").value=upscale?1:0;

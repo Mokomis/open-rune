@@ -1,6 +1,7 @@
 
 #include "Precomp.h"
 #include "UPawn.h"
+#include "RuneNavigation.h"
 #include "Packages/Engine/Actors/Info/ULevelInfo.h"
 #include "Packages/Engine/Actors/NavigationPoint/UNavigationPoint.h"
 #include "Packages/Engine/Actors/NavigationPoint/UInventorySpot.h"
@@ -96,14 +97,18 @@ std::pair<Array<UNavigationPoint*>, int32_t> UPawn::FindPathToEndPoint(UNavigati
 	{
 		if (!current->bEndPoint())
 		{
-			for (int specIndex : current->upstreamPaths())
+			std::span<const int> reverse;
+            if(engine->LaunchInfo.IsRune())reverse=RuneNavigation::Incoming(XLevel(),current);
+            else {auto native=current->upstreamPaths();reverse={native.data(),native.size()};}
+            for (int specIndex : reverse)
 			{
-				if (specIndex < 0 || (size_t)specIndex >= reachSpecs.size())
-					break;
+				if (specIndex < 0)break;
+                if ((size_t)specIndex >= reachSpecs.size())continue;
 				const LevelReachSpec& reachSpec = reachSpecs[specIndex];
 
 				// Note: startActor instead of endActor because upstreamPaths is the reverse travel direction
 				UNavigationPoint* endActor = reachSpec.startActor;
+                if(!endActor || endActor->bDeleteMe() || reachSpec.endActor!=current || current->bDeleteMe())continue;
 
 				if (reachSpec.collisionRadius < radius || reachSpec.collisionHeight < height || reachSpec.bPruned)
 					continue; // Skip nav node links that we can't pass through
@@ -222,11 +227,13 @@ UObject* UPawn::FindRandomDest()
 
 		for (int specIndex : navPoint->Paths())
 		{
-			if (specIndex < 0 || (size_t)specIndex >= reachSpecs.size())
-				break;
+			if (specIndex < 0)break;
+            if ((size_t)specIndex >= reachSpecs.size())continue;
 			const LevelReachSpec& reachSpec = reachSpecs[specIndex];
 
-			if (reachSpec.endActor->bEndPoint())
+			if (!reachSpec.endActor || reachSpec.endActor->bDeleteMe() || reachSpec.startActor!=navPoint)continue;
+
+            if (reachSpec.endActor->bEndPoint())
 				continue; // Already processed
 
 			if (reachSpec.collisionRadius < radius || reachSpec.collisionHeight < height || reachSpec.bPruned)
@@ -282,7 +289,7 @@ bool UPawn::MarkReachableNavEndPoints()
 	return endPointsFound > 0;
 }
 
-UObject* UPawn::FindPathToward(UObject* anActor, bool singlePath)
+UObject* UPawn::FindPathToward(UObject* anActor, bool singlePath, bool authoredOnly)
 {
 	if (auto aNavPoint = UObject::TryCast<UNavigationPoint>(anActor))
 	{
@@ -294,7 +301,9 @@ UObject* UPawn::FindPathToward(UObject* anActor, bool singlePath)
 	}
 	else if (auto actor = UObject::TryCast<UActor>(anActor))
 	{
-		return FindPathToward(FindClosestNavPoint(actor->Location()), singlePath);
+        auto* route=FindPathToward(FindClosestNavPoint(actor->Location()),singlePath);
+        if(route)return route;
+        return authoredOnly?nullptr:RuneNavigation::Fallback(this,actor->Location());
 	}
 	else
 	{

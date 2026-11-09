@@ -43,14 +43,14 @@ public final class MultiplayerMenuModelTest {
             c.players=4;rejects(()->c.validate(game));c.players=8;c.score=0;c.minutes=0;rejects(()->c.validate(game));c.minutes=10;
             c.maps.clear();c.maps.add("../System/RuneI");rejects(()->c.validate(game));
             String base="192.168.1.2 43210\nDM-Hildir\n2 1\n0123456789abcdef0123456789abcdef\n0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n";
-            for(int v=1;v<=4;v++){
-                String text="OPEN-RUNE-INVITE-"+v+"\n"+base+(v>=2?"4\n":"")+(v>=3?"1\n":"")+(v==4?"2 1 0\n":"");
+            for(int v=1;v<=5;v++){
+                String text="OPEN-RUNE-INVITE-"+v+"\n"+base+(v>=2?"4\n":"")+(v>=3?"1\n":"")+(v>=4?"2 1 0\n":"")+(v==5?"4095\n":"");
                 check(Arrays.equals(RuneInvitation.normalize(text.getBytes(StandardCharsets.UTF_8)),RuneInvitation.normalize(text.replace("\n","\r\n").getBytes(StandardCharsets.UTF_8))),"CRLF normalization");
                 badInvite(text+"extra");badInvite(text.replace("43210","65536"));badInvite(text.replace("192.168.1.2","999.1.1.1"));badInvite(text.replace("DM-Hildir","../file"));
             }
             badInvite("OPEN-RUNE-INVITE-4\n");badInvite(new String(new char[1025]).replace('\0','x'));
             check(accepted==157&&maps.size()==44&&variants.size()==14,"Unexpected evidence matrix");
-            System.out.println("PASS: 157 supported menu combinations, "+filtered+" unsupported combinations filtered; roster/limits/rotation validation; invitation formats 1–4 and malformed imports.");
+            System.out.println("PASS: 157 supported menu combinations, "+filtered+" unsupported combinations filtered; roster/limits/rotation validation; invitation formats 1–5 and malformed imports.");
         }finally{try(java.util.stream.Stream<Path> files=Files.walk(root)){files.sorted(Comparator.reverseOrder()).forEach(p->{try{Files.delete(p);}catch(IOException e){throw new RuntimeException(e);}});}}
     }
 }

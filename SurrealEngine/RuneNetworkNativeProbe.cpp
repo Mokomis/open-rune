@@ -1,3 +1,6 @@
+#include "RuneCorpse.h"
+#include "RuneSlam.h"
+#include "RuneBattleLaws.h"
 #include "Precomp.h"
 #include "RuneNetwork.h"
 #include "RuneBot.h"
@@ -6,7 +9,9 @@
 #include "Packages/Engine/Resources/UPalette.h"
 #include "RuneDualWield.h"
 #include "RuneBloodlust.h"
+#include "RunePhysics.h"
 #include "RuneBash.h"
+#include "RuneKick.h"
 #include "RuneParticles.h"
 #include "RuneRushPose.h"
 #include "Engine.h"
@@ -25,14 +30,21 @@
 #include <set>
 using namespace openrune::net;
 void RunRuneBotGoalProbe(Engine& game);
+void RunRuneBotTraversalProbe(Engine& game);
 void RunRuneBotTeamProbe(Engine& game);
 void RunRuneBotCrowdProbe(Engine& game);
 void RunRuneNetworkNativeProbe(Engine& game)
 {
+    if(commandline->HasArg("","--rune-bot-traversal-probe")){RunRuneBotTraversalProbe(game);return;}
     if(commandline->HasArg("","--rune-bot-crowd-probe") || commandline->HasArg("","--rune-bot-group-probe")){RunRuneBotCrowdProbe(game);return;}
     if(commandline->HasArg("","--rune-bot-team-probe")){RunRuneBotTeamProbe(game);return;}
     if(commandline->HasArg("","--rune-bot-goal-probe") || commandline->HasArg("","--rune-bot-navigation-probe")){RunRuneBotGoalProbe(game);return;}
+ struct RestoreLaws{uint32_t value=RuneBattleLaws::Campaign.load();~RestoreLaws(){RuneBattleLaws::Campaign=value;}} restoreLaws;
+ RuneBattleLaws::Campaign=RuneBattleLaws::All; // Explicit fixture rules; real campaign still rejects leap.
     auto check=[](bool v,const char* why){if(!v)throw std::runtime_error(std::string("network native combat: ")+why);};
+    check(RuneBloodlust::AllowNormal.load(),"normal-combat moves are enabled by default");
+    struct RestoreNormal{bool value;~RestoreNormal(){RuneBloodlust::AllowNormal=value;}} restoreNormal{RuneBloodlust::AllowNormal.load()};
+    RuneBloodlust::AllowNormal=false; // Explicit legacy-mode baseline before normal-combat cases.
     RuneDualWield::Enabled=true;RuneBloodlust::Enabled=true;RuneTactics::Enabled=false;
     game.NetworkAuthority=true;
     auto url=game.GetDefaultURL("DM-Hildir.run");url.AddOrReplaceOption("game=RuneI.RuneMultiPlayer");game.LoadMap(url);
@@ -55,6 +67,7 @@ void RunRuneNetworkNativeProbe(Engine& game)
     check(lane,"clear lane");
     auto reset=[&](float distance){
         for(auto* a:{p,target}) {
+            RunePhysics::Release(a);
             a->Health()=10000;auto* parts=static_cast<int*>(a->GetProperty("BodyPartHealth"));for(int j=0;j<15;++j)parts[j]=10000;
             a->Bloodlust={};a->RuneKickActive=a->RuneKickPending=false;a->RuneBashPhase=0;a->RuneBashPending=false;
             a->RuneKickRecoilTime=0;a->RuneKickImmunity=0;a->Dual.lastWholeBody=-1;a->Dual.guard=false;a->Dual.guardBlend=0;a->Dual.recovery=0;
@@ -94,7 +107,29 @@ void RunRuneNetworkNativeProbe(Engine& game)
         return UObject::TryCast<UPlayerPawn>(replica.actor(authority.identity(p)));
     };
     reset(150);give(p,"VikingShortSword",true);auto* off=UObject::TryCast<UWeapon>(give(p,"HandAxe",false));
+    // Native eligibility and execution gates, not just menu-model checks.
+    {
+      auto original=RuneBattleLaws::Campaign.load();RuneBattleLaws::Campaign=0;
+      check(!RuneKick::Compatible(p)&&!RuneKick::Start(p),"unchecked kick rejects player and AI eligibility/execution");
+      check(!RuneBash::Compatible(p)&&!RuneBash::Start(p),"unchecked bash rejects player and AI eligibility/execution");
+      check(!RuneDualWield::Equip(p,off),"unchecked dual wield rejects equipment");
+      check(!RuneBloodlust::Readiness(p)&&!RuneBloodlust::Leap(p,direction)&&!RuneBloodlust::Charge(p),"unchecked special moves reject activation");
+      check(!RuneSlam::Supported(p)&&!RuneSlam::Arm(p),"unchecked slam rejects AI eligibility/activation");
+      check(!RuneCorpse::Pickup(p,nullptr)&&!RunePhysics::UseProp(p),"unchecked interactions reject activation");
+      check(!RunePhysics::ShieldRushKnockdown(target,p,vec3(100,0,150)),"unchecked knockdown rejects forced rush physics");
+      RuneBattleLaws::Campaign=original;
+      auto content=MakeRuneMatchContract(game,"DM-Hildir",2);
+      {RuneBattleLaws::MatchScope selected(RuneBattleLaws::All&~RuneBattleLaws::Kick);
+       check(!RuneKick::Compatible(p),"host law overrides local enabled kick");
+       check(MakeRuneMatchContract(game,"DM-Hildir",2).gameplayHash!=content.gameplayHash,"authenticated match contract binds laws");
+       RuneBattleLaws::Campaign=0;check(RuneBattleLaws::Allowed(RuneBattleLaws::Bash),"campaign preferences cannot veto host rules");}
+      RuneBattleLaws::Campaign=original;
+      check(!RuneBattleLaws::InMatch,"leaving match restores campaign context");
+      std::cout<<"LAWS_NATIVE_GATES_OK players_and_ai contract_bound isolated_campaign\n";
+    }
     check(RuneDualWield::Equip(p,off),"authority equips dual pair");
+    {RuneBattleLaws::Campaign=RuneBattleLaws::All&~RuneBattleLaws::Cross;RuneDualWield::Guard(p,true);
+     check(RuneDualWield::Equipped(p)&&!p->Dual.guard&&!RuneDualWield::Blocks(p,target),"crossed block can be disabled without disabling dual attacks");RuneBattleLaws::Campaign=RuneBattleLaws::All;}
     int rightDamage=0,leftDamage=0;
     for(int i=0;i<4;++i){
         reset(45);tick(1);int before=target->Health();check(action(1,ActionKind::Attack),"attack intent");
@@ -104,6 +139,81 @@ void RunRuneNetworkNativeProbe(Engine& game)
     check(rightDamage>0 && leftDamage>0 && p->Dual.leftSwings>=2 && p->Dual.rightSwings>=2,"both weapons damage through authority");
     reset(150);p->Dual.left=true;p->Dual.guard=true;p->Dual.guardBlend=1;
     auto* remote=snapshot();check(remote && RuneDualWield::Equipped(remote) && remote->Dual.left && remote->Dual.guardBlend==1,"replica pair/pose state");
+    if(commandline->HasArg("","--rune-combat-playback-probe")) {
+        World fixture;check(authority.capture(fixture),"playback fixture world");
+        auto own=authority.identity(p);auto* model=UObject::Cast<USkelModel>(GetRuneDisplayMesh(remote));
+        auto* proxy=UObject::Cast<UActor>(remote->GetUObject("AnimProxy"));
+        uint16_t sequence=0;
+        for(size_t i=0;i<model->Sequences.size();++i)
+            if(model->Sequences[i].Info.Name==p->Weapon()->GetName("A_AttackStandA"))sequence=uint16_t(i+1);
+        check(sequence!=0,"playback standing attack");
+        const double rate=double(int16_t(1.2*256))/256;
+        auto installFrame=[&](uint64_t hostTick,double phase,uint32_t life=0) {
+            auto world=fixture;
+            for(auto& e:world)if(e.ref==own) {
+                e.bodyAnimation=e.torsoAnimation=sequence;e.flags&=uint8_t(~(8|16));
+                e.animationPhase=e.torsoPhase=int16_t(std::lround(phase*32767));
+                e.animationRate=e.torsoRate=int16_t(std::lround(rate*256));
+                e.combat.guard=0;e.combat.flags&=uint8_t(~2);
+                if(life)e.life=life;
+            }
+            Snapshot s{++snapshotId,0,hostTick,world},decoded;Bytes wire;
+            check(encodeSnapshot(s,nullptr,wire)&&decodeSnapshot(wire,nullptr,decoded),"playback wire frame");
+            check(replica.install(decoded),"playback installed frame");
+        };
+        struct Metrics {double rms=0;int holds=0,frames=0,rewinds=0;};
+        auto replay=[&](bool smooth,int hz) {
+            Metrics result;const double jitter[]={0,.012,-.009,.018,-.004,.008,-.012,.005};
+            struct Packet {double at,phase;uint64_t tick;};std::vector<Packet> packets;
+            auto firstTick=replica.installedTick()+2;
+            for(int n=0;n<18;++n)if(n!=9)packets.push_back({n/30.+jitter[n%8],.05+n/30.*rate,firstTick+uint64_t(n*2)});
+            size_t installed=0;double started=game.TotalTime+1,received=started,spacing=1./30,lastPhase=.05;
+            installFrame(packets[0].tick,packets[0].phase);
+            for(int frame=0;frame<int(hz*.55);++frame) {
+                double clock=started+double(frame)/hz;game.TotalTime=clock;
+                while(installed+1<packets.size() && packets[installed+1].at<=clock-started) {
+                    ++installed;spacing=std::clamp(clock-received,.016,.150);received=clock;
+                    installFrame(packets[installed].tick,packets[installed].phase);
+                }
+                double alpha=std::clamp((clock-received)/spacing,0.,1.);
+                replica.present(alpha,smooth?clock:-1);
+                const double phase=proxy->AnimFrame();
+                auto bones=model->ActorJointMatrices(remote);
+                for(auto& bone:bones)for(int k=0;k<16;++k)check(std::isfinite(bone[k]),"playback finite rendered skeleton");
+                if(frame>hz*.10) {
+                    double delta=phase-lastPhase;
+                    if(delta < -2e-5)++result.rewinds;
+                    if(smooth && delta < -2e-5)std::cout<<"NET_PLAYBACK_REWIND frame="<<frame<<" hz="<<hz<<" previous="<<lastPhase<<" current="<<phase<<" now="<<clock<<" alpha="<<alpha<<" packet="<<installed<<" snapshot="<<replica.installedId()<<" rate="<<proxy->AnimRate()<<" physics="<<fixture.front().physical.kind<<'\n';
+                    if(smooth)check(delta>=-2e-5,"playback rewound a continuous strike");
+                    if(smooth)check(delta<=rate*1.25/hz+1e-4,"playback single-frame jump");
+                    result.rms+=std::pow(delta*hz-rate,2);result.holds+=delta<1e-5;++result.frames;
+                }
+                lastPhase=phase;
+            }
+            result.rms=std::sqrt(result.rms/result.frames);return result;
+        };
+        for(int hz:{60,120,144,165,240}) {
+            auto old=replay(false,hz),smooth=replay(true,hz);
+            std::cout<<"NET_PLAYBACK_CADENCE hz="<<hz<<" old_rms="<<old.rms<<" smooth_rms="<<smooth.rms
+                <<" old_holds="<<old.holds<<" smooth_holds="<<smooth.holds<<" old_rewinds="<<old.rewinds<<" smooth_rewinds="<<smooth.rewinds<<'\n';
+            check(smooth.rms<old.rms*.65,"playback cadence not meaningfully smoother");
+        }
+        // A repeated clip's new tween starts from the last displayed pose.
+        auto source=model->SampleAnimation(proxy);auto hostTick=replica.installedTick()+2;
+        installFrame(hostTick,-.025);
+        check(proxy->RuneTweenPose.size()==source.size(),"same-clip restart captured tween");
+        for(size_t j=0;j<source.size();++j)
+            check(length(source[j].Position-proxy->RuneTweenPose[j].Position)<.001f && source[j].Rotation==proxy->RuneTweenPose[j].Rotation,"restart uses displayed source");
+        replica.present(0,game.TotalTime+.001);check(proxy->AnimFrame()<0,"windup advanced into unconfirmed strike");
+        RuneAnimationPlayback clock;RuneAnimationPlayback::Sample sample{1,1,1,1,1,.2,rate,.9,false};
+        clock.present(sample,1,.2);check(clock.present(sample,2,.2)<=.2+rate*.05+1e-8,"animation extrapolation unbounded");
+        sample.snapshot++;sample.sequence++;sample.phase=.01;
+        check(clock.present(sample,2.001,.01)==.01,"new interruption delayed");
+        ++sample.life;sample.snapshot++;sample.phase=.4;
+        check(clock.present(sample,2.002,.4)==.4,"new-life playback not reset");
+        std::cout<<"NET_COMBAT_PLAYBACK_OK confirmed_clip cadence restart windup life gap skeleton\n";
+        return;
+    }
     PlayerScore tagScore;tagScore.player=2;tagScore.pawn=authority.identity(p);
     check(replica.scoredPawn(tagScore)==remote,"team tag resolves current pawn independently of slot");
     ++tagScore.pawn.generation;check(replica.scoredPawn(tagScore)==nullptr,"team tag rejects retired pawn generation");
@@ -114,6 +224,7 @@ void RunRuneNetworkNativeProbe(Engine& game)
     for(int scenario=0;scenario<4;++scenario) {
         World observations;check(authority.capture(observations),"negative bot observations");
         const auto own=authority.identity(p),enemy=authority.identity(target);
+        for(auto& observed:observations)if(observed.ref==own)observed.combat.ready=3; // Availability must not mask missing-target bugs.
         if(scenario==0)std::erase_if(observations,[&](const Entity& e){return e.kind==EntityKind::Pawn && e.ref!=own;});
         for(auto& e:observations)if(e.ref==enemy) {
             if(scenario==1)e.flags|=32;
@@ -124,7 +235,7 @@ void RunRuneNetworkNativeProbe(Engine& game)
         RuneBot::Brain brain(717+scenario,1);
         for(uint64_t time=1000;time<=6000;time+=100) {
             auto decision=brain.think(game,replica,observations,status,own,time);
-            check(!decision.action || (*decision.action!=ActionKind::Kick && *decision.action!=ActionKind::Bash && *decision.action!=ActionKind::Attack),"normal bot needs a live nearby opponent for close combat");
+            check(!decision.action || (*decision.action!=ActionKind::Kick && *decision.action!=ActionKind::Bash && *decision.action!=ActionKind::Attack && *decision.action!=ActionKind::BloodLeap && *decision.action!=ActionKind::ShieldCharge),"normal bot needs a live visible opponent for combat");
             ++emptyKickChecks;
         }
     }
@@ -137,11 +248,28 @@ void RunRuneNetworkNativeProbe(Engine& game)
         check(self!=nearby.end() && foe!=nearby.end(),"positive bot roster");
         foe->position=self->position;foe->position[0]+=45*8;foe->health=100;foe->flags=3;
         RuneBot::Brain brain(717,1);MatchStatus status;status.mode=GameMode::Deathmatch;status.phase=MatchPhase::Playing;bool kicked=false;
-        for(uint64_t time=1000;time<=6000;++time) {
+        for(uint64_t time=1000;time<=61000;time+=100) {
             auto decision=brain.think(game,replica,nearby,status,own,time);
             if(decision.action==ActionKind::Kick){kicked=true;break;}
         }
         check(kicked,"eligible normal bot still kicks a close visible enemy");
+        for(auto mode:{GameMode::Deathmatch,GameMode::TeamDeathmatch,GameMode::Arena,GameMode::HeadBall}){
+            auto saved=RuneBattleLaws::Campaign.load();RuneBattleLaws::Campaign=0;
+            RuneBot::Brain restricted(717,1);auto rules=status;rules.mode=mode;rules.arenaPhase=1;rules.headBallStarted=true;
+            PlayerScore ownPlayer;ownPlayer.player=1;ownPlayer.team=0;ownPlayer.pawn=own;
+            PlayerScore foePlayer;foePlayer.player=2;foePlayer.team=1;foePlayer.pawn=enemy;rules.scores={ownPlayer,foePlayer};
+            unsigned ordinary=0;
+            for(uint64_t time=1000;time<31000;time+=100){auto d=restricted.think(game,replica,nearby,rules,own,time);ordinary+=d.action==ActionKind::Attack;
+                check(!d.action||(*d.action!=ActionKind::Kick&&*d.action!=ActionKind::Bash&&*d.action!=ActionKind::BloodLeap&&*d.action!=ActionKind::ShieldCharge),"bot does not select unchecked moves");}
+            if(mode==GameMode::Deathmatch)check(ordinary>0,"restricted bot still uses ordinary weapon attacks");
+            RuneBattleLaws::Campaign=saved;
+        }
+        std::cout<<"LAWS_BOT_PLANNER_OK four_modes unchecked_moves_not_selected\n";
+        RuneBot::Brain cadence(717,1);unsigned sampledKicks=0,sampledAttacks=0;
+        for(uint64_t time=1000;time<61000;time+=100){auto d=cadence.think(game,replica,nearby,status,own,time);sampledKicks+=d.action==ActionKind::Kick;sampledAttacks+=d.action==ActionKind::Attack;}
+        check(sampledKicks>0 && sampledKicks<=12 && sampledAttacks>sampledKicks*3,"bot kicks remain occasional rather than replacing ordinary weapon attacks");
+        std::cout<<"BOT_KICK_POLICY_SAMPLE seconds=60 stationary_visible_enemy=1 distance=45 kicks="<<sampledKicks<<" attacks="<<sampledAttacks<<" actual_actions_executed=0"<<std::endl;
+
     }
     auto* serverModel=UObject::TryCast<USkelModel>(GetRuneDisplayMesh(p));
     auto serverPose=serverModel->ActorJointMatrices(p);
@@ -158,6 +286,8 @@ void RunRuneNetworkNativeProbe(Engine& game)
     std::cout<<"PREVIEW_IDLE sequence="<<previewProxy->AnimSequence().ToString()<<" loop="<<previewProxy->bAnimLoop()<<" frame="<<previewProxy->AnimFrame()<<" idle="<<p->Weapon()->GetName("A_Idle").ToString()<<std::endl;
     Input previewInput;previewInput.life=1;previewInput.held=2;
     check(replica.anticipate(authority.identity(p),9001,ActionKind::RaiseShield,previewInput,now),"anticipate crossed guard");
+    replica.present(1,double(now+8)/1000);replica.presentAnticipation(now+8);
+    check(remote->RuneCombatPreviewGuard>0 && !p->Dual.guard,"crossed block responds on first render frame");
     replica.presentAnticipation(now+60);
     check(remote->RuneCombatPreviewGuard>.4f && !remote->Dual.guard && !p->Dual.guard,"crossed visual guard is not gameplay defense");
     replica.clearAnticipation();check(remote->RuneCombatPreviewGuard<0,"crossed preview cleared");
@@ -222,16 +352,26 @@ void RunRuneNetworkNativeProbe(Engine& game)
     const auto unchangedHealth=target->Health();auto previewStart=model->ActorJointMatrices(remote);
     previewInput.held=1;
     check(replica.anticipate(authority.identity(p),9002,ActionKind::Attack,previewInput,now),"anticipate attack windup");
-    replica.presentAnticipation(now+50);auto previewMid=model->ActorJointMatrices(remote);float previewMotion=0;
+    replica.present(1,double(now+8)/1000);replica.presentAnticipation(now+8);
+    auto firstPreview=model->ActorJointMatrices(remote);float firstAttackMotion=0;
+    for(size_t j=0;j<firstPreview.size();++j)for(int k=0;k<16;++k)firstAttackMotion=std::max(firstAttackMotion,std::abs(firstPreview[j][k]-previewStart[j][k]));
+    check(firstAttackMotion>.001f,"attack responds on first render frame with playback enabled");
+    replica.present(1,double(now+50)/1000);replica.presentAnticipation(now+50);auto previewMid=model->ActorJointMatrices(remote);float previewMotion=0;
     for(size_t j=0;j<previewMid.size();++j)for(int k=0;k<16;++k)previewMotion=std::max(previewMotion,std::abs(previewMid[j][k]-previewStart[j][k]));
-    check(previewMotion>.01f && previewProxy->AnimSequence()==originalSequence && previewProxy->AnimFrame()==originalFrame,"preview moves skeleton without changing replicated animation clock");
+    check(previewMotion>.01f && previewProxy->AnimSequence()==originalSequence && std::abs(previewProxy->AnimFrame()-originalFrame)<.0001f,"preview moves skeleton without changing replicated animation clock");
     check(target->Health()==unchangedHealth && !remote->bFire() && !p->bFire(),"prediction has no attack/damage side effects");
     replica.resolveAnticipation({9002,Admission::ExecutionRejected},now+60);replica.presentAnticipation(now+100);
     check(previewProxy->RuneCombatPreviewWeight>0 && previewProxy->RuneCombatPreviewWeight<1,"rejected preview blends back");
     replica.presentAnticipation(now+141);check(previewProxy->RuneCombatPreviewWeight==0,"rejected preview fully clears");
     previewInput.held=2;
     check(replica.anticipate(authority.identity(p),9003,ActionKind::RaiseShield,previewInput,now+150),"anticipate shield raise");
-    replica.presentAnticipation(now+190);check(previewProxy->RuneCombatPreviewWeight==1,"shield raise visible before host response");
+    auto shieldStart=model->ActorJointMatrices(remote);
+    replica.present(1,double(now+158)/1000);replica.presentAnticipation(now+158);
+    auto firstShield=model->ActorJointMatrices(remote);float firstBlockMotion=0;
+    for(size_t j=0;j<firstShield.size();++j)for(int k=0;k<16;++k)firstBlockMotion=std::max(firstBlockMotion,std::abs(firstShield[j][k]-shieldStart[j][k]));
+    check(firstBlockMotion>.001f,"shield block responds on first render frame with playback enabled");
+    std::cout<<"NET_FIRST_FRAME_RESPONSE attack_motion="<<firstAttackMotion<<" block_motion="<<firstBlockMotion<<" milliseconds=8\n";
+    replica.present(1,double(now+190)/1000);replica.presentAnticipation(now+190);check(previewProxy->RuneCombatPreviewWeight==1,"shield raise visible before host response");
     check(!p->bAltFire() && !remote->bAltFire(),"visual shield cannot grant block");
     check(replica.anticipate(authority.identity(p),9004,ActionKind::LowerShield,previewInput,now+200),"rapid release replaces raise");
     replica.resolveAnticipation({9003,Admission::ExecutionRejected},now+210);
@@ -278,6 +418,28 @@ void RunRuneNetworkNativeProbe(Engine& game)
     check(bashSounds.size()>=2,"bash swing and impact sound cues");
     std::cout<<"NET_NATIVE_BASH_PRESENTATION_OK sounds="<<bashSounds.size()<<" recoil="<<length(target->Location()-targetBefore)<<" body_pose_error="<<bashPoseError<<" joint_motion="<<reactionMotion<<std::endl;
     check(bashPoseError<.15f && reactionMotion>1,"visible replica stagger pose matches authority");
+    {
+        auto* rt=UObject::Cast<UPawn>(replica.actor(authority.identity(target)));
+        auto time=game.LevelInfo->TimeSeconds();
+        target->RuneBashImpactAt=-1000;
+        auto base=reactionModel->ActorPose(target),kicked=base;
+        RuneBash::PresentImpact(target,true);game.LevelInfo->TimeSeconds()=time+.045f;
+        RuneBash::ApplyPose(*reactionModel,target,kicked);
+        float headChange=0;
+        for(size_t j=0;j<base.size();++j) {
+            check(base[j].Position==kicked[j].Position && base[j].Scale==kicked[j].Scale,"bash recoil retains bone shape");
+            auto a=RunePoseRotation(base[j].Rotation),b=RunePoseRotation(kicked[j].Rotation);
+            if(reactionModel->Joints[j].Name=="head")for(int n=0;n<16;++n)headChange=std::max(headChange,std::abs(a[n]-b[n]));
+            else check(base[j].Rotation==kicked[j].Rotation,"bash recoil isolated to head");
+        }
+        check(headChange>.3f,"confirmed bash visibly snaps head back");
+        auto recovered=base;game.LevelInfo->TimeSeconds()=time+.35f;RuneBash::ApplyPose(*reactionModel,target,recovered);
+        for(size_t j=0;j<base.size();++j)check(base[j].Rotation==recovered[j].Rotation,"head recoil finishes promptly");
+        game.LevelInfo->TimeSeconds()=time;RuneBash::PresentImpact(rt,true);
+        check(rt->RuneBashImpactAt==time && rt->RuneBashImpactStrength==1,"replica accepts cosmetic confirmed-hit reaction");
+        game.LevelInfo->TimeSeconds()=time;
+        std::cout<<"NET_NATIVE_BASH_HEAD_OK peak="<<headChange<<" duration=.34"<<std::endl;
+    }
     reset(150);tick(240);
     auto full=[&](){p->SetBool("bBloodLust",true);p->SetInt("Strength",p->GetInt("MaxStrength"));};
     reset(450);check(!action(1,ActionKind::ShieldCharge,2),"charge without bloodlust rejected");full();
@@ -301,6 +463,14 @@ void RunRuneNetworkNativeProbe(Engine& game)
     before=target->Health();check(action(1,ActionKind::ShieldCharge,2),"blocked charge action");tick(110);
     check(p->Bloodlust.hits==1 && target->Health()<before && before-target->Health()<openDamage,"blocked charge reduced impact");
     std::cout<<"NET_NATIVE_BLOOD_OK open_damage="<<openDamage<<" blocked_damage="<<before-target->Health()<<" leap=1 charge=1 replica=1\n";
+    reset(60);tick(180);p->RuneKickCooldown=0;
+    const auto kickStartedAt=now;check(action(1,ActionKind::Kick),"kick timing sample starts");
+    for(int frame=0;frame<120 && p->RuneKickPending;++frame)tick(1);
+    check(!p->RuneKickPending,"kick timing sample reaches authored contact");
+    const auto kickContactAt=now;
+    check(kickContactAt-kickStartedAt>=340 && kickContactAt-kickStartedAt<=410,"shared kick animation reaches contact in 350-400ms with fixed-step tolerance");
+    for(int frame=0;frame<180 && p->RuneKickActive;++frame)tick(1);
+    std::cout<<"ACTUAL_KICK_TIMING contact_ms="<<kickContactAt-kickStartedAt<<" whole_move_ms="<<now-kickStartedAt<<" authored_notify=1 tick_ms=17"<<std::endl;
     reset(62);p->SetInt("RunePower",0);give(target,"VikingShield",true);target->bAltFire()=1;
     check(action(2,ActionKind::RaiseShield,2),"bot bash defender raises shield");tick(8);
     RuneBot::Brain bashBrain(73,1);auto beforeBash=target->Location();
@@ -312,14 +482,19 @@ void RunRuneNetworkNativeProbe(Engine& game)
     // Exercise the real bot planner, then admit its commands through the
     // production authority. Only this fixture's placement/meter are supplied;
     // the planner must produce a valid double tap and held-block charge itself.
-    for(bool outside:{false,true})for(bool leap : {false,true}) {
-        reset(300);RuneBloodlust::AllowNormal=outside;
-        if(outside){p->SetInt("Strength",0);p->SetBool("bBloodLust",false);check(RuneBloodlust::Readiness(p)&1,"normal combat readiness without rage");}
+    for(auto gameMode:{GameMode::Deathmatch,GameMode::TeamDeathmatch,GameMode::Arena,GameMode::HeadBall})
+    for(int moveMode:{0,1,2})for(bool leap : {false,true}) {
+        if(gameMode!=GameMode::Deathmatch && moveMode!=1)continue;
+        const bool outside=moveMode!=0;
+        reset(leap?450:250);RuneBloodlust::AllowNormal=outside;
+        if(moveMode==1){p->SetInt("Strength",0);p->SetBool("bBloodLust",false);check(RuneBloodlust::Readiness(p)&1,"normal combat readiness without rage");}
         else full();
-        auto* savedShield=p->GetUObject("Shield");
-        if(leap)p->SetObject("Shield",nullptr);
+        const int initialMeter=p->GetInt("Strength");
+        check(p->GetUObject("Shield")!=nullptr,"both special moves are tested with shield equipped");
         RuneBot::Brain brain(73,1);
-        MatchStatus status;status.mode=GameMode::Deathmatch;status.phase=MatchPhase::Playing;
+        MatchStatus status;status.mode=gameMode;status.phase=MatchPhase::Playing;status.arenaPhase=1;status.headBallStarted=true;
+        PlayerScore ownScore;ownScore.player=1;ownScore.team=0;ownScore.pawn=authority.identity(p);
+        PlayerScore foeScore;foeScore.player=2;foeScore.team=1;foeScore.pawn=authority.identity(target);status.scores={ownScore,foeScore};
         bool acceptedSpecial=false,sawJump=false;
         for(int i=0;i<20 && !acceptedSpecial;++i) {
             tick(6);snapshot();World observations;check(authority.capture(observations),"bot decision observations");
@@ -329,21 +504,71 @@ void RunRuneNetworkNativeProbe(Engine& game)
             if(!decision.action)continue;
             auto input=decision.input;input.sequence=++actionId;input.createdMs=now;
             AdmittedAction request{{actionId,actionId,now,input.life,*decision.action},input,now};
+            const int beforeMoveMeter=p->GetInt("Strength");
             bool admitted=authority.action(1,request,now);
             if(*decision.action==ActionKind::Jump){check(admitted,"bot first jump admitted");sawJump=true;}
             if(*decision.action==(leap?ActionKind::BloodLeap:ActionKind::ShieldCharge)) {
                 check(admitted,"bot special met real gesture/equipment contract");
+                if(outside)check(p->GetInt("Strength")==beforeMoveMeter,"normal-combat move consumes no meter, including during active rage");
                 check(leap?sawJump:bool(input.held&2),"bot special includes required input");acceptedSpecial=true;
             }
         }
-        if(leap)p->SetObject("Shield",savedShield);
         check(acceptedSpecial,leap?"bot never performed rage leap":"bot never performed shield charge");
-        if(outside)check(p->GetInt("Strength")==0 && p->Bloodlust.cooldown>3.8f,"normal combat move keeps zero meter and real cooldown");
+        std::cout<<"NET_NORMAL_MOVE game_mode="<<int(gameMode)<<" mode="<<moveMode<<" leap="<<leap<<" meter_initial="<<initialMeter<<" meter_after="<<p->GetInt("Strength")<<" cooldown="<<p->Bloodlust.cooldown<<std::endl;
+        if(outside)check(p->Bloodlust.cooldown>3.8f && (moveMode!=1 || p->GetInt("Strength")==0),"normal combat retains cooldown and needs no rage");
         tick(180);
     }
+    RuneBloodlust::AllowNormal=true;
+    for(bool leap:{false,true}){
+        reset(leap?450:250);snapshot();World seen;check(authority.capture(seen),"ally corridor observations");
+        std::erase_if(seen,[](const Entity& e){return e.kind!=EntityKind::Pawn;});
+        auto self=std::find_if(seen.begin(),seen.end(),[&](const Entity& e){return e.ref==authority.identity(p);});check(self!=seen.end(),"ally corridor self");
+        Entity ally=*self;ally.ref={900001,1};auto at=p->Location()+direction*300.f;ally.position={int32_t(at.x*8),int32_t(at.y*8),int32_t(at.z*8)};seen.push_back(ally);
+        MatchStatus state;state.mode=GameMode::TeamDeathmatch;state.phase=MatchPhase::Playing;
+        PlayerScore own;own.player=1;own.team=0;own.pawn=authority.identity(p);
+        PlayerScore foe;foe.player=2;foe.team=1;foe.pawn=authority.identity(target);
+        PlayerScore friendScore;friendScore.player=3;friendScore.team=0;friendScore.pawn=ally.ref;state.scores={own,foe,friendScore};
+        RuneBot::Brain brain(73,1);
+        for(uint64_t time=1000;time<4000;time+=100){auto d=brain.think(game,replica,seen,state,own.pawn,time);check(!d.action || (*d.action!=ActionKind::BloodLeap && *d.action!=ActionKind::ShieldCharge),"bot avoids special-move corridor occupied by ally");}
+    }
+    std::cout<<"BOT_SPECIAL_ALLY_LANE_OK rush_and_leap"<<std::endl;
     RuneBloodlust::AllowNormal=false;reset(300);p->SetInt("Strength",0);p->SetBool("bBloodLust",false);
     check(RuneBloodlust::Readiness(p)==0,"disabling normal mode restores rage requirement");
-    std::cout<<"NET_BOT_SPECIALS_OK full_rage_and_normal_combat double_tap held_block authority_admitted cooldowns\n";
+    std::cout<<"NET_BOT_SPECIALS_OK rage_only_and_normal_combat_empty_or_full_meter double_tap held_block authority_admitted cooldowns\n";
+    // A normal-combat rush must physically topple the remote player in every
+    // physics mode; the existing authoritative pose carries it to clients.
+    const int savedPhysics=RunePhysics::RequestedMode.load();
+    RuneDualWield::Enabled=false;RuneBloodlust::AllowNormal=true;
+    give(p,"VikingShield",true);tick(60);
+    for(int physicsMode:{0,1,2}) {
+        RunePhysics::BeforeSave();RunePhysics::Reset();RunePhysics::RequestedMode=physicsMode;tick(1);reset(100);
+        check(RuneBloodlust::Charge(p),"zero-rage shield rush starts");
+        bool down=false;float away=0;const vec3 start=target->Location();
+        for(int frame=0;frame<90 && !down;++frame){tick(1);down=RunePhysics::Controls(target);}
+        check(down,"shield rush must knock down its target in every physics mode");
+        World physical;check(authority.capture(physical),"capture rushed opponent");
+        auto entity=std::find_if(physical.begin(),physical.end(),[&](const Entity& e){return e.ref==authority.identity(target);});
+        check(entity!=physical.end() && entity->physical.kind==1,"rush ragdoll is replicated");
+        snapshot();check(RunePhysics::Controls(replica.actor(authority.identity(target))),"remote opponent visibly uses physical presentation");
+        for(int frame=0;frame<30;++frame){tick(1);away=std::max(away,dot(target->Location()-start,direction));}
+        check(away>20,"rush ragdoll travels away from attacker");
+        tick(420);check(!RunePhysics::Controls(target) && target->Health()>0,"rushed opponent recovers alive");
+        check(RunePhysics::mode()==physicsMode,"rush does not change saved ambient physics mode");
+        std::cout<<"NET_RUSH_KNOCKDOWN_OK mode="<<physicsMode<<" backwards="<<away<<" replicated=1 recovered=1"<<std::endl;
+    }
+    RunePhysics::BeforeSave();RunePhysics::Reset();RunePhysics::RequestedMode=0;tick(1);
+    give(target,"VikingShield",true);tick(60);reset(100);
+    check(action(2,ActionKind::RaiseShield),"rush target raises shield");
+    check(RuneKick::ShieldBlocks(target,p),"rush target really blocks toward attacker");
+    const int guardedHealth=target->Health();
+    check(RuneBloodlust::Charge(p),"rush against raised shield starts");
+    for(int frame=0;frame<90 && !RunePhysics::Controls(target);++frame)tick(1);
+    check(RunePhysics::Controls(target),"blocking reduces damage but still topples rush target");
+    check(guardedHealth-target->Health()<openDamage,"shield retains reduced rush damage with original game damage multipliers");
+    tick(420);check(!RunePhysics::Controls(target) && target->Health()>0,"blocking rush target recovers");
+    std::cout<<"NET_RUSH_BLOCK_KNOCKDOWN_OK reduced_damage=1 recovered=1"<<std::endl;
+    RunePhysics::BeforeSave();RunePhysics::Reset();RunePhysics::RequestedMode=savedPhysics;tick(1);
+    RuneBloodlust::AllowNormal=false;RuneDualWield::Enabled=true;
     // The charge uses the shared contact filter before damage OR recoil runs.
     reset(130);
     auto* originalGame=game.GameInfo;

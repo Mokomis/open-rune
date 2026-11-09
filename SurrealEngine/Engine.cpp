@@ -2,11 +2,17 @@
 #include "RuneSnow.h"
 #include "RuneController.h"
 #include "RuneVisualEffects.h"
+#include "RuneStairPresentation.h"
+#include "RuneSlamVisualProbe.h"
 
 #include "Precomp.h"
+#include "RunePhysics.h"
+#include "RuneNavigation.h"
 #include "RuneGore.h"
 #include "RuneGoreProbe.h"
 #include "RuneCorpseVisualProbe.h"
+#include "RunePhysicsVisualProbe.h"
+#include "RuneLocalStairProbe.h"
 #include <iostream>
 #include "Engine.h"
 #include "RuneMenu.h"
@@ -235,6 +241,10 @@ void Engine::Run()
     RuneLiftProbe liftProbe;
     RuneGoreProbe goreProbe;
     RuneCorpseVisualProbe corpseProbe;
+    RunePhysicsVisualProbe physicsProbe;
+    const auto normalSaveFolder=packages->GetSaveFolderPath();bool physicsSaveScope=false;
+    RuneLocalStairProbe localStairProbe;
+    RuneSlamVisualProbe slamProbe;
 	int profileFrames=commandline->GetArgInt("", "--profile-frames", 0);
 	RuneParticleProfile::Milliseconds = {};
 	std::vector<double> profileTimes;
@@ -315,6 +325,7 @@ void Engine::Run()
 #ifdef OPENRUNE_ENABLE_NETWORK
         if(auto invite=RuneMultiplayer::TakeInvite();!invite.empty())
         {
+            if(physicsSaveScope){packages->SetSaveFolderPath(normalSaveFolder);physicsSaveScope=false;physicsProbe.Stop();}
             RuneCombat::Ready=false;RuneCombat::SessionRequest=0;RuneCombat::PracticeArena=false;
             SaveGameInfo.SaveGameSlot=DONT_SAVE_GAME;sessionSavePending=false;
             combatEnemy=nullptr;combatProbeTarget=nullptr;
@@ -339,6 +350,9 @@ void Engine::Run()
 		RuneParticleProfile::Enabled = profileFrames > 0 && probeFrame >= 60 && probeFrame < 60 + profileFrames;
 		int sessionAction=RuneCombat::SessionRequest.exchange(0);
 		if (sessionAction) RuneCombat::Ready.store(false);
+        if(physicsSaveScope&&(sessionAction==1||sessionAction==3||sessionAction==4||sessionAction==7||sessionAction==5)){packages->SetSaveFolderPath(normalSaveFolder);physicsSaveScope=false;physicsProbe.Stop();}
+        if(sessionAction==9){packages->SetSaveFolderPath(normalSaveFolder.parent_path()/"PhysicsPlayground");physicsSaveScope=true;physicsProbe.Start(probeFrame);RunePhysics::RequestedMode=std::max(1,RunePhysics::RequestedMode.load());sessionAction=5;}
+
 		if (sessionAction>0 && sessionAction<=7 && sessionAction!=5 && LaunchInfo.IsRune() && viewport->Actor())
 		{
 			if (sessionAction==2 || sessionAction==6)
@@ -384,7 +398,7 @@ void Engine::Run()
 		{
             if(sessionAction==5) {
                 practiceURL=GetDefaultURL("DM-Hildir.run");
-                practiceEnemy="GoblinWarrior";practiceShield="VikingShield";practiceSpawnFrame=240;
+                practiceEnemy=physicsSaveScope?"":"GoblinWarrior";practiceShield=physicsSaveScope?"":"VikingShield";practiceSpawnFrame=240;
             }
             titleIdle=false;
             SaveGameInfo.SaveGameSlot=DONT_SAVE_GAME;
@@ -400,6 +414,7 @@ void Engine::Run()
 			fireProbeFrame=blockFrame=forwardProbeFrames=0;
 			ClientTravelInfo.TravelType=ETravelType::TRAVEL_Absolute;
 			ClientTravelInfo.TransferItems=false;
+            if(physicsSaveScope)physicsProbe.Start(probeFrame);
 			LoadMap(practiceURL);
 			LoginPlayer();
 			CallEvent(console,"CloseUWindow");
@@ -670,11 +685,22 @@ void Engine::Run()
         liftProbe.Tick(*this,probeFrame);
         goreProbe.Before(*this,probeFrame);
         corpseProbe.Before(*this,probeFrame);
+        if(auto* p=viewport->Actor())CameraLocation+=RunePhysics::RenderOffset(p);
+        physicsProbe.Before(*this,probeFrame);
+        localStairProbe.Before(*this,probeFrame);
+        slamProbe.Before(*this,probeFrame);
+        RuneStairPresentation::Update(viewport->Actor(),m_GamePaused?0.f:levelElapsed);
+
 		auto profileDrawStart=std::chrono::steady_clock::now();
-		render->DrawGame(levelElapsed);
+        {RunePhysics::PresentationScope presentation;
+		render->DrawGame(m_GamePaused?0.f:levelElapsed);
+        }
 		auto profileDrawEnd=std::chrono::steady_clock::now();
         goreProbe.After(probeFrame);
         corpseProbe.After(*this,probeFrame);
+        physicsProbe.After(*this,probeFrame);
+        localStairProbe.After(*this,probeFrame);
+        slamProbe.After(*this,probeFrame);
 		VisualComparison::AppliedMode.store(appliedVisualMode);
 		VisualComparison::AppliedUpscale.store(appliedUpscale);
 		VisualComparison::AppliedClarity.store(appliedClarity);
@@ -701,6 +727,19 @@ void Engine::Run()
             }
         }
 		++probeFrame;
+        if(probeFrame==1 && commandline->HasArg("","--probe-position")) {
+            if(!LaunchInfo.IsRune() || !remainingFrames || !commandline->HasArg("","--save-directory"))
+                Exception::Throw("Position probe requires bounded Rune run and isolated saves");
+            auto value=commandline->GetArg("","--probe-position","");
+            std::replace(value.begin(),value.end(),',',' ');std::istringstream input(value);
+            vec3 p;int yaw=0,pitch=0;std::string extra;
+            if(!(input>>p.x>>p.y>>p.z>>yaw>>pitch) || (input>>extra) ||
+                !std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) ||
+                yaw < -65536 || yaw > 65536 || pitch < -16384 || pitch > 16384 ||
+                !viewport->Actor()->SetLocation(p))Exception::Throw("Invalid or blocked position probe");
+            auto* pawn=viewport->Actor();pawn->Velocity()=vec3(0);
+            pawn->SetRotation(Rotator(0,yaw,0));pawn->ViewRotation()=Rotator(pitch,yaw,0);
+        }
 		if (probeFrame == 1 && commandline->HasArg("", "--probe-start") && LaunchInfo.IsRune() && viewport->Actor())
 		{
 			// Select a placed start for opt-in encounter fixtures; do not bypass
@@ -772,7 +811,7 @@ void Engine::Run()
 				" surface_swim="+std::to_string(pawn->GetBool("bSurfaceSwimming"))+
 				" grab_edges="+std::to_string(pawn->GetBool("bCanGrabEdges"))+
 				" camera="+(camera?camera->Name.ToString():"None")+" point="+(point?point->Name.ToString():"None")+
-				" path_alpha="+std::to_string(camera?camera->PhysAlpha():0.0f)+" path_active="+std::to_string(camera?bool(camera->bInterpolating()):false));
+				" view="+std::to_string(CameraLocation.x)+","+std::to_string(CameraLocation.y)+","+std::to_string(CameraLocation.z)+","+std::to_string(CameraRotation.Yaw)+","+std::to_string(CameraRotation.Pitch)+" path_alpha="+std::to_string(camera?camera->PhysAlpha():0.0f)+" path_active="+std::to_string(camera?bool(camera->bInterpolating()):false));
 		}
         if(profileFrames>0 && probeFrame>60 && (int)profileTimes.size()<profileFrames) {
             auto ms=[](auto begin,auto end){return std::chrono::duration<double,std::milli>(end-begin).count();};
@@ -927,6 +966,8 @@ void Engine::Run()
 		{
             goreProbe.Finish();
             corpseProbe.Finish();
+            physicsProbe.Finish();
+            slamProbe.Finish();
 			if(saveProbe.Active()) Exception::Throw("Bounded run ended before save probe completed");
 			if(ropeProbe.Active()) Exception::Throw("Bounded run ended before rope probe completed");
 			if(gibProbe.Active()) Exception::Throw("Bounded run ended before gib probe completed");
@@ -1469,6 +1510,8 @@ void Engine::LoadEntryMap()
 
 void Engine::UnloadMap()
 {
+    RuneNavigation::Reset();
+    RunePhysics::Reset();
 	if (LevelPackage && LevelPackage != EntryLevelPackage)
 		packages->UnloadPackage(LevelPackage);
 
@@ -1485,6 +1528,8 @@ void Engine::UnloadMap()
 
 void Engine::LoadMap(const UnrealURL& url, const std::map<std::string, std::string>& travelInfo)
 {
+    RunePhysics::Reset();
+    RuneStairPresentation::Reset();
 	runePendingButtons.clear();runePulsedButtons.clear();
 	ClientTravelInfo.URL.Clear();
 
@@ -1700,6 +1745,8 @@ void Engine::SaveGameToSlot(int32_t slotNum, const std::string& saveDescription)
 		Exception::Throw("Invalid save slot: " + std::to_string(slotNum));
 
     RuneCorpse::BeforeSave();
+    RunePhysics::BeforeSave();
+    RuneSlam::BeforeSave();
 	// First and foremost ensure the Save folder exists
 	const auto saveFolderPath = packages->GetSaveFolderPath();
 	if (!fs::exists(saveFolderPath))

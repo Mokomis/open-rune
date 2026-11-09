@@ -1,5 +1,6 @@
 #include "RuneDesktopMenu.h"
 #include "RuneGore.h"
+#include "RuneCorpse.h"
 
 #include "Precomp.h"
 #include "VisibleRuneEffects.h"
@@ -34,6 +35,9 @@ void RenderSubsystem::DrawGame(float levelTimeElapsed)
 	engine->Level->Light.Tick(levelTimeElapsed);
     engine->Level->Light.PrepareEnvironmentProbes();
     RuneGore::Tick(levelTimeElapsed);
+    // Both the campaign loop and interactive multiplayer draw through here.
+    // Integrate secondary body motion once; shadow/reflection passes read it.
+    RuneCorpse::TickMotion(levelTimeElapsed);
 
 	Stats.Frames = 0;
 	Stats.Surfaces = 0;
@@ -182,7 +186,8 @@ void RenderSubsystem::OnMapLoaded()
         RuneEffects::Texture(0,false);RuneEffects::Texture(0,true);RuneEffects::Texture(0,true,true);
     }
     for (auto& light : ShadowLights) light = nullptr;
-    WaterMaterialKinds.clear(); Device->InvalidateWaterReflection();
+    ShadowFades.reset();
+    WaterMaterialKinds.clear(); WaterSkyReady=false; WaterSkyTexture=nullptr; WaterSkyColor=vec3(0); WaterDepthSamples.clear(); WaterFaceDepth.clear(); Device->InvalidateWaterReflection();
 	Device->Flush(true);
 	engine->Level->Light.OnMapLoaded();
 }

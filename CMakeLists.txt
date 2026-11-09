@@ -12,7 +12,7 @@ if(ANDROID)
 	set(SDL_STATIC OFF CACHE BOOL "" FORCE)
 	add_subdirectory("${SURREAL_ANDROID_SDL_SOURCE}" "${CMAKE_BINARY_DIR}/SDL2")
 	file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/android-includes")
-	file(CREATE_LINK "${SURREAL_ANDROID_SDL_SOURCE}/include" "${CMAKE_BINARY_DIR}/android-includes/SDL2" SYMBOLIC)
+	file(CREATE_LINK "${SURREAL_ANDROID_SDL_SOURCE}/include" "${CMAKE_BINARY_DIR}/android-includes/SDL2" SYMBOLIC COPY_ON_ERROR)
 	set(SDL2_INCLUDE_DIRS "${CMAKE_BINARY_DIR}/android-includes")
 	set(SDL2_FOUND TRUE)
 	set(ENABLE_SDL2 ON CACHE BOOL "" FORCE)
@@ -29,6 +29,16 @@ if(ANDROID)
 endif()
 
 add_subdirectory(Thirdparty/openmpt)
+add_subdirectory(Thirdparty/JoltPhysics)
+add_library(openrune_physics_world STATIC SurrealEngine/Physics/RunePhysicsWorld.cpp)
+target_include_directories(openrune_physics_world PUBLIC SurrealEngine)
+target_link_libraries(openrune_physics_world PUBLIC Jolt)
+set_target_properties(openrune_physics_world PROPERTIES CXX_STANDARD 20 POSITION_INDEPENDENT_CODE ON)
+if(NOT ANDROID)
+  add_executable(openrune_physics_tests EXCLUDE_FROM_ALL Tools/RuneValidation/cinematic_world.cpp)
+  target_link_libraries(openrune_physics_tests PRIVATE openrune_physics_world)
+  set_target_properties(openrune_physics_tests PROPERTIES CXX_STANDARD 20)
+endif()
 add_subdirectory(SurrealGPU)
 add_subdirectory(SurrealWidgets)
 
@@ -71,9 +81,13 @@ set(SURREALCOMMON_SOURCES
 	SurrealEngine/Engine.cpp
 	SurrealEngine/RuneKick.cpp
 	SurrealEngine/RuneBash.cpp
+	SurrealEngine/RuneSlam.cpp
+	SurrealEngine/RunePhysics.cpp
 	SurrealEngine/RuneRushPose.cpp
+	SurrealEngine/RuneStairPresentation.cpp
 	SurrealEngine/RuneBloodlust.cpp
 	SurrealEngine/RuneBloodlustProbe.cpp
+	SurrealEngine/RuneNavigation.cpp
 	SurrealEngine/RuneTactics.cpp
 	SurrealEngine/RuneCharacters.cpp
 	SurrealEngine/RuneCharacterPreview.cpp
@@ -1205,11 +1219,16 @@ set_target_properties(SurrealVideo PROPERTIES C_STANDARD 17)
 option(OPENRUNE_ENABLE_NETWORK "Build the experimental Open Rune network/engine boundary" OFF)
 if(OPENRUNE_ENABLE_NETWORK)
     add_subdirectory(Network EXCLUDE_FROM_ALL)
-    list(APPEND SURREALCOMMON_SOURCES SurrealEngine/RuneNetwork.cpp SurrealEngine/RuneNetworkProbe.cpp SurrealEngine/RuneNetworkNativeProbe.cpp SurrealEngine/RuneCorpseProbe.cpp SurrealEngine/RuneNetworkProcessProbe.cpp SurrealEngine/RuneMultiplayer.cpp SurrealEngine/RuneBot.cpp SurrealEngine/RuneBotProbe.cpp)
+    list(APPEND SURREALCOMMON_SOURCES SurrealEngine/RuneNetwork.cpp SurrealEngine/RuneNetworkProbe.cpp SurrealEngine/RuneNetworkNativeProbe.cpp SurrealEngine/RuneCorpseProbe.cpp SurrealEngine/RuneShadowCullingProbe.cpp SurrealEngine/RuneNetworkProcessProbe.cpp SurrealEngine/RuneMultiplayer.cpp SurrealEngine/RuneBot.cpp SurrealEngine/RuneBotProbe.cpp SurrealEngine/RuneBotTraversalProbe.cpp SurrealEngine/RuneBotTraversal.cpp)
 endif()
 add_library(SurrealCommon STATIC ${SURREALCOMMON_SOURCES} ${THIRDPARTY_SOURCES})
+target_sources(SurrealCommon PRIVATE SurrealEngine/RuneUpdates.cpp SurrealEngine/UI/Launcher/RuneUpdatesPage.cpp)
+if(WIN32)
+ target_link_libraries(SurrealCommon PUBLIC winhttp)
+endif()
 # Reuse the bundled TrueType rasterizer for Rune gameplay text.
 target_include_directories(SurrealCommon PRIVATE SurrealWidgets/include/surrealwidgets)
+target_link_libraries(SurrealCommon PUBLIC openrune_physics_world)
 if(OPENRUNE_ENABLE_NETWORK)
     target_link_libraries(SurrealCommon PUBLIC openrune_net)
     target_compile_definitions(SurrealCommon PUBLIC OPENRUNE_ENABLE_NETWORK=1)

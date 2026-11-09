@@ -203,6 +203,10 @@ void UActor::PhysLanded(UActor* hitActor, const vec3& hitNormal)
 	if (!hitActor)
 		hitActor = Level();
 
+    // Commit the aerial strike at the swept contact before the original
+    // BaseChange/JumpOffPawn scripts can bounce the attacker away.
+    if(auto* pawn=UObject::TryCast<UPawn>(this))RuneSlam::Landed(pawn,hitActor);
+
 	// landed on the floor
 	if (engine->LaunchInfo.IsRune())
 		CallEvent(this, EventName::Landed, { ExpressionValue::VectorValue(hitNormal), ExpressionValue::ObjectValue(hitActor) });
@@ -462,6 +466,12 @@ CollisionHit UActor::TryMove(const vec3& delta, bool dryRun, bool isOwnBaseBlock
 			{
 				if (hit.Actor != Level())
 				{
+                    // A point-blank slam can start with overlapping pawn
+                    // cylinders. An upward-facing exit contact is separating,
+                    // not a ceiling: let the launch leave that overlap. Real
+                    // incoming pawn contacts and all world/brush hits still block.
+                    if(engine->LaunchInfo.IsRune() && delta.z>0 && dot(delta,hit.Normal)>0 && hit.Actor->IsA("Pawn"))
+                        if(auto* pawn=UObject::TryCast<UPawn>(this);pawn && pawn->Slam.phase==1)continue;
 					bool isBlocking;
 					// Original MoveActor applies IsBlockedBy: a brush stops any
 					// world-colliding actor, whatever that actor's own block flags.

@@ -31,6 +31,24 @@ struct NativeCombat
     uint8_t runePower=0, runeCapacity=0; // original Rune Power, 0..200
     bool operator==(const NativeCombat&) const = default;
 };
+// Host-authored physical presentation, never accepted from a client.
+// Sparse immutable bind corrections preserve authored death poses without
+// sending unchanged reference bones. Position /64; positive scale /4096.
+struct PhysicalBasis {
+    uint8_t joint=0;
+    std::array<int16_t,3> position{};
+    std::array<uint16_t,3> scale{};
+    bool operator==(const PhysicalBasis&)const=default;
+};
+// Root in 1/8 units.
+struct PhysicalPose {
+    uint8_t kind=0; // 0=original, 1=ragdoll, 2=rigid prop, 3=ragdoll with bind corrections
+    std::array<int16_t,3> root{};
+    std::array<int16_t,4> rotation{}; // prop unit quaternion /32767
+    std::vector<std::array<uint16_t,3>> joints; // local pitch/yaw/roll, <=64
+    std::vector<PhysicalBasis> basis; // sorted unique joint indices, <=64
+    bool operator==(const PhysicalPose&)const=default;
+};
 struct Entity
 {
     EntityRef ref;
@@ -49,6 +67,7 @@ struct Entity
     EntityRef owner, weapon, shield;
     uint8_t attachmentJoint = 255; // 255=detached; otherwise an authored joint on owner.
     NativeCombat combat;
+    PhysicalPose physical;
     bool operator==(const Entity&) const = default;
 };
 using World = std::vector<Entity>; // Sorted, unique numeric IDs; references resolve in this world.

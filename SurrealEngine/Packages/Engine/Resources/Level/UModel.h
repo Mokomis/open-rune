@@ -152,6 +152,7 @@ enum PolyFlags
 	PF_Memorized = 0x01000000,
 	PF_Selected = 0x02000000,
 	PF_Highlighted = 0x10000000,
+	PF_CanvasAlpha = 0x20000000, // Internal DrawTile opacity marker; stripped before pipeline selection.
 	PF_FlatShaded = 0x40000000,
 
 	PF_EdProcessed = 0x40000000,
@@ -199,6 +200,8 @@ public:
 	void Save(PackageStreamWriter* stream) override;
 
 	PointRegion FindRegion(const vec3& point, UZoneInfo* levelZoneInfo);
+    const Array<BBox>& ConservativeRenderBounds();
+    void UpdateRenderActorBounds();
 
 	Array<vec3> Vectors;
 	Array<vec3> Points;
@@ -234,4 +237,7 @@ public:
 
 	int32_t RootOutside;
 	int32_t Linked;
+private:
+    Array<BBox> StaticRenderBounds,CurrentRenderBounds;
+    Array<int> RenderPostorder;
 };

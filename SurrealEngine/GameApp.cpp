@@ -1,7 +1,11 @@
 
 #include "Precomp.h"
+#include "RuneUpdates.h"
+#include "UI/Launcher/RuneUpdatesPage.h"
+#include "RunePhysics.h"
 #ifdef OPENRUNE_ENABLE_NETWORK
 void RunRuneCorpseProbe(class Engine&);
+void RunRuneShadowCullingProbe(class Engine&);
 #endif
 #include "Render/VisibleSnow.h"
 #include "Render/VisibleRuneEffects.h"
@@ -63,6 +67,10 @@ void RunRuneTacticsProbe(Engine& game);
 
 int GameApp::main(Array<std::string> args)
 {
+    // Release tools do not initialize a renderer, load retail data or touch saves.
+    if(std::find(args.begin(),args.end(),"--rune-update-probe")!=args.end())return RuneUpdates::Probe();
+    if(std::find(args.begin(),args.end(),"--version")!=args.end()){std::cout<<RuneUpdates::Identity()<<std::endl;return 0;}
+    if(std::find(args.begin(),args.end(),"--check-updates")!=args.end()){auto r=RuneUpdates::Fetch();std::cout<<RuneUpdates::Identity()<<"\n"<<r.message<<"\n"<<r.url<<std::endl;return 0;}
 	// A package probe must also run on an Android shell without an Activity.
 	if (std::find(args.begin(),args.end(),"--rune-net-bot")==args.end() && std::none_of(args.begin(),args.end(),[](const std::string& a){return a.starts_with("--rune-tactics-probe");}) && std::find(args.begin(),args.end(),"--rune-probe")==args.end() && std::find(args.begin(),args.end(),"--rune-network-probe")==args.end() && std::none_of(args.begin(),args.end(),[](const std::string& a){return a.starts_with("--rune-network-process-probe") || a.starts_with("--rune-server");}) && std::find(args.begin(),args.end(),"--rune-export-textures")==args.end() && std::find(args.begin(),args.end(),"--rune-export-sounds")==args.end() && std::find(args.begin(),args.end(),"--sound-pack-probe")==args.end()) InitWidgetResources("dark");
 
@@ -70,7 +78,9 @@ int GameApp::main(Array<std::string> args)
 	{
 		CommandLine cmd(args);
 		commandline = &cmd;
+        if(commandline->HasArg("","--updates"))return ShowRuneUpdatesWindow();
         RuneAnimation::Interpolate=commandline->GetArgInt("", "--rune-animation-interpolation", 1)!=0;
+        RunePhysics::RequestedMode=std::clamp(commandline->GetArgInt("","--rune-physics",0),0,2);
         RuneShadows::RequestedBudget=commandline->GetArgInt("","--shadow-lights",0);
 
         if(commandline->HasArg("","--sound-pack-probe")){
@@ -141,7 +151,7 @@ int GameApp::main(Array<std::string> args)
             GameFolderSelection::UpdateList();
             if(GameFolderSelection::Games.size()!=1 || !GameFolderSelection::Games[0].IsRune()) throw std::runtime_error("Pass one Rune installation");
             Engine game(GameFolderSelection::GetLaunchInfo(0));
-            if(commandline->HasArg("","--rune-corpse-probe"))RunRuneCorpseProbe(game);else if(commandline->HasArg("","--rune-net-native-combat"))RunRuneNetworkNativeProbe(game);else RunRuneNetworkProbe(game); return 0;
+            if(commandline->HasArg("","--rune-shadow-culling-probe"))RunRuneShadowCullingProbe(game);else if(commandline->HasArg("","--rune-corpse-probe"))RunRuneCorpseProbe(game);else if(commandline->HasArg("","--rune-net-native-combat"))RunRuneNetworkNativeProbe(game);else RunRuneNetworkProbe(game); return 0;
         }
 #endif
         if(commandline->HasArg("","--snow-probe")) {
@@ -181,7 +191,8 @@ int GameApp::main(Array<std::string> args)
 				GameFolderSelection::UpdateList();
 				if (GameFolderSelection::Games.size()!=1 || !GameFolderSelection::Games[0].IsRune())
 					throw std::runtime_error("Pass exactly one recognized Rune installation folder");
-				Engine probe(GameFolderSelection::GetLaunchInfo(0), true);
+				if(commandline->HasArg("","--rune-physics-probe")){Engine physics(GameFolderSelection::GetLaunchInfo(0));RunePhysics::RunProbe(physics);return 0;}
+                Engine probe(GameFolderSelection::GetLaunchInfo(0), true);
 				IniFile originalUser(probe.LaunchInfo.gameRootFolder+"/System/User.ini");
 				if (originalUser.GetValue("Engine.Input","W")!="MoveForward" || originalUser.GetValue("DefaultPlayer","Name")!="Ragnar")
 					throw std::runtime_error("Rune UTF-16 configuration did not decode");
@@ -192,8 +203,8 @@ int GameApp::main(Array<std::string> args)
                         for(int y=107;y<128;y++)for(int x=0;x<128;x++)for(int c=0;c<3;c++)
                             if(mip.Data[(y*128+x)*4+c])throw std::runtime_error("Flame repeated into authored wrap border");
                     }
-                    if(RuneEffects::FlameFrames/RuneEffects::FlameFps!=2.f)throw std::runtime_error("Flame animation cycle must be two seconds");
-                    std::cout<<"RUNE_FIRE_ART_OK frames=64 cycle_seconds=2 black_wrap_rows=107..127\n";
+                    if(RuneEffects::FlameFrames!=64 || std::abs(RuneEffects::FlameFps-48.f)>.001f)throw std::runtime_error("Flame animation must retain 64 frames at 48 frames per second");
+                    std::cout<<"RUNE_FIRE_ART_OK frames=64 cycle_seconds="<<RuneEffects::FlameFrames/RuneEffects::FlameFps<<" black_wrap_rows=107..127\n";
                 }
 
 				std::string iniProbePath = commandline->GetArg("", "--probe-ini-file", "");

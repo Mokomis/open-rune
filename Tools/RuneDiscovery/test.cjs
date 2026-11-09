@@ -2,11 +2,14 @@ const {test}=require('node:test'),assert=require('node:assert/strict'),fs=requir
 const {PassThrough}=require('node:stream')
 const DHT=require('hyperdht'),p=require('./protocol.cjs'),{Discovery,atomic}=require('./peer.cjs')
 const pause=ms=>new Promise(r=>setTimeout(r,ms))
-const invite=(port,slot=2)=>`OPEN-RUNE-INVITE-4\n127.0.0.1 ${port}\nDM-Hildir\n${slot} 1\n${'a'.repeat(32)}\n${'b'.repeat(64)}\n3\n1\n2 1 0\n`
+const invite=(port,slot=2)=>`OPEN-RUNE-INVITE-5\n127.0.0.1 ${port}\nDM-Hildir\n${slot} 1\n${'a'.repeat(32)}\n${'b'.repeat(64)}\n3\n1\n2 1 0\n4095\n`
 test('bounded control frames and strict invitation validation',async()=>{
   for(const value of ['x\n','{}\n{}\n','x'.repeat(4097)]){const s=new PassThrough();const result=p.frame(s,100);s.write(value);await assert.rejects(result);s.destroy()}
   const s=new PassThrough();const result=p.frame(s,10);await assert.rejects(result);s.destroy()
   assert.equal(p.invitation(invite(1234))[4],'2')
+  assert.equal(p.invitation(invite(1234))[13],'4095')
+  assert.throws(()=>p.invitation(invite(1234).replace('4095','4096')))
+  assert.throws(()=>p.invitation(invite(1234).replace('4095','-1')))
   for(const bad of [invite(0),invite(1234,4),invite(1234).replace('127.0.0.1','999.0.0.1'),invite(1234)+'extra'])assert.throws(()=>p.invitation(bad))
 })
 test('real DHT discovery, concurrent leases, datagram boundaries and stale host removal',{timeout:40000},async()=>{
@@ -69,4 +72,19 @@ test('discovery topic and game version match the native protocol',()=>{
   const match=header.match(/ProtocolVersion\s*=\s*(\d+)/)
   assert.ok(match);assert.equal(p.GAME_PROTOCOL,+match[1])
   assert.equal(p.TOPIC,`open-rune/multiplayer/protocol-${p.GAME_PROTOCOL}/v1`)
+})
+
+
+test('Windows atomic publication survives a temporary reader lock',{skip:process.platform!=='win32'},async()=>{
+  const {spawn}=require('node:child_process')
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'rune-atomic-')),file=path.join(dir,'state.json')
+  fs.writeFileSync(file,'{"old":true}')
+  const child=spawn('python',['-c','import sys,time; f=open(sys.argv[1],"rb"); print("LOCKED",flush=True); time.sleep(.12); f.close()',file])
+  try{
+    await new Promise((resolve,reject)=>{child.once('error',reject);child.stdout.once('data',resolve)})
+    const start=Date.now();atomic(file,'{"new":true}')
+    assert.deepEqual(JSON.parse(fs.readFileSync(file,'utf8')),{new:true})
+    assert.ok(Date.now()-start>=30,'test reader actually held the destination open')
+    await new Promise(resolve=>child.exitCode!==null?resolve():child.once('exit',resolve))
+  }finally{if(child.exitCode===null)child.kill();fs.rmSync(dir,{recursive:true,force:true})}
 })

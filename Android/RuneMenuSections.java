@@ -7,9 +7,9 @@ final class RuneMenuSections {
     case "Audio":return new String[]{"volume","soundEffects","spatial"};
     case "Controls":return new String[]{"input","touch","gamepad","vibration"};
     case "Interface":return new String[]{"hud"};
-    case "Gameplay":return new String[]{"campaign","combat","enemies"};
+    case "Gameplay":return new String[]{"campaign","combat","enemies","physics"};
     case "Connection":return new String[]{"connection"};
-    default:return new String[]{"diagnostics","support"};}}
+    default:return new String[]{"updates","diagnostics","support"};}}
     static String title(String page){switch(page){
     case "display":return "Display & performance";case "camera":return "Camera & field of view";
     case "lighting":return "Lighting & shadows";case "textures":return "Textures & surfaces";
@@ -17,9 +17,9 @@ final class RuneMenuSections {
     case "soundEffects":return "Sound effects";case "spatial":return "Environmental & headphone audio";case "input":return "Look & keyboard";
     case "touch":return "Touch controls";case "gamepad":return "Controller";
     case "vibration":return "Vibration";case "hud":return "HUD & FPS display";
-    case "campaign":return "Campaign";case "combat":return "Combat moves";
-    case "enemies":return "Enemy behavior";case "connection":return "Connection smoothing";
-    case "diagnostics":return "Diagnostics";default:return "About & licenses";}}
+    case "campaign":return "Campaign";case "combat":return "Laws of Battle";
+    case "physics":return "Cinematic physics";case "enemies":return "Enemy behavior";case "connection":return "Connection smoothing";
+    case "updates":return "Updates";case "diagnostics":return "Diagnostics";default:return "About & licenses";}}
     static String[] keys(String page){switch(page){
     case "display":return new String[]{"resolution","scalingMethod","aa","fps","refresh","pacing","fpsManual","refreshManual"};
     case "camera":return new String[]{"fov","wideView"};
@@ -34,8 +34,8 @@ final class RuneMenuSections {
     case "vibration":return new String[]{"rumble","rumbleOutput","rumbleStrength"};
     case "hud":return new String[]{"hud","counter"};
     case "campaign":return new String[]{"difficulty"};
-    case "combat":return new String[]{"kick","bash","dualWield","bloodlustMoves","normalBloodlust"};
-    case "enemies":return new String[]{"tactics"};
+    case "combat":return new String[]{};
+    case "physics":return new String[]{"physics"};case "enemies":return new String[]{"tactics"};
     case "connection":return new String[]{"networkSmoothing"};
     case "diagnostics":return new String[]{"networkDiagnostics"};
     default:return new String[0];}}
@@ -47,12 +47,14 @@ final class RuneMenuSections {
     case "effects":return "Visual changes only.\n\nCompare original visuals temporarily restores original presentation without overwriting your choices.\n\nFull scene water reflections cost more GPU time.";
     case "campaign":return "Difficulty applies to a new campaign. Loaded saves retain their difficulty.\n\nChoose any installed character for your next campaign session.";
     case "combat":return "Campaign preferences apply locally. Multiplayer uses the host’s combat rules.\n\nNormal-combat leap and rush belong in Match rules when hosting.";
+    case "physics":return "Use picks up nearby loose props. Attack or Throw launches a held prop. Existing corpse controls also work with articulated bodies.\n\nOriginal restores normal physics. Cinematic and Chaos affect gameplay; the host chooses online.";
     case "enemies":return "Tactical humanoids use spacing, defense and combat moves.\n\nBosses, scripted scenes and other creatures retain their original behavior. Multiplayer bots use host rules.";
     case "connection":return "Adaptive varies a short visual buffer for remote movement.\n\nYour controls remain responsive. Damage and blocking remain host-controlled.\n\nDetailed counters are under About & support → Diagnostics.";
-    case "touch":return "Touch controls automatically hide when a controller is connected. The Menu button stays available.\n\nThe layout editor has its own Save layout and Cancel actions.";
+    case "touch":return "Touch controls automatically hide when a controller is connected. The Menu button stays available. Double-tap the center of the right camera stick to jump.\n\nThe layout editor has its own Save layout and Cancel actions.";
     case "hud":return "Reposition and resize individual HUD elements in the editor. Bars can be horizontal or vertical.\n\nLayout changes are saved only with Save layout.";
     case "diagnostics":return "Optional troubleshooting information.\n\nTransmission timeouts are not a direct packet-loss measurement. Diagnostics do not change gameplay.";
     case "gamepad":return "The detected controller and current bindings are shown here.\n\nFor feedback strength and output, open Controls → Vibration.";
+    case "updates":return "Published stable releases only.\n\nRelease versions are separate from network and gameplay compatibility. Open the release page for complete notes and downloads.";
     case "support":return "Open Rune is an independent SurrealEngine fork. Original game assets remain the property of their owners.\n\nDeveloper tools are separated from normal play.";
     default:return "Changes apply immediately.\n\nSelect a setting for its explanation. Back returns to the previous screen without undoing saved choices.";}}
 }

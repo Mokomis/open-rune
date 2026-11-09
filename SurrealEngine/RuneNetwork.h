@@ -3,6 +3,7 @@
 #include "openrune/net/Prediction.h"
 #include "VM/ExpressionValue.h"
 #include "RunePose.h"
+#include "RuneAnimationPlayback.h"
 #include <map>
 #include <deque>
 #include <string>
@@ -104,9 +105,9 @@ public:
     bool queueCombat(const openrune::net::CombatOutcome&,uint64_t localNow);
     CombatQueue flushCombat(uint64_t localNow);
     std::vector<openrune::net::CombatOutcome> drainResolvedCombat();
-    void present(double alpha);
+    void present(double alpha,double animationSeconds=-1);
     void presentAdaptive(const openrune::net::Snapshot&,const openrune::net::Snapshot&,double alpha,
-        openrune::net::EntityRef owned,double localAlpha);
+        openrune::net::EntityRef owned,double localAlpha,double animationSeconds=-1);
     bool anticipate(openrune::net::EntityRef,uint64_t action,openrune::net::ActionKind,const openrune::net::Input&,uint64_t now);
     void resolveAnticipation(const openrune::net::ActionResult&,uint64_t now);
     void presentAnticipation(uint64_t now);
@@ -117,7 +118,7 @@ public:
     uint64_t installedTick() const { return current.tick; }
     uint64_t appliedCombatId() const { return lastCombatId; }
 private:
-    void presentFrames(double,const openrune::net::Snapshot*,const openrune::net::Snapshot*,double,openrune::net::EntityRef);
+    void presentFrames(double,const openrune::net::Snapshot*,const openrune::net::Snapshot*,double,openrune::net::EntityRef,double);
     struct Anticipation {
         openrune::net::EntityRef ref,weapon,shield,offhand;
         uint32_t life=0;uint64_t action=0,started=0,snapshot=0,settle=0;
@@ -129,6 +130,8 @@ private:
     struct HealthOverlay { openrune::net::EntityRef ref; uint32_t life; uint64_t tick; int16_t health; };
     std::map<uint32_t,std::pair<openrune::net::EntityRef,UActor*>> actors;
     openrune::net::Snapshot previous,current;
+    struct AnimationPlayback { RuneAnimationPlayback body,torso; };
+    std::map<uint32_t,AnimationPlayback> animationPlayback;
     std::map<uint32_t,float> effectAges;
     std::map<uint32_t,std::pair<uint32_t,bool>> adaptiveLives;
     std::map<uint32_t,HealthOverlay> healthOverlays;

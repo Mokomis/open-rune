@@ -12,7 +12,7 @@ def packet(session, epoch, number, ranges, message=None):
     if message:
         kind, lane, identity, timestamp, ttl, payload = message
         body += struct.pack("!BBHQQHH", kind, lane, 0, identity, timestamp, ttl, len(payload)) + payload
-    return struct.pack("!4sHHQIQBBH", b"ORN1", 22, 0, session, epoch, number,
+    return struct.pack("!4sHHQIQBBH", b"ORN1", 25, 0, session, epoch, number,
                        len(ranges), int(message is not None), len(body)) + body
 
 

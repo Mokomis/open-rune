@@ -1,5 +1,14 @@
 # Open Rune: dual-wield prototype
 
+November 4 pose adjustment: crossed-guard grip targets are four model units
+higher in chest-local up, retaining the two-bone solve, weapon crossing angle
+and existing blend. This shared pose applies to eligible player/NPC guards and
+network replicas. The Mac build passes the existing dual runtime suite (including
+20-to-7 chip damage, interpolation, swings, save/load and death loot); a native
+2816×1762/requested4× normal-camera guard capture was reviewed. Fixed-camera
+attempts pointed into map geometry and are excluded from visual evidence.
+Evidence: `outputs/dual-guard-height-20261104`. Windows/Android are not updated.
+
 October 27, 2026. Local play and server-authoritative private multiplayer for Ragnar and compatible Vikings.
 
 ## Equipment and controls

@@ -30,6 +30,11 @@ The distributor must provide the matching lgpl-sources.zip with the APK,
 including library sources, build instructions and replacement instructions.
 The source archive must match the libraries in the distributed build. See DISTRIBUTION.md in this notice bundle.
 
+Cinematic physics uses Jolt Physics 5.6.0 (Copyright (c) 2021 Jorrit Rouwe),
+under the MIT license. See JoltPhysics-MIT.txt and the pinned source provenance
+in Thirdparty/JoltPhysics/OPEN-RUNE-PIN.json. No Dark Messiah code or assets
+are included.
+
 Additional components include SDL2, SurrealGPU, SurrealWidgets, OpenMPT,
 glslang, Vulkan headers/loader, Vulkan Memory Allocator, resamplers, decoders,
 compression/font utilities, Noto fonts, AndroidX Games Frame Pacing (Swappy),

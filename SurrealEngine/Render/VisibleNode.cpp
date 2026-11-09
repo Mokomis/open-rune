@@ -9,6 +9,7 @@
 #include "Packages/Engine/Resources/Level/UModel.h"
 #include "Packages/Engine/Actors/Info/UZoneInfo.h"
 #include "Packages/Engine/Actors/Info/ULevelInfo.h"
+#include "Collision/TopLevel/CollisionHit.h"
 
 void VisibleNode::Draw(VisibleFrame* frame)
 {
@@ -77,7 +78,7 @@ void VisibleNode::Draw(VisibleFrame* frame)
 	if (!frame->ShadowView && (PolyFlags & PF_Unlit) == 0)
 	{
 		lightmap = engine->Level->Light.GetLevelLightmap(surface, zoneActor, model);
-		fogmap = engine->Level->Light.GetLevelFogmap(surface, engine->CameraActor->Region().Zone, model);
+		fogmap = engine->Level->Light.GetLevelFogmap(surface, engine->GetZoneActor(frame->ViewZone), model);
 	}
 
 	SurfaceInfo surfaceinfo;
@@ -95,6 +96,29 @@ void VisibleNode::Draw(VisibleFrame* frame)
 	facet.MapCoords.YAxis = VVec;
 	facet.Vertices = points;
 	facet.VertexCount = numverts;
+    if(facet.Water && frame->Device->UsesModernWater()) {
+        auto& waterDepth=engine->render->WaterFaceDepth[{Node,frame->MirrorFlag}];
+        if(waterDepth.empty()) {
+        waterDepth.reserve(numverts);
+        vec3 center(0);for(int i=0;i<numverts;++i)center+=points[i];center/=float(numverts);
+        auto& cache=engine->render->WaterDepthSamples;
+        for(int i=0;i<numverts;++i) {
+            // Inset edge samples slightly: a BSP boundary may sit inside a wall.
+            vec3 inward=center-points[i];float d=length(inward);
+            vec3 sample=points[i]+(d>0.01f?inward*(std::min(8.f,d*0.1f)/d):vec3(0));
+            std::array<int,3> key={int(std::lround(sample.x*4)),int(std::lround(sample.y*4)),int(std::lround(sample.z*4))};
+            auto found=cache.find(key);
+            if(found==cache.end()) {
+                vec3 start=sample-vec3(0,0,1),end=start-vec3(0,0,2048);
+                TraceFlags flags;flags.world=true; // Static BSP only: movers cannot stale the cache.
+                auto hit=engine->Level->Collision.TraceFirstHit(start,end,nullptr,vec3(0),flags);
+                found=cache.emplace(key,std::clamp(hit.Fraction*2048.f+1.f,1.f,2048.f)).first;
+            }
+            waterDepth.push_back(found->second);
+        }
+        }
+        facet.WaterDepth=waterDepth.data();
+    }
     auto materialPackage = texture.Texture && texture.Texture->package ? texture.Texture->package->GetPackageName() : NameString();
     bool materialRelief = materialPackage == "Wood" || materialPackage == "Rock" || materialPackage == "Brckston";
     if (!frame->ShadowView && (frame->Device->WorldFeatures & 2) && materialRelief && numverts > 0 && surface.LightMap >= 0 && surface.LightMap < (int)model->LightMap.size())

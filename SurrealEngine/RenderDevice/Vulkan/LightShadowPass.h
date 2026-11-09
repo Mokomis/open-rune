@@ -44,6 +44,7 @@ void VulkanRenderDevice::CreateShadowPass()
 
 void VulkanRenderDevice::BeginShadowPass(bool continuation)
 {
+    Commands->SetProfilePass(CommandBufferManager::GpuPass::Shadow);
     auto cmd = Commands->GetDrawCommands();
     PipelineBarrier().AddImage(ShadowImage.get(), continuation ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
@@ -93,6 +94,7 @@ void VulkanRenderDevice::EndLightShadow(bool more)
         .Execute(cmd, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
     DrawingShadow = false;
     BetweenShadows = more;
+    Commands->SetProfilePass(CommandBufferManager::GpuPass::Other);
     if (!more && !ScenePassDeferred) ResumeScenePass();
 }
 

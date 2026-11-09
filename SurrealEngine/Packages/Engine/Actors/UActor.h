@@ -512,6 +512,8 @@ public:
 	float AIVisibility(std::optional<bool> bIncludeVelocity);
 
 	void UpdateBspInfo();
+    // Cosmetic/runtime pickup lifecycle; never serialized or applied to placed map actors.
+    bool RuneSpawnedDuringPlay=false,RunePickupPending=true;
 	// Rune cache initialization is per actor, not per shared model resource.
 	NameString RuneResetSequence;
     // Transient local animation pose, before dynamics/look offsets. Capturing

@@ -2,6 +2,7 @@
 
 #include "VisibleFrame.h"
 #include "ShadowSettings.h"
+#include "ShadowTransitions.h"
 
 class RenderDevice;
 class UWindow;
@@ -86,7 +87,15 @@ public:
 
 	VisibleFrame MainFrame;
     UActor* ShadowLights[RuneShadows::Capacity] = {};
+    UActor* ShadowAimLights[RuneShadows::Capacity] = {};
+    vec3 ShadowAimTargets[RuneShadows::Capacity] = {};
+    ShadowTransitions<RuneShadows::Capacity> ShadowFades;
     std::unordered_map<UTexture*,int> WaterMaterialKinds;
+    vec3 WaterSkyColor=vec3(0);
+    bool WaterSkyReady=false;
+    UTexture* WaterSkyTexture=nullptr;
+    std::map<std::array<int,3>,float> WaterDepthSamples;
+    std::map<std::pair<const void*,bool>,std::vector<float>> WaterFaceDepth;
 
 private:
 	void DrawScene();

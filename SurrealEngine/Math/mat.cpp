@@ -134,7 +134,7 @@ mat4 mat4::frustum(float left, float right, float bottom, float top, float z_nea
 	float a = (right + left) / (right - left);
 	float b = (top + bottom) / (top - bottom);
 	float c = -(z_far + z_near) / (z_far - z_near);
-	float d = -(2.0f * z_far) / (z_far - z_near);
+	float d = -(2.0f * z_far * z_near) / (z_far - z_near);
 	mat4 m = null();
 	m.matrix[0 + 0 * 4] = 2.0f * z_near / (right - left);
 	m.matrix[1 + 1 * 4] = 2.0f * z_near / (top - bottom);

@@ -1,3 +1,4 @@
+#include "RuneBattleLaws.h"
 #include "Precomp.h"
 #include "RuneDualWield.h"
 #include "Engine.h"
@@ -99,14 +100,14 @@ bool Equipped(UPawn* p) {
         return p->Health()>0 && OneHanded(p->Weapon()) && OneHanded(w) && w!=p->Weapon() &&
             w->Owner()==p && w->GetUObject("AttachParent")==p && w->GetByte("AttachParentJoint")==Joint(Model(p),"lhand");
     }
-    return p && p->Dual.offhand && Enabled.load() && Eligible(p) && OneHanded(p->Weapon()) &&
+    return p && p->Dual.offhand && RuneBattleLaws::Enabled(RuneBattleLaws::Dual,Enabled.load()) && Eligible(p) && OneHanded(p->Weapon()) &&
         static_cast<int*>(p->GetProperty("BodyPartHealth"))[1]>0 && static_cast<int*>(p->GetProperty("BodyPartHealth"))[3]>0 &&
         p->Weapon()!=p->Dual.offhand && Owned(p,p->Dual.offhand) && OneHanded(p->Dual.offhand) &&
         p->Dual.offhand->GetUObject("AttachParent")==p &&
         p->Dual.offhand->GetByte("AttachParentJoint")==Joint(Model(p),"lhand");
 }
 bool Equip(UPawn* p,UWeapon* w) {
-    if(!Enabled.load() || !Eligible(p) || !OneHanded(p->Weapon()) || !OneHanded(w) || w==p->Weapon() ||
+    if(!RuneBattleLaws::Enabled(RuneBattleLaws::Dual,Enabled.load()) || !Eligible(p) || !OneHanded(p->Weapon()) || !OneHanded(w) || w==p->Weapon() ||
         !Owned(p,w) || p->Health()<=0 || static_cast<int*>(p->GetProperty("BodyPartHealth"))[1]<=0 ||
         static_cast<int*>(p->GetProperty("BodyPartHealth"))[3]<=0 || Busy(p))return false;
     if(p->Dual.offhand==w && Equipped(p))return true;
@@ -151,26 +152,51 @@ void BeginSwing(UPawn* p) {
     if(!Equipped(p))return;
     Cold(p->Weapon());Cold(p->Dual.offhand);
     p->Dual.guard=false;p->Dual.left=p->Dual.nextLeft;p->Dual.nextLeft=!p->Dual.nextLeft;
+    if(!p->Dual.left)p->Dual.lastWholeBody=-1;
     if(p->Dual.left)p->Dual.leftSwings++;else p->Dual.rightSwings++;
 }
-void Guard(UPawn* p,bool raised) { p->Dual.guard=raised && Equipped(p) && p->Dual.recovery<=0 && p->Health()>0 && SafeState(p) && !Busy(p); }
+void Guard(UPawn* p,bool raised) { p->Dual.guard=raised && RuneBattleLaws::Allowed(RuneBattleLaws::Cross) && Equipped(p) && p->Dual.recovery<=0 && p->Health()>0 && SafeState(p) && !Busy(p); }
 bool Blocks(UPawn* p,UPawn* attacker) {
+    if(!RuneBattleLaws::Allowed(RuneBattleLaws::Cross))return false;
     if(p && p->Dual.contactGuardOverride)return p->Dual.contactGuard;
     if(!attacker || !Equipped(p) || !p->Dual.guard || p->Dual.guardBlend<.8f || p->Dual.recovery>0 || p->Health()<=0 || !SafeState(p) || Busy(p))return false;
     auto d=attacker->Location()-p->Location();d.z=0;
     return length(d)>.01f && dot(normalize(d),vec3(std::cos(p->Rotation().YawRadians()),std::sin(p->Rotation().YawRadians()),0))>=.5f;
 }
 void BreakGuard(UPawn* p,float seconds) { p->Dual.guard=false;p->Dual.recovery=std::max(p->Dual.recovery,seconds); }
+UActor* FullBodyPoseSource(UActor* actor) {
+    auto* p=UObject::TryCast<UPawn>(actor);
+    if(!p || !Equipped(p) || (!p->NetworkReplica && !SafeState(p)))return nullptr;
+    auto* proxy=UObject::TryCast<UActor>(p->GetUObject("AnimProxy"));
+    if(!proxy || proxy->bDeleteMe())return nullptr;
+    // Standing strikes (including their spins) are authored on the whole skeleton.
+    // Their torso proxy owns attack speed/notifies, so its phase is authoritative.
+    // Do not couple running attacks to this clock: their legs remain locomotion.
+    for(auto field:{"A_AttackStandA","A_AttackStandB"}) {
+        auto seq=p->Weapon()->GetName(field);if(seq.IsNone())continue;
+        if(proxy->AnimSequence()==seq)return proxy;
+    }
+    // Check both live attacks first: a new B attack overrides the body's A return.
+    for(auto field:{"A_AttackStandA","A_AttackStandB"}) {
+        auto seq=p->Weapon()->GetName(field);if(seq.IsNone())continue;
+        if(p->AnimSequence()==seq || p->AnimSequence().ToString()==seq.ToString()+"Return")return p;
+    }
+    if(!proxy->AnimSequence().IsNone() && p->AnimSequence()==proxy->AnimSequence()) {
+        for(auto field:{"A_AttackA","A_AttackB","A_AttackC","A_AttackD","A_AttackBackupA","A_AttackBackupB","A_AttackStrafeRight","A_AttackStrafeLeft","A_JumpAttack"})
+            if(proxy->AnimSequence()==p->Weapon()->GetName(field))return proxy;
+    }
+    return nullptr;
+}
 void UpdatePoseState(UPawn* p) {
     if(!p || !engine)return;
     if(!Equipped(p)){p->Dual.lastWholeBody=-1;return;}
-    auto* proxy=UObject::TryCast<UActor>(p->GetUObject("AnimProxy"));
-    if(p->Dual.left && proxy && !proxy->AnimSequence().IsNone() && p->AnimSequence()==proxy->AnimSequence())
+    if(p->Dual.left && FullBodyPoseSource(p))
         p->Dual.lastWholeBody=engine->TotalTime;
 }
 void Tick(UPawn* p,float dt) {
     if(!Eligible(p))return;
     auto& s=p->Dual;
+    if(!RuneBattleLaws::Allowed(RuneBattleLaws::Cross)){s.guard=false;s.guardBlend=0;}
     if(!s.initialized) {
         s.initialized=true;
         auto** children=static_cast<UObject**>(p->GetProperty("JointChild"));
@@ -182,7 +208,7 @@ void Tick(UPawn* p,float dt) {
     }
     if(s.spawnPending && p->GetStateName()=="Fighting" && !Busy(p)) {
         s.spawnPending=false;
-        if(Enabled.load() && p->IsA("DarkViking") && p->Index%3==0 && OneHanded(p->Weapon())) {
+        if(RuneBattleLaws::Enabled(RuneBattleLaws::Dual,Enabled.load()) && p->IsA("DarkViking") && p->Index%3==0 && OneHanded(p->Weapon())) {
             auto* item=p->Spawn(engine->packages->GetPackage("RuneI")->GetClass("HandAxe"),{},{},p->Location()+vec3(0,0,100),{});
             if(item) {
                 item->SetFloat("RespawnTime",0); // Grant one real item even in maps using multiplayer pickup rules.
@@ -209,7 +235,7 @@ void Tick(UPawn* p,float dt) {
     }
     s.recovery=std::max(0.f,s.recovery-std::max(0.f,dt));
     if(s.offhand && (!Equipped(p) || p->Health()<=0))Unequip(p,p->Health()<=0);
-    if(!s.offhand && Enabled.load() && p->Health()>0 && SafeState(p) && !Busy(p) && OneHanded(p->Weapon())) {
+    if(!s.offhand && RuneBattleLaws::Enabled(RuneBattleLaws::Dual,Enabled.load()) && p->Health()>0 && SafeState(p) && !Busy(p) && OneHanded(p->Weapon())) {
         int count=0;for(auto* item=p->Inventory();item && count++<128;item=item->Inventory()) {
             auto* w=UObject::TryCast<UWeapon>(item);
             if(w!=p->Weapon() && OneHanded(w) && Equip(p,w))break;
@@ -279,19 +305,40 @@ bool ScriptCall(UFunction* f,UObject* object,const ArrayView<ExpressionValue>& a
 void ApplyPose(const USkelModel& model,UActor* actor,Array<RuneJointPose>& pose) {
     auto* p=UObject::TryCast<UPawn>(actor);if(!p || !Equipped(p) || (!p->NetworkReplica && !SafeState(p)))return;
     auto source=pose;
-    auto* proxy=UObject::TryCast<UActor>(p->GetUObject("AnimProxy"));
     // Original scripts play standing/spinning attacks on both animation groups.
     // Mirror that complete pose; reversing only the torso twists it against the hips.
-    bool wholeBody=p->Dual.left && proxy && !proxy->AnimSequence().IsNone() && p->AnimSequence()==proxy->AnimSequence();
+    bool authoredWholeBody=FullBodyPoseSource(p)!=nullptr;
+    bool wholeBody=p->Dual.left && authoredWholeBody;
     // The proxy can enter idle before the body's return animation ends. Fade
     // the lower-body reflection instead of switching the feet across the hips
     // in one frame. This clock is updated by simulation/network presentation,
     // so joint queries, weapon sweeps and rendering sample the same pose.
     float bodyBlend=wholeBody?1.f: p->Dual.lastWholeBody<0?0.f:
         std::clamp(1.f-float(engine->TotalTime-p->Dual.lastWholeBody)/.22f,0.f,1.f);
+    // The two legs use different local skinning axes. Mirror animation motion
+    // through the reference skeleton instead of copying opposite-leg rotations.
+    // Cache only immutable reference data, never an actor's animated pose.
+    if(bodyBlend>0 && model.LegMirrorBasis.size()!=source.size()) {
+        size_t reference=0;
+        for(size_t i=0;i<model.Sequences.size();++i)if(model.Sequences[i].Info.Name=="neutral_idle"){reference=i;break;}
+        auto restBones=model.JointMatrices(model.SampleFrame(reference,0,true));
+        auto reflection=mat4::scale(-1,1,1);
+        Array<mat3> correction;correction.assign(source.size(),mat3::identity());
+        model.LegMirrorBasis.resize(source.size());
+        for(size_t j=0;j<source.size();++j) {
+            auto& basis=model.LegMirrorBasis[j];auto name=model.Joints[j].Name.ToString();basis.Source=(int)j;
+            if(name.size()>1 && (name[0]=='l' || name[0]=='r')) {auto other=name;other[0]=name[0]=='l'?'r':'l';int k=Joint(&model,other);if(k>=0)basis.Source=k;}
+            int parent=model.Joints[j].Parent;
+            basis.Leg=name=="lhip" || name=="rhip" || (parent>=0 && model.LegMirrorBasis[parent].Leg);
+            if(basis.Leg)correction[j]=mat3::inverse(mat3(reflection*restBones[basis.Source]*reflection))*mat3(restBones[j]);
+            basis.Before=parent>=0?mat3::inverse(correction[parent]):mat3::identity();
+            basis.After=correction[j];
+        }
+    }
     for(size_t j=0;j<pose.size();++j) {
         auto name=model.Joints[j].Name.ToString();
-        bool body=j==0 || model.Joints[j].Group==0;
+        // Fade the entire authored recovery together, including the chest.
+        bool body=(authoredWholeBody && bodyBlend>0) || j==0 || model.Joints[j].Group==0;
         bool reflectBody=body && bodyBlend>0;
         bool left=name.size()>1 && name[0]=='l' && (reflectBody || !body);
         bool right=name.size()>1 && name[0]=='r' && (reflectBody || (!body && p->Dual.left));
@@ -302,6 +349,14 @@ void ApplyPose(const USkelModel& model,UActor* actor,Array<RuneJointPose>& pose)
         }
         if(!paired && (reflectBody || (!body && p->Dual.left)) && !name.starts_with("attach") && !name.starts_with("attatch"))
             target=Mirror(source[j]);
+        if(bodyBlend>0 && model.LegMirrorBasis[j].Leg) {
+            const auto& basis=model.LegMirrorBasis[j];target=Mirror(source[basis.Source]);
+            target.Position=basis.Before*target.Position;
+            auto rotation=basis.Before*mat3(RunePoseRotation(target.Rotation))*basis.After;
+            mat4 corrected=mat4::identity();
+            for(int c=0;c<3;++c)for(int row=0;row<3;++row)corrected[c*4+row]=rotation[c*3+row];
+            target.Rotation=RunePoseEuler(corrected);
+        }
         pose[j]=body?BlendRunePose(source[j],target,bodyBlend):target;
     }
     const float visualGuard=p->NetworkReplica && p->RuneCombatPreviewGuard>=0?p->RuneCombatPreviewGuard:p->Dual.guardBlend;
@@ -330,7 +385,7 @@ void ApplyPose(const USkelModel& model,UActor* actor,Array<RuneJointPose>& pose)
             if(shoulder<0 || elbow<0 || wrist<0)continue;
             float side=left?1.f:-1.f;
             auto bones=model.JointMatrices(guard);auto start=point(bones[shoulder]);
-            vec3 target=(initial[chest]*vec4(side*6,7,-18,1)).xyz();
+            vec3 target=(initial[chest]*vec4(side*6,11,-18,1)).xyz();
             vec3 pole=(initial[chest]*vec4(side*22,1,-7,1)).xyz()-start;
             float a=length(guard[elbow].Position),b=length(guard[wrist].Position);
             if(a<.01f || b<.01f || length(target-start)<.01f)continue;

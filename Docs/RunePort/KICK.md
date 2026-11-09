@@ -1,3 +1,35 @@
+# November 7 update: quicker shared kick, less automatic kicking
+
+Players, multiplayer bots and compatible campaign enemies all use the same live
+`neutral_kick` retiming. The original first UseNotify remains the hit event; the
+animation is accelerated to place that event near 0.375 seconds, with 0.08 seconds of blending.
+Body and animation-proxy clips are retimed using their own frame/rate/notify data.
+Notifies remain enabled and duplicate body/proxy events still strike only once.
+No original packages, animation artwork, damage, impulse, range, shield protection,
+target immunity or manual kick cooldown changed. Multiplayer retains its 33 ms late
+block window. Original Uninterrupted state still owns completion and interruption.
+
+Automatic kicks now require an eligible nearby visible enemy and a useful close-
+combat opportunity. Bot and NPC opportunities are spaced 5–7 seconds apart with a 40% choice
+chance, leaving ordinary attacks/repositioning as the common actions. Multiplayer
+bots prefer kicks when unarmed, crowded inside weapon reach or countering crossed
+weapons. Campaign tactical AI rolls only after its normal visibility, reaction,
+facing and crowding gates choose a genuine opportunity. The legacy NPC fallback
+uses the same spacing/chance. Human button presses do not use this random policy.
+
+Measured native Windows checks on Ragnar: authored contact 578 ms → 391 ms and move
+completion 1088 ms → 731 ms (17ms diagnostic clock steps). Autonomous DarkViking contact
+measured 375 ms at 120 Hz fixture stepping. Same stationary 45-unit planner sample,
+seed 717, 60 simulated seconds: 19 kicks/53 attacks → 4 kicks/68 attacks. This is an
+opportunity-policy comparison; actions were not executed in that sample, so it is
+not a measured real-match kick rate. Separate native execution checks verify real
+contacts, unchanged 5-damage NPC hit, controller/tactical behavior and completion.
+
+Gameplay compatibility revision 32 covers shared kick timing; wire protocol 25 is
+unchanged. Release identity0.1.0-dev.3/build3. Client and host updates must match.
+
+The historical implementation notes below describe the earlier timing/frequency.
+
 # Open Rune — Combat kick (October 25, 2026)
 
 Ragnar and compatible humanoid enemies can kick. **Kick** on touch, **F** on a

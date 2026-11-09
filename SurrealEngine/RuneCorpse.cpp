@@ -1,4 +1,6 @@
+#include "RuneBattleLaws.h"
 #include "Precomp.h"
+#include "RunePhysics.h"
 #include "RuneCorpse.h"
 #include "RuneRushPose.h"
 #include "RuneKick.h"
@@ -117,6 +119,7 @@ void Release(UPawn* p,bool launch) {
     auto& s=b->CorpseBody;Unlink(p,b);s.flying=true;s.age=s.carry=0;s.thrower=launch?p:nullptr;s.victims.clear();
     vec3 f=Forward(p);b->Velocity()=launch?f*720.f+vec3(0,0,125):f*35.f;
     b->Rotation().Pitch=b->Rotation().Roll=0;b->SetPhysics(PHYS_None);
+    if(RunePhysics::mode()) {auto velocity=b->Velocity();b->SetCollision(s.collide,s.blockActors,s.blockPlayers);b->bCollideWorld()=s.world;b->SetCollisionSize(s.radius,s.height);b->LifeSpan()=s.life;if(RunePhysics::Ragdoll(b,velocity,launch?p:nullptr)){s.active=s.flying=false;s.thrower=nullptr;s.centered=false;}}
     if(launch){++c.throws;if(p->HasProperty("WeaponThrowSound"))CallEvent(p,"PlaySound",{ExpressionValue::ObjectValue(p->GetUObject("WeaponThrowSound"))});}
     LogMessage(std::string("RUNE_CORPSE_")+(launch?"THROW":"DROP")+" actor="+p->Name.ToString());
 }
@@ -160,6 +163,17 @@ void Impact(UActor* b,UPawn* target) {
     LogMessage("RUNE_CORPSE_HIT target="+target->Name.ToString()+" blocked="+std::to_string(blocked));
 }
 }
+vec3 InteractionPoint(UActor* body) {
+    // Articulated corpses keep the authored actor pivot, which can finish
+    // below the floor. Test reach/occlusion against the visible torso instead.
+    auto* m=Model(body);if(!m)return body->Location();
+    auto bones=m->ActorJointMatrices(body);auto world=GetRuneMeshToWorld(body);
+    vec3 center(0);int count=0;
+    for(size_t j=0;j<m->Joints.size();++j)if(m->Joints[j].Name=="pelvis" || m->Joints[j].Name=="neck") {
+        center+=(world*bones[j]*vec4(0,0,0,1)).xyz();++count;
+    }
+    return count?center/float(count)+vec3(0,0,3):body->Location();
+}
 bool Throwable(UActor* a) {
     if(!a || a->bDeleteMe() || a->bHidden() || !a->IsA("RuneCarcass") || (!a->NetworkReplica && a->GetBool("bDecorative")) || !Model(a))return false;
     auto* m=Model(a);unsigned joints=0;
@@ -192,23 +206,25 @@ UActor* Held(UPawn* p) {
     if(p->NetworkReplica)for(auto* child:p->ChildActors)if(child && !child->bDeleteMe() && child->IsA("Carcass") && child->bCarriedItem() && child->GetUObject("AttachParent")==p)return child;
     return nullptr;
 }
-bool Busy(UPawn* p){return Held(p)!=nullptr;}
+bool Busy(UPawn* p){return Held(p)!=nullptr||RunePhysics::Carrying(p);}
 float SpeedScale(UPawn* p){return Busy(p)?.62f:1.f;}
 float Windup(UPawn* p){return p && p->AnimSequence()=="ATK_ALL_throw1_AA0S" && p->AnimFrame()>=0 && p->AnimFrame()<.9f?std::clamp(p->AnimFrame()*2.f,0.f,1.f):0.f;}
 
 bool Pickup(UPawn* p,UActor* b) {
-    if(!Authority(p) || !Authority(b) || !Eligible(p) || !Throwable(b) || Busy(p) || p->CorpseCarry.cooldown>0 ||
-       p->Physics()!=PHYS_Walking || p->LadderMode || (p->Weapon() && p->Weapon()->IsA("NonStow")) || b->bCarriedItem() || b->CorpseBody.active || b->Physics()!=PHYS_None ||
+    if(!RuneBattleLaws::Allowed(RuneBattleLaws::Corpse) || !Authority(p) || !Authority(b) || !Eligible(p) || !Throwable(b) || Busy(p) || p->CorpseCarry.cooldown>0 ||
+       p->Physics()!=PHYS_Walking || p->LadderMode || (p->Weapon() && p->Weapon()->IsA("NonStow")) || b->bCarriedItem() || b->CorpseBody.active || (!RunePhysics::Controls(b)&&b->Physics()!=PHYS_None) ||
        p->RuneKickActive || p->RuneBashPhase || RuneBloodlust::Busy(p) || p->Tactics.attacking ||
        p->GetBool("bSwingingHigh") || p->GetBool("bSwingingLow"))return false;
     auto* proxy=p->GetUObject("AnimProxy");if(proxy && proxy->GetStateName()!="Idle")return false;
-    if(length(b->Location()-p->Location())>115 || !p->FastTrace(b->Location(),p->Location()))return false;
+    auto reach=InteractionPoint(b);
+    if(length(reach-p->Location())>115 || !p->FastTrace(reach,p->Location()))return false;
     int j=Slot(p);if(j<0 || static_cast<UObject**>(p->GetProperty("JointChild"))[j])return false;
     vec3 anchor=p->Location()+vec3(0,0,p->CollisionHeight()+28)+Forward(p)*10.f;
     if(!Clear(p,anchor,24))return false;
+    if(RunePhysics::Controls(b)){RunePhysics::Release(b);b->SetPhysics(PHYS_None);}
     RuneDualWield::Unequip(p);CallEvent(p,"ActivateShield",{ExpressionValue::BoolValue(false)});
     for(auto* w:{p->Weapon(),p->Dual.offhand})if(w){CallEvent(w,"FinishAttack");CallEvent(w,"DisableSwipeTrail");}
-    auto& s=b->CorpseBody;s.active=true;s.flying=false;s.centered=false;s.age=0;s.thrower=nullptr;Center(b);
+    auto& s=b->CorpseBody;s.active=true;s.flying=false;s.centered=false;s.age=0;s.thrower=nullptr;ResetMotion(b);Center(b);
     s.collide=b->bCollideActors();s.blockActors=b->bBlockActors();s.blockPlayers=b->bBlockPlayers();s.world=b->bCollideWorld();
     s.radius=b->CollisionRadius();s.height=b->CollisionHeight();s.life=b->LifeSpan();
     b->SetBase(nullptr,true);b->SetPhysics(PHYS_None);b->SetCollision(false,false,false);b->bCollideWorld()=false;
@@ -224,35 +240,44 @@ bool Pickup(UPawn* p,UActor* b) {
 bool Use(UPawn* p) {
     if(!Authority(p))return false;
     if(Busy(p)){Drop(p);return true;}
-    if(!Eligible(p))return false;
+    if(!RuneBattleLaws::Allowed(RuneBattleLaws::Corpse)||!Eligible(p))return false;
     // Keep the original weapon/food/door/quest interaction priority.
-    for(auto* a:p->XLevel()->Actors)if(a && a!=p && !a->bDeleteMe() && !a->IsA("Carcass") && length(a->Location()-p->Location())<=100)
+    for(auto* a:p->XLevel()->Actors)if(a && a!=p && !a->bDeleteMe() && !a->NetworkReplica && !RunePhysics::IsProp(a) && (!a->bHidden()||!a->IsA("Inventory")) && !a->IsA("Carcass") && length(a->Location()-p->Location())<=100)
         if(CallEvent(a,"CanBeUsed",{ExpressionValue::ObjectValue(p)}).ToBool())return false;
     UActor* best=nullptr;float nearest=115;
-    for(auto* a:p->XLevel()->Actors)if(Throwable(a)) {float d=length(a->Location()-p->Location());if(d<nearest && !a->bCarriedItem() && !a->CorpseBody.active && p->FastTrace(a->Location(),p->Location())){best=a;nearest=d;}}
+    for(auto* a:p->XLevel()->Actors)if(Throwable(a)) {auto reach=InteractionPoint(a);float d=length(reach-p->Location());if(d<nearest && !a->bCarriedItem() && !a->CorpseBody.active && p->FastTrace(reach,p->Location())){best=a;nearest=d;}}
     return best && Pickup(p,best);
 }
 bool Throw(UPawn* p) {
     if(!Authority(p) || !Busy(p))return false;
+    if(RunePhysics::Carrying(p))return RunePhysics::ThrowProp(p);
+    if(!RuneBattleLaws::Allowed(RuneBattleLaws::Corpse)){Drop(p);return true;}
     auto& c=p->CorpseCarry;if(c.release<0 && c.age>=.35f) {
         c.release=.32f;
         for(auto& sequence:Model(p)->Sequences)if(sequence.Info.Name=="ATK_ALL_throw1_AA0S"){p->PlayAnim(sequence.Info.Name,1,.06f);break;}
     }
     return true;
 }
-void Drop(UPawn* p){if(p && Authority(p))Release(p,false);}
+void Drop(UPawn* p){if(p && Authority(p)){if(RunePhysics::Carrying(p))RunePhysics::UseProp(p);else Release(p,false);}}
 void Tick(UPawn* p,float elapsed) {
     if(!Authority(p))return;
     auto& c=p->CorpseCarry;c.cooldown=std::max(0.f,c.cooldown-elapsed);
+    if(RunePhysics::Carrying(p)){
+        c.age+=elapsed;if(!RuneBattleLaws::Allowed(RuneBattleLaws::Props)||!Alive(p)||(!p->IsA("RunePlayer")&&p->GetStateName()!="Fighting")){Drop(p);return;}
+        if(!p->IsA("RunePlayer")){auto* enemy=p->Enemy();if(c.age>1&&Alive(enemy)&&p->CanSee(enemy)&&length(enemy->Location()-p->Location())>140){auto d=enemy->Location()-p->Location();p->SetRotation(Rotator::FromVector(vec3(d.xy(),0)));RunePhysics::ThrowProp(p);}else if(c.age>3)Drop(p);}return;
+    }
     auto* b=Held(p);
+    if(b&&!RuneBattleLaws::Allowed(RuneBattleLaws::Corpse)){Drop(p);return;}
     if(!b){
         c.body=nullptr;c.think-=elapsed;
         if(!p->IsA("RunePlayer") && c.cooldown<=0 && c.think<=0) {
             c.think=.8f;auto* enemy=p->Enemy();
             if(Eligible(p) && Alive(enemy) && p->CanSee(enemy)) {
                 float range=length(enemy->Location()-p->Location());
-                if(range>180 && range<500)for(auto* a:p->XLevel()->Actors)
-                    if(Throwable(a) && length(a->Location()-p->Location())<100 && Pickup(p,a))break;
+                if(range>180 && range<500){for(auto* a:p->XLevel()->Actors)
+                    if(RuneBattleLaws::Allowed(RuneBattleLaws::Corpse) && Throwable(a) && length(a->Location()-p->Location())<100 && Pickup(p,a))break;
+                    if(RuneBattleLaws::Allowed(RuneBattleLaws::Props)&&!Busy(p)&&RunePhysics::mode())RunePhysics::UseProp(p);
+                }
             }
         }
         return;
@@ -308,7 +333,7 @@ bool TickBody(UActor* b,float elapsed) {
 }
 bool Posed(UActor* b){return b && b->IsA("RuneCarcass") && (b->CorpseBody.active || b->CorpseBody.presented || (b->bCarriedItem() && b->GetUObject("AttachParent")));}
 void Presentation(UActor* b,bool posed) {
-    if(b->CorpseBody.presented!=posed){b->CorpseBody.presented=posed;b->CorpseBody.centered=false;}
+    if(b->CorpseBody.presented!=posed){b->CorpseBody.presented=posed;b->CorpseBody.centered=false;ResetMotion(b);}
 }
 bool CustomTransform(UActor* b){return Posed(b);}
 mat4 MeshToWorld(UActor* b) {

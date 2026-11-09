@@ -1,5 +1,8 @@
 #pragma once
 #include <atomic>
+#include "RunePose.h"
+#include "Utils/Array.h"
+class USkelModel;
 class NameString;
 class UPawn;
 class UActor;
@@ -7,6 +10,8 @@ class UObject;
 namespace RuneBash {
 inline std::atomic<bool> Enabled{true};
 bool Compatible(UPawn* pawn);
+void PresentImpact(UPawn* target,bool staggered);
+void ApplyPose(const USkelModel&,UActor*,Array<RuneJointPose>&);
 bool Start(UPawn* pawn);
 void CommitImpact(UPawn*,UPawn*,bool blocked);
 void BlockPressed(UPawn* pawn);

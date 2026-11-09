@@ -6,8 +6,9 @@ import java.util.Map;
 public final class HudLayoutTest {
     static void check(boolean value,String why){if(!value)throw new AssertionError(why);}
     static SharedPreferences prefs(Map<String,Object> disk){return (SharedPreferences)Proxy.newProxyInstance(HudLayoutTest.class.getClassLoader(),new Class[]{SharedPreferences.class},(p,m,a)->{
+        if(m.getName().equals("contains"))return disk.containsKey((String)a[0]);
         if(m.getName().startsWith("get"))return disk.getOrDefault((String)a[0],a[1]);
-        if(m.getName().equals("edit"))return Proxy.newProxyInstance(HudLayoutTest.class.getClassLoader(),new Class[]{SharedPreferences.Editor.class},(e,n,b)->{if(n.getName().startsWith("put")){disk.put((String)b[0],b[1]);return e;}return null;});
+        if(m.getName().equals("edit"))return Proxy.newProxyInstance(HudLayoutTest.class.getClassLoader(),new Class[]{SharedPreferences.Editor.class},(e,n,b)->{if(n.getName().equals("remove")){disk.remove((String)b[0]);return e;}if(n.getName().startsWith("put")){disk.put((String)b[0],b[1]);return e;}return null;});
         throw new UnsupportedOperationException(m.getName());
     });}
     public static void main(String[] args){

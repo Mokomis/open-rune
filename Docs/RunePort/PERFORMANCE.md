@@ -1,5 +1,16 @@
 # Open Rune — Native Android performance and display validation
 
+## Open investigation: DM-Team_ships (November 7)
+
+User reported poor performance during the live Deathmatch with ten bots, all Laws
+of Battle, Chaos physics and Heavy snow. Keep this map on the optimization backlog.
+No new FPS capture or CPU/GPU attribution was taken: compare Android rendering,
+Windows host tick timing and Chaos-body costs before assigning a cause. The
+concurrent disconnect was independently traced to a Windows discovery-status-file
+sharing violation, not a proven engine crash or explanation of the frame-rate issue.
+The user requested moving to another map rather than profiling this one now.
+
+
 October 28 final bounded pass: [material/post-processing audit](MATERIAL-POST-PERFORMANCE.md).
 Both candidates saved less than 1% and were removed; no further optimization sweep
 is planned without a new user request.
@@ -98,3 +109,7 @@ Build/install and diagnostic launch options are in `Android/README.md`. `Tools/R
 Prioritize a real enemy encounter and save/load/map transitions. Then check more views/maps and sustained thermal behavior, opposite physical landscape orientation, and background/resume. Evaluate synchronized Android frame pacing before using the sleep limiter as a shipping 120 FPS control.
 
 Implementation references: [Khronos CPU/GPU synchronization](https://docs.vulkan.org/samples/latest/samples/performance/wait_idle/README.html), [Android Vulkan pre-rotation](https://developer.android.com/games/optimize/vulkan-prerotation), and [Android Vulkan validation layers](https://developer.android.com/ndk/guides/graphics/validation-layer).
+
+## November 8, 2026 deathmatch sweep
+
+See [Deathmatch performance sweep](DEATHMATCH-PERFORMANCE.md) for all 25 requested maps, native-sized Mac 4× AA profiles, Windows ten-bot checks and the retained stock look-focus optimization. ChAoS’s initial black-image hold was resolved as a canvas startup-fade opacity bug; see [Canvas alpha](CANVAS-ALPHA.md). This pass does not certify every map at 120 FPS.

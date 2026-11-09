@@ -1,5 +1,6 @@
 #include "Precomp.h"
 #include "RuneGore.h"
+#include "RunePhysics.h"
 #include "GorePhysics.h"
 #include "RuneBloodPresentation.h"
 #include "Render/VisibleFrame.h"
@@ -176,8 +177,9 @@ void Tick(float elapsed) {
         if(fresh) {
             t={};t.actor=a;t.kind=kind;t.born=now;t.visualAngles=vec3(float(a->Rotation().Pitch),float(a->Rotation().Yaw),float(a->Rotation().Roll));
             t.red=Red(a) && (kind!=Corpse || std::any_of(evidence.begin(),evidence.end(),[&](const BloodEvidence& e){return e.until>now && length(e.point-a->Location())<128;}));
-            if(baseline && t.red && !(a->Region().Zone && a->Region().Zone->bWaterZone()) && emissionBudget>0 && length(a->Location()-engine->CameraLocation)<1400) {
-                int count=std::min(emissionBudget,kind==Corpse?2:4);Burst(a,count);emissionBudget-=count;
+            if(baseline && kind!=Corpse && t.red && !(a->Region().Zone && a->Region().Zone->bWaterZone()) && emissionBudget>0 && length(a->Location()-engine->CameraLocation)<1400) {
+                // Intact deaths retain a body: only actual gibs/limbs emit extra chunks.
+                int count=std::min(emissionBudget,4);Burst(a,count);emissionBudget-=count;
             }
         }
         t.seen=serial;
@@ -224,7 +226,7 @@ void Tick(float elapsed) {
 }
 
 mat4 MeshTransform(UActor* a,UMesh* mesh,const mat4& original) {
-    if(!allowed || !Enabled.load())return original;
+    if(!allowed || !Enabled.load() || RunePhysics::Controls(a))return original;
     auto found=actors.find(a->Index);if(found==actors.end() || found->second.actor!=a || !Loose(a))return original;
     auto& t=found->second;
     if(t.kind==Gib && a->Physics()==PHYS_Falling) {

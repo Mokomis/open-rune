@@ -1,4 +1,6 @@
+#include "RuneBattleLaws.h"
 #include "Precomp.h"
+#include "RunePhysics.h"
 #include "RuneKick.h"
 #include "RuneDualWield.h"
 #include "RuneFeedback.h"
@@ -27,6 +29,7 @@ bool InRange(UPawn* a,UPawn* b){
 void Sound(UPawn* p){if(p->HasProperty("KickSound"))if(auto* s=p->GetUObject("KickSound"))CallEvent(p,"PlaySound",{ExpressionValue::ObjectValue(s)});}
 }
 bool Compatible(UPawn* p){
+    if(!RuneBattleLaws::Enabled(RuneBattleLaws::Kick,Enabled.load()))return false;
     if(!engine->LaunchInfo.IsRune() || !Alive(p) || !(p->IsA("RunePlayer") || p->IsA("ScriptPawn")))return false;
     auto* m=UObject::TryCast<USkelModel>(GetRuneDisplayMesh(p));
     // Generic GetSequence falls back to the first animation when a name is absent.
@@ -46,7 +49,7 @@ UPawn* Target(UPawn* a){
     }return best;
 }
 bool Threat(UObject* obj){
-    if(!engine->LaunchInfo.IsRune() || !Enabled.load())return false;
+    if(!engine->LaunchInfo.IsRune() || !RuneBattleLaws::Enabled(RuneBattleLaws::Kick,Enabled.load()))return false;
     auto* observer=UObject::TryCast<UPawn>(obj);auto* enemy=observer?observer->Enemy():nullptr;
     return Alive(observer) && Alive(enemy) && enemy->RuneKickActive && enemy->RuneKickPending && InRange(enemy,observer) && observer->FastTrace(enemy->Location(),observer->Location());
 }
@@ -57,8 +60,27 @@ bool ShieldBlocks(UPawn* target,UPawn* attacker){
     auto d=attacker->Location()-target->Location();d.z=0;
     return length(d)>.01f && dot(Forward(target),normalize(d))>=.25f;
 }
+void PrepareAnimation(UActor* actor,const NameString& name,float& rate,float& tween){
+    if(!engine || !engine->LaunchInfo.IsRune() || name!="neutral_kick")return;
+    auto* pawn=UObject::TryCast<UPawn>(actor);
+    if(!pawn && actor && actor->IsA("AnimationProxy"))pawn=UObject::TryCast<UPawn>(actor->Owner());
+    if(!pawn || !pawn->RuneKickActive)return;
+    auto* model=UObject::TryCast<USkelModel>(GetRuneDisplayMesh(actor));if(!model)return;
+    for(const auto& sequence:model->Sequences)if(sequence.Info.Name==name){
+        const auto& seq=sequence.Info;float contact=1.f;
+        for(const auto& notify:seq.Notifys)if(notify.Function=="UseNotify" && notify.Time>0 && notify.Time<contact)contact=notify.Time;
+        if(contact>=1 || seq.NumFrames<=1 || seq.Rate<=0)return;
+        tween=.08f;rate=contact*seq.NumFrames/(seq.Rate*(ContactSeconds-tween));
+        return; // Keep the original notify: foot contact, sound and damage stay aligned.
+    }
+}
+bool ConsiderAIKick(UPawn* p){
+    if(!p || p->RuneKickThink>0)return false;
+    p->RuneKickThink=AIIntervalMin+FRand()*AIIntervalSpan;
+    return FRand()<AIChance;
+}
 bool Start(UPawn* p){
-    if(RuneCorpse::Busy(p) || RuneBloodlust::Busy(p) || !Enabled.load() || !Compatible(p) || p->RuneKickActive || p->RuneKickCooldown>0 || p->Physics()!=PHYS_Walking)return false;
+    if(RuneCorpse::Busy(p) || RuneBloodlust::Busy(p) || !RuneBattleLaws::Enabled(RuneBattleLaws::Kick,Enabled.load()) || !Compatible(p) || p->RuneKickActive || p->RuneKickCooldown>0 || p->Physics()!=PHYS_Walking)return false;
     bool player=UObject::TryCast<UPlayerPawn>(p)!=nullptr;
     if(player){auto* pp=UObject::Cast<UPlayerPawn>(p);if(pp->ViewTarget() || p->GetStateName()!="PlayerWalking")return false;}
     else if(p->GetStateName()!="Fighting")return false;
@@ -83,7 +105,8 @@ bool Notify(UObject* obj){
     // and never dispatch an object/door UseTrigger for a combat kick.
     if(!p->RuneKickPending)return true;
     p->RuneKickPending=false;
-    auto* target=Enabled.load() && Alive(p)?Target(p):nullptr;
+    auto* target=RuneBattleLaws::Enabled(RuneBattleLaws::Kick,Enabled.load()) && Alive(p)?Target(p):nullptr;
+    if(!target && RuneBattleLaws::Enabled(RuneBattleLaws::Kick,Enabled.load()) && Alive(p) && RunePhysics::KickObject(p)){++p->RuneKickHits;return true;}
     if(!target || target->RuneKickImmunity>0){
         LogMessage("RUNE_KICK_MISS actor="+p->Class->Name.ToString());
 #ifdef OPENRUNE_ENABLE_NETWORK
@@ -100,6 +123,7 @@ bool Notify(UObject* obj){
 }
 void CommitImpact(UPawn* p,UPawn* target,bool blocked)
 {
+    if(!RuneBattleLaws::Enabled(RuneBattleLaws::Kick,Enabled.load()))return;
     int before=target->Health();
     bool crossed=!blocked && RuneDualWield::Blocks(target,p);
 #ifdef OPENRUNE_ENABLE_NETWORK
@@ -117,6 +141,17 @@ void CommitImpact(UPawn* p,UPawn* target,bool blocked)
         else if(Alive(target))CallEvent(target,"AddVelocity",{ExpressionValue::VectorValue(d*(440.0f*weight)+vec3(0,0,110.0f*weight))});
     }
     LogMessage("RUNE_KICK_HIT attacker="+p->Class->Name.ToString()+" target="+target->Class->Name.ToString()+" blocked="+std::to_string(blocked)+" health_before="+std::to_string(before)+" health_after="+std::to_string(target->Health())+" weight="+std::to_string(weight));
+    if(target->Health()<before) {
+        // Distinct contact thud in addition to the existing kick whoosh/pain.
+        if(!blocked && target->HasProperty("LandSoundFlesh"))if(auto* sound=target->GetUObject("LandSoundFlesh"))
+            CallEvent(target,"PlaySound",{ExpressionValue::ObjectValue(sound),ExpressionValue::IntValue(1),ExpressionValue::FloatValue(.9f)});
+        float shove=RunePhysics::mode()?560.f:440.f,lift=RunePhysics::mode()?180.f:110.f;
+        // One host-side roll per committed unblocked kick. The other outcome
+        // keeps the ordinary upright AddVelocity recoil above. Defenses and
+        // existing recovery/script protections still take precedence.
+        if(RunePhysics::mode()!=RunePhysics::Original && !blocked && !crossed && Alive(target) && FRand()<.5f)
+            RunePhysics::Impact(p,target,d*(shove*weight)+vec3(0,0,lift*weight),false);
+    }
     RuneFeedback::Impact(p,target,blocked,false);
     p->RuneKickHits++;if(blocked)p->RuneKickBlocks++;
 }
@@ -125,15 +160,15 @@ void Tick(UPawn* p,float elapsed){
     bool pending=p->RuneKickPending;
     p->RuneKickCooldown=std::max(0.0f,p->RuneKickCooldown-elapsed);p->RuneKickImmunity=std::max(0.0f,p->RuneKickImmunity-elapsed);
     if(p->RuneKickActive && (!Alive(p) || p->GetStateName()!="Uninterrupted")){p->RuneKickActive=false;p->RuneKickPending=false;}
-    if(!Enabled.load())p->RuneKickPending=false;
+    if(!RuneBattleLaws::Enabled(RuneBattleLaws::Kick,Enabled.load()))p->RuneKickPending=false;
 #ifdef OPENRUNE_ENABLE_NETWORK
     if(pending && !p->RuneKickPending && engine->NetworkCombatAuthority)
         engine->NetworkCombatAuthority->cancelCombat(p,openrune::net::CombatMove::Kick);
 #endif
-    if(UObject::TryCast<UPlayerPawn>(p) || !Enabled.load() || !Alive(p))return;
+    if(UObject::TryCast<UPlayerPawn>(p) || !RuneBattleLaws::Enabled(RuneBattleLaws::Kick,Enabled.load()) || !Alive(p))return;
+    p->RuneKickThink=std::max(0.f,p->RuneKickThink-elapsed);
     if(RuneTactics::SuppressRandomSpecial(p))return;
-    p->RuneKickThink-=elapsed;
-    if(p->RuneKickThink<=0){p->RuneKickThink=.45f;if(p->GetStateName()=="Fighting" && p->RuneKickCooldown<=0 && Compatible(p) && Target(p) && FRand()<.22f)Start(p);}
+    if(p->GetStateName()=="Fighting" && p->RuneKickCooldown<=0 && Compatible(p) && Target(p) && ConsiderAIKick(p))Start(p);
 }
 void Recoil(UPawn* p,float elapsed){
     if(!engine->LaunchInfo.IsRune() || p->RuneKickRecoilTime<=0)return;

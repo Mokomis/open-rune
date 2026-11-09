@@ -1,5 +1,85 @@
 # Focused native regressions
 
+## Multiplayer bot lifts
+
+`bot_lifts_allmaps.py --binary PATH --game PATH --output NEW_DIRECTORY` extends
+the selected matrix below to initial inventory of all shipped multiplayer maps
+and independent-engine rides of every discovered meaningful stop pair. It
+reports unplanned brushes separately; these can be doors, traps or unresolved
+platforms and are not counted as passing rides. `--maps NAME ...` limits review.
+
+`bot_roam_allmaps.py` with the same arguments samples one minute of ordinary
+input-bot exploration from one normal spawn per map, with original death and
+respawn handling. It records travel and prolonged stationary intervals, without
+forced routes or equipment. It uses TeamGame for movement and does not certify
+every room/secret, all mode objectives, secure transport or FPS. See
+[existing-map scope and corrections](../../Docs/RunePort/BOT-MAP-TRAVERSAL.md).
+
+`bot_lifts.py --binary PATH --game PATH --output NEW_DIRECTORY` exercises six
+real lift rides in separate server/client engine processes on LostCrypt,
+Cathedral and Aqueduct. It isolates saves/configuration and verifies actual
+host basing, travel and full departure while the client has no authoritative
+base pointer. The local file exchange uses the normal codecs; it does not test
+secure socket transport, latency or rendered FPS. See
+[supported activation, evidence and remaining gaps](../../Docs/RunePort/BOT-LIFTS.md).
+
+For initial-state discovery only, use `--rune-network-probe
+--rune-net-native-combat --rune-bot-traversal-probe --traversal-map=MAP.run
+--traversal-plans` with isolated configuration/saves. Discovery success alone is
+not an end-to-end traversal result.
+
+## Cinematic physics
+
+The cinematic matrix also runs `--rune-physics-kick-probe` in Original,
+Cinematic and Chaos under campaign and multiplayer authority. Each case samples
+256 committed kicks per player/NPC victim, validates the two outcomes' landing
+and recovery and checks host snapshot state. Fixtures reset damage/bloodlust and
+recovery protection between independent samples; normal gameplay retains those
+protections. No independent client-side probability roll is added.
+
+`android_physics_environment.py --device DEVICE --output NEW_DIRECTORY` checks
+six repeated authored-wall slams and original prop shatters at native/4×.
+`--baseline` disables only the added impact/break consequences for comparison.
+Both paths preserve normal data/preferences. The native matrix includes
+campaign/multiplayer environment cases and the independent world test checks
+pre-solver normal velocity against fast glancing contact.
+
+`cinematic_physics.py --binary PATH --game PATH --output NEW_DIRECTORY` checks
+Cinematic/Chaos knockdowns, recovery, prop interaction, pose replication and real
+save/load using isolated saves/configuration. `openrune_physics_tests` exercises
+the independent rigid-body world. `android_physics.py --device DEVICE --output
+NEW_DIRECTORY` drives the actual menu into the isolated playground and restores
+normal preferences. `android_physics_pickup.py --device DEVICE --output
+NEW_DIRECTORY` taps the actual Use/Throw controls on a naturally killed physical
+body, verifies binding/release order, and preserves normal data. See [scope and controls](../../Docs/RunePort/CINEMATIC-PHYSICS.md).
+
+## Shadow visibility and offline stairs
+
+`map_visibility_audit.py --binary PATH --game PATH --output DIRECTORY` checks all
+installed maps' subtree bounds without playing them. It is portable to Windows
+and produces per-map logs and JSON for later review. See
+[terrain/shadow follow-up](../../Docs/RunePort/RENDER-VISIBILITY.md).
+
+The existing native corpse fixture adds `--rune-slam-probe` for the aerial move,
+replica pose and runtime pickup lifecycle checks. Single/network/team variants
+remain selectable. `--probe-slam-gesture` drives bounded renderer input; Android
+`slamTouchProbe` dispatches the real touch Views instead. See
+[aerial slam](../../Docs/RunePort/AERIAL-SLAM.md) and
+[runtime pickups](../../Docs/RunePort/WEAPON-PICKUP-PLACEMENT.md).
+
+`--rune-network-probe --rune-shadow-culling-probe=MAP --shadow-culling-strict`
+compares the actual shadow caster list with direct actor visibility, then checks
+skinned-vertex containment. `--shadow-roster-bounds` adds all roster geometries
+and sampled clips. Use isolated saves/configuration. See
+[shadow visibility](../../Docs/RunePort/SHADOW-CULLING.md).
+
+`local_stairs.py --binary PATH --game PATH --output NEW_DIRECTORY --captures`
+compares original/fixed offline stair presentation at native/4×, with identical
+simulation/camera assertions. `local_stairs_test.cpp` covers rates and resets
+under UBSan. The authenticated multiplayer route remains `network_stairs.py`.
+`android_local_stairs.py --device DEVICE --output NEW_DIRECTORY` runs the matched native/4× OPPO route and returns to the normal title menu while checking save/preference preservation. It restarts the app; only run after the live session is released.
+See [offline stair results](../../Docs/RunePort/OFFLINE-STAIRS.md).
+
 ## Moving-lift visibility
 
 `lighting_visibility_bvh.cpp` checks the accelerated world query against an
@@ -122,3 +202,11 @@ what the game rendered. This helper does not plan around collision, identify
 the correct ledge, or confirm that a scripted event fired. Review each puzzle
 on the device and retain a separate save before traversing it. See
 `Docs/RunePort/UNDERWATER-CONTROLS.md` for the SinkingShip2 checkpoint.
+
+
+`navigation_integrity.py --binary EXE --game GAME --output NEW_DIRECTORY` runs
+six defensive native graph cases,35 missing-incoming queries across five shipped
+maps,18 real-FSM pursuits on three stale-data maps and a LostCrypt lift barrier.
+Owned assets and isolated saves are required. No original arrays/assets are
+rewritten by production repair; the synthetic guard fixture restores temporary
+arrays. See Docs/RunePort/NAVIGATION-AUDIT.md for scope and report review.

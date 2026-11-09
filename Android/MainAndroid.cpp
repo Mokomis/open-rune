@@ -1,7 +1,9 @@
+#include "../SurrealEngine/RuneBattleLaws.h"
 #include "RuneSnow.h"
 #include "RuneController.h"
 #include "RuneVisualEffects.h"
 #include "RuneGore.h"
+#include "RunePhysics.h"
 #include "RuneKick.h"
 #include "RuneBash.h"
 #include "RuneBloodlust.h"
@@ -164,6 +166,8 @@ extern "C" JNIEXPORT void JNICALL Java_org_runeclassic_port_MainActivity_nativeM
     case 15: RuneBloodlust::Enabled.store(value != 0); break;
     case 16: RuneVisualEffects::Enabled.store(value != 0); break;
     case 24: RuneGore::Enabled.store(value != 0); break;
+    case 26: RuneBattleLaws::Campaign=uint32_t(value)&RuneBattleLaws::All&~RuneBattleLaws::Leap;break;
+    case 25: RunePhysics::RequestedMode=std::clamp((int)value,0,2); break;
     case 18: RuneSnow::Mode.store(std::clamp((int)value,0,2)); break;
     case 19: case 20: {
         openrune::CharacterChoice choice{uint8_t(value&255),uint8_t((value>>8)&255)};
@@ -195,7 +199,7 @@ extern "C" JNIEXPORT jint JNICALL Java_org_runeclassic_port_MainActivity_nativeM
 }
 extern "C" JNIEXPORT jboolean JNICALL Java_org_runeclassic_port_MainActivity_nativeMenuSession(JNIEnv*, jclass, jint action, jint slot)
 {
-    if (RuneMultiplayer::Active.load() || action<1 || action>8 || slot<0 || slot>10 || !RuneCombat::Ready.load()) return false;
+    if (RuneMultiplayer::Active.load() || action<1 || action>9 || slot<0 || slot>10 || !RuneCombat::Ready.load()) return false;
     RuneMenu::Slot.store(slot);
     return RuneCombat::Request(action);
 }
@@ -302,3 +306,5 @@ extern "C" JNIEXPORT jint JNICALL Java_org_runeclassic_port_MainActivity_nativeC
     env->SetIntArrayRegion(destination,0,jint(pixels.size()),reinterpret_cast<const jint*>(pixels.data()));
     return !env->ExceptionCheck();
 }
+
+extern "C" JNIEXPORT jint JNICALL Java_org_runeclassic_port_MainActivity_nativeBattleLaws(JNIEnv*,jclass){return RuneBattleLaws::Mask();}

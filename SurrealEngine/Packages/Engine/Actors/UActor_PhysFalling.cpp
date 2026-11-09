@@ -9,6 +9,8 @@
 #include "Packages/Engine/Resources/Level/ULevel.h"
 #include "Packages/Engine/Resources/Level/UModel.h"
 #include "Engine.h"
+#include "Utils/CommandLine.h"
+#include "Utils/Logger.h"
 
 void UActor::TickFalling(float elapsed)
 {
@@ -84,6 +86,8 @@ void UActor::TickFalling(float elapsed)
 		if (pawn && pawn->TryGrabRuneEdge(2.0f)) return;
 
 		CollisionHit hit = TryMove(moveDelta);
+        if(pawn && pawn->Slam.phase && hit.Fraction<1 && commandline->HasArg("","--probe-slam-gesture"))
+            LogMessage("RUNE_SLAM_COLLISION actor="+(hit.Actor?hit.Actor->Name.ToString():"None")+" normal="+std::to_string(hit.Normal.x)+","+std::to_string(hit.Normal.y)+","+std::to_string(hit.Normal.z)+" z="+std::to_string(Location().z));
 		if (ShouldAbortMovementTick(PHYS_Falling)) break;
 		// Static/immovable actors reject TryMove with fraction zero and no hit
 		// actor. There is no wall event to dispatch in that case (HelLift).

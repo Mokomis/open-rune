@@ -16,8 +16,9 @@ void VulkanRenderDevice::RunShadowBudgetProbe()
     UnrealMipmap transparent=white;transparent.Data[3]=0;
     TextureInfo whiteInfo;whiteInfo.CacheID=0xfedcba9876547700ull;whiteInfo.Format=TextureFormat::BGRA8;whiteInfo.NumMips=1;whiteInfo.Mips=&white;whiteInfo.UScale=whiteInfo.VScale=1;
     TextureInfo maskInfo=whiteInfo;maskInfo.CacheID++;maskInfo.Mips=&transparent;
-    int checks=0;
-    for(int world=0;world<2;++world)for(int target=0;target<RuneShadows::Capacity;++target)for(int side=0;side<(target==RuneShadows::Capacity-1?3:2);++side)for(int grouped=0;grouped<2;++grouped){
+    int checks=0;int fadePixels[3]={};
+    for(int world=0;world<2;++world)for(int target=0;target<RuneShadows::Capacity;++target)for(int side=0;side<(target==RuneShadows::Capacity-1?3:2);++side)for(int grouped=0;grouped<2;++grouped)
+    for(int fadeCase=0;fadeCase<(!world && !target && !side && !grouped?3:1);++fadeCase){
         WorldFeatures=768;GroupShadowPasses=grouped!=0;
         VertexLight lighting{};lighting.AmbientColor=vec3(.02f);lighting.ScaleGlow=1;lighting.NumLights=8;
         for(int i=0;i<8;++i){lighting.Lights[i].Location=vec3(float(1000+i*100),1000,-20);lighting.Lights[i].InvRadiusSquared=1.0f/(250*250);}
@@ -35,6 +36,7 @@ void VulkanRenderDevice::RunShadowBudgetProbe()
             for(int i=0;i<4;++i){caster[i]=receiver[i];caster[i].Point=c[i];}
             vec3 light=slot==target?vec3(0,0,-20):vec3(float(100+slot*20),0,-20);
             require(BeginLightShadow(&lightFrame,light,vec3(0,0,-100),250,slot),"valid atlas slot");
+            if(slot==target && fadeCase)SetLightShadowStrength(slot,fadeCase==1?.5f:0.f);
             const bool masked=side==2&&slot==target;DrawGouraudPolygon(&lightFrame,masked?maskInfo:whiteInfo,caster,4,PF_Occlude|(masked?PF_Masked:0));EndLightShadow(slot+1<RuneShadows::Capacity);
         }
         SetSceneNode(&frame);pushconstants.objectToProjection=mat4::scale(.01f);pushconstants.objectToView=mat4::identity();pushconstants.nearClip=vec4(0,0,0,1);
@@ -49,12 +51,16 @@ void VulkanRenderDevice::RunShadowBudgetProbe()
             SurfaceFacet facet{};facet.Vertices=points;facet.VertexCount=4;facet.MapCoords.Origin=vec3(0,0,60);facet.MapCoords.XAxis=vec3(1,0,0);facet.MapCoords.YAxis=vec3(0,1,0);
             DrawComplexSurface(&frame,surface,facet);
         }
-        require(RuneShadows::Slots::Decode(std::bit_cast<uint32_t>(Buffers->MeshLights[Buffers->MeshLightCount-1].Meta.w),lane)==target,"receiver slot encoding");
+        require(RuneShadows::Slots::Decode(std::bit_cast<uint32_t>(Buffers->MeshLights[Buffers->MeshLightCount-1].Meta.w),lane)==(fadeCase==2?-1:target),"receiver slot encoding");
         Unlock(false);ReadPixels(pixels.data());int left=pixels[size_t(h/2)*w+w/4].R,right=pixels[size_t(h/2)*w+3*w/4].R;
         LogMessage("RUNE_SHADOW_BUDGET_PIXEL world="+std::to_string(world)+" slot="+std::to_string(target)+" lane="+std::to_string(lane)+" side="+std::to_string(side)+" grouped="+std::to_string(grouped)+" left="+std::to_string(left)+" right="+std::to_string(right));
-        if(side==2)require(std::abs(left-right)<=2,"masked last atlas tile");else require(side?right+40<left:left+40<right,"tile isolation and moving shadow");++checks;
+        if(!world && !target && !side && !grouped)fadePixels[fadeCase]=left;
+        if(fadeCase==2)require(std::abs(left-right)<=2,"zero-strength shadow is invisible");
+        else if(fadeCase==1)require(left>fadePixels[0]+20 && left<right-20,"half-strength shadow interpolates");
+        else {if(side==2)require(std::abs(left-right)<=2,"masked last atlas tile");else require(side?right+40<left:left+40<right,"tile isolation and moving shadow");++checks;}
     }
     // A new frame with no shadow maps must never sample stale tiles.
+    LogMessage("RUNE_SHADOW_FADE_GPU_OK full="+std::to_string(fadePixels[0])+" half="+std::to_string(fadePixels[1])+" zero="+std::to_string(fadePixels[2]));
     WorldFeatures=768;Lock(vec4(.5f),vec4(0),vec4(0),nullptr,nullptr);
     for(const auto& shadow:Buffers->ShadowLighting->Shadows)require(shadow.LightPosition.w==0,"inactive frame slot reset");
     Unlock(false);

@@ -1,6 +1,8 @@
+#include "RuneBattleLaws.h"
 #include "Precomp.h"
 #include "Engine.h"
 #include "RuneBloodlust.h"
+#include "RunePhysics.h"
 #include "RuneRushPose.h"
 #include "RuneBloodlustAudio.h"
 #include "Packages/Engine/Resources/Mesh/USkelModel.h"
@@ -13,20 +15,28 @@
 #include "Packages/Engine/Actors/Pawn/UPlayerPawn.h"
 #include "Packages/Engine/Actors/Inventory/UWeapon.h"
 #include "Packages/Engine/Actors/Info/ULevelInfo.h"
+#include "Packages/Engine/Actors/Info/UGameInfo.h"
 #include "Packages/Engine/Resources/Level/ULevel.h"
 #include "VM/ScriptCall.h"
 #include "VM/Frame.h"
 #include <iostream>
 void RunRuneBloodlustProbe(Engine& game){
+ struct RestoreLaws{uint32_t value=RuneBattleLaws::Campaign.load();~RestoreLaws(){RuneBattleLaws::Campaign=value;}} restoreLaws;
+ RuneBattleLaws::Campaign=RuneBattleLaws::All; // Explicit fixture rules; real campaign still rejects leap.
+ struct RestoreNormal{bool value;~RestoreNormal(){RuneBloodlust::AllowNormal=value;}} restoreNormal{RuneBloodlust::AllowNormal.load()};
+ RuneBloodlust::AllowNormal=false; // This existing fixture explicitly verifies rage-only costs/gates.
  auto check=[](bool b,const char* why){if(!b)throw std::runtime_error(std::string("bloodlust fixture: ")+why);};
  RuneBloodlust::Enabled=true;RuneDualWield::Enabled=false;RuneTactics::Enabled=false;RuneKick::Enabled=false;RuneBash::Enabled=false;
  auto url=game.GetDefaultURL("DM-Hildir.run");url.AddOrReplaceOption("game=RuneI.RuneSinglePlayer");
  game.LoadMap(url);game.LoginPlayer();auto* p=game.viewport->Actor();p->bShowMenu()=false;
- auto tick=[&](int n){for(int i=0;i<n;++i){constexpr float dt=1.f/120;game.LevelInfo->TimeSeconds()+=dt;game.TotalTime+=dt;game.Level->Tick(dt,false);}};
+ UPawn* stationaryTarget=nullptr;
+ auto tick=[&](int n){for(int i=0;i<n;++i){if(stationaryTarget && !stationaryTarget->bDeleteMe() && !RunePhysics::Controls(stationaryTarget)){stationaryTarget->StateFrame->SetLatentState(LatentRunState::Stop);stationaryTarget->Velocity()=stationaryTarget->Acceleration()=vec3(0);stationaryTarget->SetPhysics(PHYS_Walking);stationaryTarget->Slam.cooldown=1000;}constexpr float dt=1.f/120;game.LevelInfo->TimeSeconds()+=dt;game.TotalTime+=dt;game.Level->Tick(dt,false);}};
  tick(30);p->DisableEvent("PlayerTick");
  // Replay the real DM-Hildir stair side: coarse distance fallback stopped
  // 55-132 units short. These approaches must use the original grab animation.
- {
+ // Giant leap is now prohibited in campaign; this historical traversal case
+ // applies only to a multiplayer rules fixture. Ordinary climbing is unchanged.
+ if(!game.GameInfo->IsA("RuneSinglePlayer")){
   for(float y:{1124.f,1200.f,1280.f}){
    p->Bloodlust={};p->GotoState("PlayerWalking","Begin");p->GetUObject("AnimProxy")->GotoState("Idle","Begin");p->SetPhysics(PHYS_Falling);p->Velocity()=p->Acceleration()=vec3(0);p->SetRotation(Rotator(0,-15939,0));
    check(p->SetLocation(vec3(-325,y,-170)),"stair approach placement");p->SetBool("bBloodLust",true);p->SetInt("Strength",p->GetInt("MaxStrength"));p->Bloodlust.tap=game.LevelInfo->TimeSeconds();
@@ -39,20 +49,30 @@ void RunRuneBloodlustProbe(Engine& game){
    std::cout<<"STAIR_LEAP_RESULT grabbed="<<grabbed<<" highest="<<high<<" at="<<p->Location().x<<","<<p->Location().y<<","<<p->Location().z<<" state="<<p->GetStateName().ToString()<<"\n";
   }
  }
+
  vec3 origin=p->Location(),direction(1,0,0);bool lane=false;
  // Pick a placed arena start with room for a bounded 600-unit leap.
  std::vector<UActor*> starts;for(auto* a:game.Level->Actors)if(a && a->IsA("PlayerStart"))starts.push_back(a);
  for(auto* a:starts)if(!lane){
   if(!p->SetLocation(a->Location()))continue;p->SetPhysics(PHYS_Walking);p->Velocity()=p->Acceleration()=vec3(0);tick(120);
   if(p->Physics()!=PHYS_Walking)continue;
-  for(int i=0;i<16&&!lane;++i){float angle=i*3.14159265f/8;direction={std::cos(angle),std::sin(angle),0};auto end=p->Location()+direction*600.f;vec3 hit,normal;
+  for(int i=0;i<16&&!lane;++i){float angle=i*3.14159265f/8;direction={std::cos(angle),std::sin(angle),0};auto end=p->Location()+direction*820.f;vec3 hit,normal;
    lane=p->FastTrace(end,p->Location()) && p->CheckLocation(end,22,42,true).first && p->Trace(hit,normal,end-vec3(0,0,140),end,false,vec3(10,10,0)) && normal.z>.7f;
   }if(lane)origin=p->Location();
  }
  check(lane,"no arena lane");std::cout<<"BLOOD_LANE "<<origin.x<<","<<origin.y<<","<<origin.z<<" jumpZ="<<p->JumpZ()<<" groundSpeed="<<p->GroundSpeed()<<" dir="<<direction.x<<","<<direction.y<<std::endl;
- auto reset=[&](){p->Bloodlust={};p->RuneBashPhase=0;p->RuneKickActive=false;p->Health()=1000;p->SetBool("bSwingingHigh",false);p->SetBool("bSwingingLow",false);p->GotoState("PlayerWalking","Begin");p->GetUObject("AnimProxy")->GotoState("Idle","Begin");p->SetPhysics(PHYS_Walking);p->Velocity()=p->Acceleration()=vec3(0);check(p->SetLocation(origin),"reset position");p->SetRotation(Rotator::FromVector(direction));p->ViewRotation()=p->Rotation();p->SetBool("bBloodLust",false);p->SetInt("Strength",0);tick(120);};
+ auto reset=[&](){RunePhysics::Release(p);p->Bloodlust={};p->RuneBashPhase=0;p->RuneKickActive=false;p->Health()=1000;p->SetBool("bSwingingHigh",false);p->SetBool("bSwingingLow",false);p->GotoState("PlayerWalking","Begin");p->GetUObject("AnimProxy")->GotoState("Idle","Begin");p->SetPhysics(PHYS_Walking);p->Velocity()=p->Acceleration()=vec3(0);check(p->SetLocation(origin),"reset position");p->SetRotation(Rotator::FromVector(direction));p->ViewRotation()=p->Rotation();p->SetBool("bBloodLust",false);p->SetInt("Strength",0);tick(120);};
  auto full=[&](){CallEvent(p,"BoostStrength",{ExpressionValue::IntValue((int)p->GetInt("MaxStrength"))});check(RuneBloodlust::Active(p),"original bloodlust activation");};
  auto give=[&](UPawn* pawn,const char* name){auto* a=pawn->Spawn(game.packages->GetPackage("RuneI")->GetClass(name),{},{},pawn->Location()+vec3(0,0,100),{});check(a,"grant spawn");a->SetFloat("RespawnTime",0);auto* w=CallEvent(a,"SpawnCopy",{ExpressionValue::ObjectValue(pawn)}).ToObject();check(w==a,"grant world copy");CallEvent(pawn,"AcquireInventory",{ExpressionValue::ObjectValue(w)});w->GotoState("Idle","Begin");return w;};
+ reset();auto* campaignRules=game.GameInfo;
+ RuneBloodlust::AllowNormal=true;
+ check(!(RuneBloodlust::Readiness(p)&1) && !RuneBloodlust::Leap(p,direction),"campaign player cannot giant leap without rage");
+ full();check(!(RuneBloodlust::Readiness(p)&1) && !RuneBloodlust::Leap(p,direction),"campaign player cannot giant leap with rage");
+ check(!RuneBloodlust::JumpPressed(p),"campaign jump stays original");
+ RuneBloodlust::AllowNormal=false;
+ auto* arenaRules=UObject::Cast<UGameInfo>(game.packages->GetTransientPackage()->NewObject("LeapFixtureRules",game.packages->GetPackage("RuneI")->GetClass("RuneMultiPlayer"),ObjectFlags::Transient));
+ game.GameInfo=arenaRules;
+
  reset();check(RuneBloodlust::Readiness(p)==0,"inactive cue");full();check(RuneBloodlust::Readiness(p)==1,"leap-only cue without shield");
  give(p,"VikingShield");check(RuneBloodlust::Readiness(p)==3,"jump + shield combo cue");
  p->SetInt("Strength",(p->GetInt("MaxStrength")*49)/100);check(!RuneBloodlust::Readiness(p),"insufficient cost cue");
@@ -72,6 +92,7 @@ void RunRuneBloodlustProbe(Engine& game){
  check(loop && IsRuneBloodlustSound(p,loop),"berserk loop not filtered");
  check(jump && !IsRuneBloodlustSound(p,jump),"ordinary pickup sound filtered");
  std::cout<<"BLOOD_REPEAT_AUDIO_OK three leaps, berserk-only sound filter\n";
+ game.GameInfo=campaignRules;std::cout<<"CAMPAIGN_PLAYER_NO_GIANT_LEAP_OK empty_and_full_rage\n";
  reset();full();give(p,"VikingShortSword");
  {auto* model=UObject::Cast<USkelModel>(GetRuneDisplayMesh(p));auto* weapon=p->Weapon();auto saved=p->Bloodlust;
   auto joint=[&](const char* name){for(size_t i=0;i<model->Joints.size();++i)if(model->Joints[i].Name==name)return (int)i;throw std::runtime_error(name);};
@@ -92,15 +113,15 @@ void RunRuneBloodlustProbe(Engine& game){
   std::cout<<"BLOOD_RUSH_POSE_OK stow, two-hand brace, cancellation restore\n";
  }
  reset();full();auto* victim=UObject::TryCast<UPawn>(p->Spawn(game.packages->GetPackage("RuneI")->GetClass("DarkViking"),{},{},origin+direction*130.f,Rotator::FromVector(-direction)));check(victim,"victim spawn");tick(2);
- auto freeze=[&](){victim->Health()=1000;victim->Enemy()=p;victim->GotoState("Fighting","Begin");victim->StateFrame->SetLatentState(LatentRunState::Stop);victim->DisableEvent("FrameNotify");victim->Velocity()=victim->Acceleration()=vec3(0);victim->Bloodlust={};};
- freeze();int health=victim->Health(); std::cout<<"CHARGE_GATE state="<<p->GetStateName().ToString()<<" physics="<<int(p->Physics())<<" ready="<<RuneBloodlust::Readiness(p)<<" strength="<<p->GetInt("Strength")<<" active="<<p->GetBool("bBloodLust")<<" proxy="<<p->GetUObject("AnimProxy")->GetStateName().ToString()<<" shield="<<(p->GetUObject("Shield")!=nullptr)<<" kick="<<p->RuneKickActive<<" bash="<<p->RuneBashPhase<<std::endl;check(RuneBloodlust::Charge(p),"shield charge start");tick(54);check(length(p->Location()-origin)<5,"rush moved before stow and brace finished");
+ auto freeze=[&](){RunePhysics::Release(victim);victim->Health()=1000;victim->Enemy()=p;victim->GotoState("Fighting","Begin");victim->StateFrame->SetLatentState(LatentRunState::Stop);victim->DisableEvent("FrameNotify");victim->Velocity()=victim->Acceleration()=vec3(0);victim->Bloodlust={};};
+ freeze();stationaryTarget=victim;int health=victim->Health(); std::cout<<"CHARGE_GATE state="<<p->GetStateName().ToString()<<" physics="<<int(p->Physics())<<" ready="<<RuneBloodlust::Readiness(p)<<" strength="<<p->GetInt("Strength")<<" active="<<p->GetBool("bBloodLust")<<" proxy="<<p->GetUObject("AnimProxy")->GetStateName().ToString()<<" shield="<<(p->GetUObject("Shield")!=nullptr)<<" kick="<<p->RuneKickActive<<" bash="<<p->RuneBashPhase<<std::endl;check(RuneBloodlust::Charge(p),"shield charge start");tick(54);check(length(p->Location()-origin)<5,"rush moved before stow and brace finished");
  for(int i=0;i<180;++i){victim->StateFrame->SetLatentState(LatentRunState::Stop);tick(1);}
  std::cout<<"CHARGE_RESULT phase="<<p->Bloodlust.phase<<" state="<<p->GetStateName().ToString()<<" physics="<<int(p->Physics())<<" hits="<<p->Bloodlust.hits<<" damage="<<health-victim->Health()<<" travel="<<p->Bloodlust.travel<<std::endl;check(p->Bloodlust.hits==1 && victim->Health()<health,"single charge impact");check(!RuneBloodlust::Busy(p),"charge never finished");check(p->Bloodlust.charges==1,"charge counter");
  std::cout<<"BLOOD_CHARGE_OK hits="<<p->Bloodlust.hits<<" damage="<<health-victim->Health()<<" travel="<<p->Bloodlust.travel<<std::endl;
  reset();full();check(victim->SetLocation(origin+direction*130.f),"blocked target placement");freeze();give(victim,"VikingShield");CallEvent(victim,"ActivateShield",{ExpressionValue::BoolValue(true)});victim->SetRotation(Rotator::FromVector(-direction));
  check(RuneBloodlust::Charge(p),"blocked charge start");for(int i=0;i<180;++i){victim->StateFrame->SetLatentState(LatentRunState::Stop);tick(1);}
  check(p->Bloodlust.hits==1 && p->Bloodlust.travel<150,"raised shield did not stop charge");std::cout<<"BLOOD_BLOCK_OK travel="<<p->Bloodlust.travel<<std::endl;
- victim->Destroy();reset();full();
+ stationaryTarget=nullptr;victim->Destroy();reset();full();
  auto* wall=p->Spawn(game.packages->GetPackage("RuneI")->GetClass("Stool"),{},{},p->Location()+direction*130.f,{});check(wall,"wall fixture");wall->SetPhysics(PHYS_None);wall->SetCollisionSize(35,128);wall->SetCollision(true,true,true);
  check(RuneBloodlust::Charge(p),"wall charge start");tick(180);check(!RuneBloodlust::Busy(p)&&p->Bloodlust.hits==0&&p->Bloodlust.travel<110,"charge crossed solid obstacle");wall->Destroy();std::cout<<"BLOOD_WALL_OK travel="<<p->Bloodlust.travel<<std::endl;
  // Isolated collision fixtures: grate lip, stairs in both directions, and
@@ -112,7 +133,8 @@ void RunRuneBloodlustProbe(Engine& game){
   a->SetCollision(true,true,true);return a;
  };
  reset();full();check(RuneBloodlust::Charge(p),"open rush");tick(240);
- check(p->Bloodlust.travel>555 && p->Bloodlust.travel<562,"longer rush distance");
+ std::cout<<"BLOOD_RUSH_RANGE_SAMPLE travel="<<p->Bloodlust.travel<<std::endl;
+ check(p->Bloodlust.travel>795 && p->Bloodlust.travel<802,"longer rush distance");
  std::cout<<"BLOOD_RUSH_RANGE_OK travel="<<p->Bloodlust.travel<<"\n";
  reset();auto* lip=platform(140,8,55);full();check(RuneBloodlust::Charge(p),"grate lip rush");float climbed=0;
  for(int i=0;i<240;++i){tick(1);climbed=std::max(climbed,p->Location().z-origin.z);}
@@ -137,10 +159,10 @@ void RunRuneBloodlustProbe(Engine& game){
  for(int i=0;i<210;++i){elite->StateFrame->SetLatentState(LatentRunState::Stop);tick(1);}
  check(elite->Bloodlust.charges==1 && !RuneBloodlust::Busy(elite),"enemy charge did not complete");
  elite->Bloodlust={};elite->Bloodlust.active=true;elite->Bloodlust.rage=100;elite->Bloodlust.think=100;elite->GotoState("Fighting","Begin");elite->SetPhysics(PHYS_Walking);elite->SetLocation(origin+direction*250.f);elite->SetBool("bSwingingHigh",false);elite->SetBool("bSwingingLow",false);
- elite->StateFrame->SetLatentState(LatentRunState::Stop);reset();check(RuneBloodlust::Leap(elite,-direction),"enemy leap");for(int i=0;i<240;++i){elite->StateFrame->SetLatentState(LatentRunState::Stop);tick(1);}check(elite->Bloodlust.leaps==1&&!RuneBloodlust::Busy(elite),"enemy leap did not complete");
- reset();elite->Bloodlust={};elite->Bloodlust.active=true;elite->Bloodlust.rage=100;elite->Bloodlust.think=0;elite->Tactics={};elite->Enemy()=p;elite->GotoState("Fighting","Begin");elite->StateFrame->SetLatentState(LatentRunState::Stop);elite->SetPhysics(PHYS_Walking);check(elite->SetLocation(origin+direction*250.f),"AI charge position");elite->Bloodlust.active=false;elite->Acceleration()=elite->Velocity()=vec3(0);tick(120);check(elite->Physics()==PHYS_Walking,"AI fixture must land first");elite->GotoState("Fighting","Begin");elite->StateFrame->SetLatentState(LatentRunState::Stop);elite->SetRotation(Rotator::FromVector(-direction));elite->SetBool("bSwingingHigh",false);elite->SetBool("bSwingingLow",false);elite->Bloodlust.active=true;elite->Bloodlust.rage=100;elite->Bloodlust.think=0;RuneTactics::Enabled=true;
- tick(240);check(elite->Bloodlust.charges>=1,"tactical enemy did not choose bloodlust charge");RuneTactics::Enabled=false;elite->Destroy();std::cout<<"BLOOD_AI_DECISION_OK\n";
- std::cout<<"BLOOD_ENEMY_OK rage gain, charge windup, charge and leap completion\n";
+ elite->StateFrame->SetLatentState(LatentRunState::Stop);reset();check(!(RuneBloodlust::Readiness(elite)&1) && !RuneBloodlust::Leap(elite,-direction),"campaign enemy giant leap disabled");
+ reset();elite->Bloodlust={};elite->Bloodlust.active=true;elite->Bloodlust.rage=100;elite->Bloodlust.think=0;elite->Tactics={};elite->Enemy()=p;elite->GotoState("Fighting","Begin");elite->StateFrame->SetLatentState(LatentRunState::Stop);elite->SetPhysics(PHYS_Walking);check(elite->SetLocation(origin+direction*250.f),"AI charge position");elite->Bloodlust.active=false;elite->Acceleration()=elite->Velocity()=vec3(0);tick(120);check(elite->Physics()==PHYS_Walking,"AI fixture must land first");elite->GotoState("Fighting","Begin");elite->StateFrame->SetLatentState(LatentRunState::Stop);elite->SetRotation(Rotator::FromVector(-direction));elite->SetBool("bSwingingHigh",false);elite->SetBool("bSwingingLow",false);elite->Bloodlust.active=false;elite->Bloodlust.rage=0;elite->Bloodlust.think=0;RuneBloodlust::AllowNormal=true;RuneTactics::Enabled=true;
+ for(int i=0;i<120 && elite->Bloodlust.phase==0;++i)tick(1);check(elite->Bloodlust.phase==RuneBloodlust::ChargeWindup && elite->Bloodlust.rage==0,"campaign enemy must choose rush before earning any rage");tick(240);check(elite->Bloodlust.charges>=1 && elite->Bloodlust.leaps==0,"campaign enemy rush completes without leaping");RuneTactics::Enabled=false;elite->Destroy();std::cout<<"CAMPAIGN_AI_NORMAL_RUSH_NO_LEAP_OK\n";
+ std::cout<<"BLOOD_ENEMY_OK rage gain, charge windup, normal rush, campaign leap prohibited\n";
  reset();full();check(RuneBloodlust::Charge(p),"save charge start");tick(54);auto savedWeaponName=p->Weapon()->Name;game.SaveGameToSlot(94,"Bloodlust isolated fixture");game.LoadFromSaveFile(UnrealURL("?load=94"));game.PossessSavedPlayer();p=game.viewport->Actor();check(!RuneBloodlust::Busy(p) && !p->Bloodlust.rushing,"saved charge resumed pending impacts");check(p->Weapon() && p->Weapon()->Name==savedWeaponName && p->Weapon()->GetUObject("AttachParent")==p,"saved rush lost selected weapon");
  std::cout<<"BLOOD_RUNTIME_OK gates, leap, charge, shield stop, enemy rage, save cancellation\n";
 }

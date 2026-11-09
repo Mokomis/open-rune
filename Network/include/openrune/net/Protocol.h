@@ -18,8 +18,8 @@ constexpr size_t MaxPayloadBytes = 768;
 constexpr size_t MaxAckRanges = 8;
 constexpr size_t ReplayBits = 1024;
 constexpr size_t ReliableWindow = 64;
-constexpr uint16_t ProtocolVersion = 22;
-inline constexpr const char* ProtocolAlpn = "open-rune-net/22";
+constexpr uint16_t ProtocolVersion = 25;
+inline constexpr const char* ProtocolAlpn = "open-rune-net/25";
 enum class Lane : uint8_t { Gameplay = 0, Control = 1, Bulk = 2, Snapshots = 3 };
 enum class Kind : uint8_t { State = 1, Event = 2, Chunk = 3, SnapshotPart = 4 };
 struct AckRange

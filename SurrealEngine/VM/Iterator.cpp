@@ -10,6 +10,11 @@
 #include "Packages/Engine/Actors/Info/ULevelInfo.h"
 
 #include <algorithm>
+#include "Frame.h"
+#include "Packages/Core/UClass.h"
+#include "Utils/CommandLine.h"
+#include "Utils/Logger.h"
+
 
 AllObjectsIterator::AllObjectsIterator(UObject* BaseClass, UObject** ReturnValue, UObject* InOuter)
 	: BaseClass(BaseClass), ReturnValue(ReturnValue), InOuter(InOuter), m_Objects(GC::GetObjects()), m_Iterator(m_Objects.begin())
@@ -334,19 +339,70 @@ bool TraceActorsIterator::Next()
 
 VisibleActorsIterator::VisibleActorsIterator(UActor* Caller, UObject* BaseClass, UObject** Actor, float Radius, const vec3& Location) : BaseClass(BaseClass), Actor(Actor), Radius(Radius), Location(Location)
 {
-	double sqrRadius = Radius * Radius;
-	for (auto levelActor : engine->Level->Actors)
+
+	static const bool enabled = commandline->GetArgInt("", "--rune-look-focus-filter", 1) != 0;
+	static const bool verify = commandline->HasArg("", "--rune-look-focus-verify");
+	static thread_local bool referenceQuery = false;
+	auto* frame = Frame::Callstack.empty() ? nullptr : Frame::Callstack.back();
+	// Native calls have their own frame; inspect the immediate script caller.
+	if (frame && frame->GetFunc() && frame->GetFunc()->Name == "VisibleActors" && Frame::Callstack.size() > 1)
+		frame = Frame::Callstack[Frame::Callstack.size() - 2];
+	auto* owner = frame && frame->GetFunc() ? UObject::TryCast<UClass>(frame->GetFunc()->Outer()) : nullptr;
+	auto* package = owner ? owner->package : nullptr;
+	bool stockPackage = package && (package->GetPackageName() == "RuneI" || package->GetPackageName() == "RuneI101" || package->GetPackageName() == "RuneI107");
+	// The stock look-focus routine immediately discards self, owned actors and
+	// actors without bLookFocusPlayer. Reject those before expensive LOS traces;
+	// leave scoring, tie order and all other visible-actor queries untouched.
+	bool filter = enabled && !referenceQuery && engine->LaunchInfo.IsRune() &&
+		BaseClass->Name == "Actor" && Radius == 1000.0f && Location == Caller->Location() &&
+		frame && frame->GetUObject() == Caller && frame->GetFunc()->Name == "DetermineLookFocus" &&
+		owner && owner->Name == "RunePlayer" && stockPackage;
+	auto eligible = [Caller](UActor* actor)
 	{
-		// Our checks:
-		// * Whether the actor we're dealing with is not hidden and is the class of BaseClass
-		// * Then whether the distance of the actor from our given Location is no more than Radius
-		// * A zero Radius means infinite range (To do: is this actually true? Seems expensive!)
-		if (levelActor && !levelActor->bHidden() && levelActor->IsA(BaseClass->Name))
+		return actor != Caller && actor->Owner() != Caller && actor->GetBool("bLookFocusPlayer");
+	};
+	Array<UActor*> expected;
+	if (filter && verify)
+	{
+		referenceQuery = true;
+		try
 		{
-			vec3 d = levelActor->Location() - Location;
-			if ((Radius == 0.0f || dot(d, d) <= sqrRadius) && Caller->FastTrace(levelActor->Location(), Location))
-				VisibleActors.push_back(levelActor);
+			UObject* unused = nullptr;
+			VisibleActorsIterator original(Caller, BaseClass, &unused, Radius, Location);
+			for (auto* actor : original.VisibleActors)
+				if (eligible(actor)) expected.push_back(actor);
 		}
+		catch (...)
+		{
+			referenceQuery = false;
+			throw;
+		}
+		referenceQuery = false;
+	}
+	unsigned rays = 0, skipped = 0;
+	double sqrRadius = Radius * Radius;
+	for (auto* levelActor : engine->Level->Actors)
+	{
+		if (!levelActor || levelActor->bHidden() || !levelActor->IsA(BaseClass->Name)) continue;
+		vec3 d = levelActor->Location() - Location;
+		if (!(Radius == 0.0f || dot(d, d) <= sqrRadius)) continue;
+		if (filter && !eligible(levelActor))
+		{
+			++skipped;
+			continue;
+		}
+		++rays;
+		if (Caller->FastTrace(levelActor->Location(), Location))
+			VisibleActors.push_back(levelActor);
+	}
+	if (filter && verify)
+	{
+		if (expected.size() != VisibleActors.size() || !std::equal(expected.begin(), expected.end(), VisibleActors.begin()))
+			throw std::runtime_error("Look-focus prefilter changed visibility candidates or ordering");
+		static uint64_t checks = 0, totalRays = 0, totalSkipped = 0;
+		++checks; totalRays += rays; totalSkipped += skipped;
+		if (checks == 1 || checks % 1000 == 0)
+			LogMessage("RUNE_LOOK_FOCUS_VERIFY checks=" + std::to_string(checks) + " rays=" + std::to_string(totalRays) + " skipped=" + std::to_string(totalSkipped));
 	}
 
 	iterator = VisibleActors.begin();

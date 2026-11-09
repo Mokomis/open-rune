@@ -2,8 +2,7 @@
 
 Double-tap **Block** within 0.3 seconds while holding a usable shield. The first
 press blocks immediately; holding the button does not repeatedly bash. The move
-is also available to compatible shield-bearing humanoid enemies. Gameplay and
-Enhancements share the default-on **Shield bash** switch. Disabling it leaves
+is also available to compatible shield-bearing humanoid enemies. The default-on **Shield bash** setting controls this move. Disabling it leaves
 ordinary blocking and the independent kick setting available.
 
 ## Implementation and balance
@@ -45,7 +44,8 @@ not key repeats. Pausing clears its pending double-tap. Cooldown, pending impact
 and stagger immunity are transient across save/load; save formats are unchanged.
 Loading an action cancels its pending native hit while the saved animation can
 finish normally. Mid-action restoration is not separately validated. Multiplayer
-replication is not implemented.
+uses authoritative contact outcomes and snapshot animation; late-block admission
+retains the existing two-tick window.
 
 ## Validation
 
@@ -101,3 +101,32 @@ All ten normal/campaign saved-file hashes are unchanged. Original preferences
 were restored byte-for-byte after testing. The tablet is left at the original
 campaign-village-ledge title menu, native resolution with 4× MSAA, with Shield
 bash enabled by default. Source and evidence stay in the private fork.
+
+## November 7 presentation update
+
+A pale air sweep follows the actual shield attachment during the authored bash.
+It appears for misses and blocks too, but confirmed unblocked impacts alone produce
+the added head recoil. The head tilts back about thirty degrees at full strength,
+peaking after 45 ms and returning smoothly within 340 ms. Bone positions and scales
+are unchanged. Resistant/immune targets receive a reduced cosmetic reaction;
+blocked hits receive no head snap. Living rigid-body reactions keep their physics
+pose. The original roughly 0.35-second gameplay stagger, damage, reach, cooldown,
+immunity and boss protections are unchanged.
+
+Multiplayer head recoil follows authenticated, life-checked contact outcomes,
+including recent outcomes whose health update was already superseded by a newer
+snapshot. Duplicates cannot restart it; outcomes more than fifteen simulation
+ticks behind the installed snapshot are too old for the extra cosmetic recoil.
+No packet format or damage admission changed.
+
+The air ribbons use at most 32 small quads per view within the shared effects
+budget, no new lights, render targets, physics queries or gameplay actors. The
+existing combat-effects setting controls them.
+
+Mac checks pass at actual 2816×1762 with requested 4× AA: enemy unblocked and blocked
+bashes, rendered sweep/impact captures, one short stagger on an unblocked hit and
+none on a block. Native combat passes 430 snapshots/4093 ticks, including a head
+rotation/shape/recovery regression; engine network tests pass confirmed-hit and
+duplicate-outcome checks. The Windows native and engine network suites also pass.
+Android native compilation, signed packaging and notices verification pass;
+device installation/testing is recorded separately in the current handoff.

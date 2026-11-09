@@ -16,6 +16,9 @@ public:
 	VulkanCommandBuffer* GetTransferCommands();
 	VulkanCommandBuffer* GetDrawCommands();
 	void DeleteFrameObjects();
+	// Optional timestamps at existing pass boundaries; never split a render pass.
+	enum class GpuPass { Other, Scene, Shadow, Water, Resolve, Bloom, Present, Count };
+	void SetProfilePass(GpuPass pass);
 
 	struct DeleteList
 	{
@@ -58,4 +61,13 @@ private:
 	int ProfileGpuSamples = 0;
 	std::unique_ptr<VulkanQueryPool> ProfileTimestamps;
 	uint32_t ProfileTimestampBits = 0;
+	static constexpr uint32_t MaxProfileQueries = 256;
+	struct PassInterval { uint32_t begin, end; GpuPass pass; };
+	bool ProfilePasses = false, PassOverflow = false, HadPartialSubmit = false;
+	bool PendingPassComplete = false;
+	uint32_t ProfileQueryCount = 4, PendingQueryCount = 4, PassBegin = 0;
+	GpuPass CurrentPass = GpuPass::Other;
+	std::vector<PassInterval> PassIntervals, PendingPassIntervals;
+	double PassTotals[static_cast<int>(GpuPass::Count)] = {};
+	int PassSamples = 0, PassDropped = 0;
 };

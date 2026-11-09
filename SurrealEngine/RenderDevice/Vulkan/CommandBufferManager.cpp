@@ -31,6 +31,7 @@ CommandBufferManager::CommandBufferManager(VulkanRenderDevice* renderer) : rende
 
 	FrameDeleteList = std::make_unique<DeleteList>();
 	ProfileFrames = commandline->GetArgInt("", "--profile-frames", 0);
+	ProfilePasses = ProfileFrames > 0 && commandline->GetArgInt("", "--profile-passes", 0) != 0;
 	if (ProfileFrames > 0)
 	{
 		uint32_t count = 0;
@@ -40,7 +41,7 @@ CommandBufferManager::CommandBufferManager(VulkanRenderDevice* renderer) : rende
 		vkGetPhysicalDeviceQueueFamilyProperties(physical, &count, families.data());
 		ProfileTimestampBits = families.at(renderer->Device->GraphicsFamily).timestampValidBits;
 		if (ProfileTimestampBits)
-			ProfileTimestamps = QueryPoolBuilder().QueryType(VK_QUERY_TYPE_TIMESTAMP, 4).Create(renderer->Device.get());
+			ProfileTimestamps = QueryPoolBuilder().QueryType(VK_QUERY_TYPE_TIMESTAMP, ProfilePasses ? MaxProfileQueries : 4).Create(renderer->Device.get());
 	}
 }
 
@@ -184,6 +185,14 @@ void CommandBufferManager::SubmitCommands(bool present, int presentWidth, int pr
 	PendingCpuMs[4] = ms(profileSubmit, profilePresent);
 	PendingPresent = present;
 	PendingGpuSample = gpuSample && PresentImageIndex != -1;
+	PendingQueryCount = ProfileQueryCount;
+	PendingPassComplete = ProfilePasses && !PassOverflow && !HadPartialSubmit && present;
+	if (ProfilePasses && DrawCommands)
+	{
+		PassIntervals.push_back({PassBegin, 3, CurrentPass});
+		PendingPassIntervals = std::move(PassIntervals);
+	}
+	HadPartialSubmit = !present;
 	PendingDrawCommands = std::move(DrawCommands);
 	PendingTransferCommands = std::move(TransferCommands);
 	PendingDeleteList = std::move(FrameDeleteList);
@@ -207,8 +216,9 @@ void CommandBufferManager::WaitForPending()
 	bool gpuSample = false;
 	if (PendingGpuSample)
 	{
-		uint64_t timestamps[4];
-		if (ProfileTimestamps->getResults(0, 4, sizeof(timestamps), timestamps, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT))
+		uint64_t timestamps[MaxProfileQueries] = {};
+		uint32_t count = ProfilePasses ? PendingQueryCount : 4;
+		if (ProfileTimestamps->getResults(0, count, count * sizeof(uint64_t), timestamps, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT))
 		{
 			uint64_t mask = ProfileTimestampBits == 64 ? UINT64_MAX : (uint64_t(1) << ProfileTimestampBits) - 1;
 			auto ms = [&](int a, int b) { return ((timestamps[b] - timestamps[a]) & mask) * (double)renderer->Device->PhysicalDevice.Properties.Properties.limits.timestampPeriod / 1000000.0; };
@@ -217,6 +227,16 @@ void CommandBufferManager::WaitForPending()
 			gpuMs[2] = ms(1, 2);
 			gpuMs[3] = ms(2, 3);
 			gpuSample = true;
+			if (ProfilePasses && ProfileFrame >= 60 && ProfileFrame < 60 + ProfileFrames)
+			{
+				if (PendingPassComplete)
+				{
+					for (const auto& interval : PendingPassIntervals)
+						PassTotals[static_cast<int>(interval.pass)] += ms(interval.begin, interval.end);
+					++PassSamples;
+				}
+				else ++PassDropped;
+			}
 		}
 	}
 	result = vkResetFences(renderer->Device->device, 1, &RenderFinishedFence->fence);
@@ -240,7 +260,17 @@ void CommandBufferManager::WaitForPending()
 				++ProfileGpuSamples;
 			}
 			if (ProfileFrame == 60 + ProfileFrames)
+			{
 				LogMessage("RUNE_VULKAN_PROFILE uploads_ms=" + std::to_string(ProfileCpuTotals[0]/ProfileFrames) + " acquire_ms=" + std::to_string(ProfileCpuTotals[1]/ProfileFrames) + " encode_ms=" + std::to_string(ProfileCpuTotals[2]/ProfileFrames) + " submit_ms=" + std::to_string(ProfileCpuTotals[3]/ProfileFrames) + " present_ms=" + std::to_string(ProfileCpuTotals[4]/ProfileFrames) + " fence_ms=" + std::to_string(ProfileCpuTotals[5]/ProfileFrames) + " gpu_interval_ms=" + std::to_string(ProfileGpuSamples ? ProfileGpuTotals[0]/ProfileGpuSamples : -1) + " gpu_wait_ms=" + std::to_string(ProfileGpuSamples ? ProfileGpuTotals[1]/ProfileGpuSamples : -1) + " gpu_scene_ms=" + std::to_string(ProfileGpuSamples ? ProfileGpuTotals[2]/ProfileGpuSamples : -1) + " gpu_present_ms=" + std::to_string(ProfileGpuSamples ? ProfileGpuTotals[3]/ProfileGpuSamples : -1) + " gpu_samples=" + std::to_string(ProfileGpuSamples));
+				if (ProfilePasses)
+				{
+					const char* names[] = {"other", "scene", "shadow", "water", "resolve", "bloom", "present"};
+					std::string report = "RUNE_GPU_PASSES samples=" + std::to_string(PassSamples) + " dropped=" + std::to_string(PassDropped);
+					for (int i=0; i<static_cast<int>(GpuPass::Count); ++i)
+						report += " " + std::string(names[i]) + "_ms=" + std::to_string(PassSamples ? PassTotals[i]/PassSamples : -1);
+					LogMessage(report);
+				}
+			}
 		}
 	}
 }
@@ -263,12 +293,26 @@ VulkanCommandBuffer* CommandBufferManager::GetDrawCommands()
 		DrawCommands->begin();
 		if (ProfileTimestamps)
 		{
-			DrawCommands->resetQueryPool(ProfileTimestamps.get(), 0, 4);
+			DrawCommands->resetQueryPool(ProfileTimestamps.get(), 0, ProfilePasses ? MaxProfileQueries : 4);
 			DrawCommands->writeTimestamp(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, ProfileTimestamps.get(), 0);
 			DrawCommands->writeTimestamp(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, ProfileTimestamps.get(), 1);
+			ProfileQueryCount = 4; PassBegin = 0; CurrentPass = GpuPass::Other;
+			PassOverflow = false; PassIntervals.clear();
 		}
 	}
 	return DrawCommands.get();
+}
+
+void CommandBufferManager::SetProfilePass(GpuPass pass)
+{
+	if (!ProfilePasses || !ProfileTimestamps) return;
+	auto* commands = GetDrawCommands();
+	if (CurrentPass == pass) return;
+	if (ProfileQueryCount == MaxProfileQueries) { PassOverflow = true; return; }
+	uint32_t query = ProfileQueryCount++;
+	commands->writeTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, ProfileTimestamps.get(), query);
+	PassIntervals.push_back({PassBegin, query, CurrentPass});
+	PassBegin = query; CurrentPass = pass;
 }
 
 void CommandBufferManager::DeleteFrameObjects()

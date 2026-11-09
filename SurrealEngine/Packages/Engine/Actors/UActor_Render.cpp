@@ -3,16 +3,19 @@
 #include "Render/SpriteTexture.h"
 #include "UActor.h"
 #include "RuneParticles.h"
+#include "RuneStairPresentation.h"
 #include "Packages/Engine/Actors/Brush/MovingBrush.h"
 #include "Packages/Engine/Resources/Level/ULevel.h"
 #include "Packages/Engine/Resources/Level/UModel.h"
 #include "Packages/Engine/Resources/Mesh/USkeletalMesh.h"
 #include "Packages/Engine/Resources/Mesh/USkelModel.h"
 #include "Engine.h"
+#include "Utils/CommandLine.h"
 #include "Packages/Engine/Resources/Textures/UTexture.h"
 
 void UActor::UpdateBspInfo()
 {
+    static const bool runePoseBounds=commandline->GetArgInt("","--rune-pose-bounds",1)!=0;
 	// Figure out where the actor is visually located in the world
 	BBox bbox;
 	EDrawType dt = (EDrawType)DrawType();
@@ -29,10 +32,19 @@ void UActor::UpdateBspInfo()
             // and uses its own centred transform rather than the torso joint.
             auto world=RuneCorpse::MeshToWorld(this);
             bbox=BBox(CorpseBody.lower,CorpseBody.upper).transform(world);
+        }else if(engine->LaunchInfo.IsRune() && UObject::TryCast<USkelModel>(mesh) &&
+            runePoseBounds) {
+            // Match Rune's real render transform and current procedural pose,
+            // rather than the first serialized frame and legacy UE mesh origin.
+            bbox=UObject::Cast<USkelModel>(mesh)->PoseBounds(this).transform(GetRuneMeshToWorld(this));
         }else {
             mat4 objectToWorld = GetRuneActorToWorld(this);
             mat4 meshToWorld = objectToWorld * mesh->meshToObject;
             bbox = mesh->BoundingBox.transform(meshToWorld);
+        }
+        if(engine->LaunchInfo.IsRune()) {
+            float stairOffset=RuneStairPresentation::Offset(this);
+            bbox.min.z+=stairOffset;bbox.max.z+=stairOffset;
         }
 	}
 	else if ((dt == DT_Sprite || dt == DT_SpriteAnimOnce) && sprite && !sprite->UsedMipmaps.empty())

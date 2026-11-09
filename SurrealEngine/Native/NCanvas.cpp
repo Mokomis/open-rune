@@ -215,10 +215,18 @@ void NCanvas::DrawTile(UObject* Self, UObject* Tex, float XL, float YL, float U,
 			renderflags |= PF_Translucent;
 		else if (style == 4)
 			renderflags |= PF_Modulated;
+        const bool runeAlpha = engine->LaunchInfo.IsRune() && style == STY_AlphaBlend;
+        float opacity = color.A / 255.0f;
+        if (runeAlpha)
+        {
+            renderflags |= PF_Highlighted | PF_CanvasAlpha;
+            float scale = SelfCanvas->GetFloat("AlphaScale");
+            opacity = std::isfinite(scale) ? clamp(scale, 0.0f, 1.0f) : 1.0f;
+        }
 		if (noSmooth)
 			renderflags |= PF_NoSmooth;
 
-		engine->render->DrawTile((UTexture*)Tex, orgX + curX, orgY + curY, XL, YL, U, V, UL, VL, 1.0f, { color.R / 255.0f, color.G / 255.0f, color.B / 255.0f, color.A / 255.0f }, { 0.0f }, renderflags);
+		engine->render->DrawTile((UTexture*)Tex, orgX + curX, orgY + curY, XL, YL, U, V, UL, VL, 1.0f, { color.R / 255.0f, color.G / 255.0f, color.B / 255.0f, opacity }, { 0.0f }, renderflags);
 	}
 
 	curX += XL + spaceX;
@@ -254,10 +262,18 @@ void NCanvas::DrawTileClipped(UObject* Self, UObject* Tex, float XL, float YL, f
 			renderflags |= PF_Translucent;
 		else if (style == 4)
 			renderflags |= PF_Modulated;
+        const bool runeAlpha = engine->LaunchInfo.IsRune() && style == STY_AlphaBlend;
+        float opacity = color.A / 255.0f;
+        if (runeAlpha)
+        {
+            renderflags |= PF_Highlighted | PF_CanvasAlpha;
+            float scale = SelfCanvas->GetFloat("AlphaScale");
+            opacity = std::isfinite(scale) ? clamp(scale, 0.0f, 1.0f) : 1.0f;
+        }
 		if (noSmooth)
 			renderflags |= PF_NoSmooth;
 
-		engine->render->DrawTileClipped((UTexture*)Tex, orgX, orgY, curX, curY, XL, YL, U, V, UL, VL, 1.0f, { color.R / 255.0f, color.G / 255.0f, color.B / 255.0f, color.A / 255.0f }, { 0.0f }, renderflags, clipX, clipY);
+		engine->render->DrawTileClipped((UTexture*)Tex, orgX, orgY, curX, curY, XL, YL, U, V, UL, VL, 1.0f, { color.R / 255.0f, color.G / 255.0f, color.B / 255.0f, opacity }, { 0.0f }, renderflags, clipX, clipY);
 	}
 
 	float nextX = clamp(curX + XL, 0.0f, clipX);

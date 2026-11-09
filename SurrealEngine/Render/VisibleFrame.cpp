@@ -3,6 +3,7 @@
 #include "Precomp.h"
 #include "VisibleSnow.h"
 #include "VisibleRuneBlood.h"
+#include "VisibleRuneBash.h"
 #include "VisibleFrame.h"
 #include "VisibleCorona.h"
 #include "RenderSubsystem.h"
@@ -112,13 +113,15 @@ void VisibleFrame::ProcessNode(BspNode* node)
 	//	return;
 
 	// Skip node if its AABB is not visible
-	if (node->RenderBound != -1 && !IsBoxVisible(engine->Level->Model->Bounds[node->RenderBound]))
-	{
-		return;
-	}
+    static const bool conservative=commandline->GetArgInt("","--bsp-conservative-bounds",1)!=0;
+    auto* model=engine->Level->Model;
+    if(engine->LaunchInfo.IsRune() && conservative) {
+        const auto& box=model->ConservativeRenderBounds()[node-model->Nodes.data()];
+        if(box.IsValid && !IsBoxVisible(box))return;
+    }else if(node->RenderBound!=-1 && !IsBoxVisible(model->Bounds[node->RenderBound]))return;
 
 	// Add bsp node actors to the visible set
-	for (UActor* actor = node->ActorList; actor != nullptr; actor = actor->BspInfo.Next)
+	for (UActor* actor = ShadowView && IndependentShadowCasters ? nullptr : node->ActorList; actor != nullptr; actor = actor->BspInfo.Next)
 	{
 		if (actor->LastDrawFrame != FrameCounter)
 		{
@@ -367,6 +370,7 @@ void VisibleFrame::Draw()
     RuneSnow::Draw(this);
     RuneBloodPresentation::Draw(this);
     RuneGore::Draw(this);
+    RuneBashPresentation::Draw(this);
 	SortTranslucent();
 	DrawTranslucent();
 }
@@ -562,6 +566,7 @@ Coords VisibleFrame::WarpRotationToOtherSide(UWarpZoneInfo* warpZone, Coords rot
 void VisibleFrame::ProcessShadow(const vec3& light, const vec3& target, float radius)
 {
     ShadowView = true;
+    IndependentShadowCasters = commandline->GetArgInt("","--shadow-caster-scan",1)!=0;
     Device = engine->render->Device;
     FrameCounter = engine->render->FrameCounter++;
     PortalDepth = 1; // all third-person geometry, without traversing portals
@@ -581,13 +586,19 @@ void VisibleFrame::ProcessShadow(const vec3& light, const vec3& target, float ra
     // Shadow views have no CPU occlusion intervals. Conservative frustum tests
     // avoid rasterizing thousands of software spans; Vulkan still clips/tests
     // the submitted caster geometry. Retain the reference path for comparison.
-#ifdef _WIN32
     FastShadowCulling = commandline->GetArgInt("", "--shadow-frustum-cull", 1) != 0;
-#endif
     if (FastShadowCulling) ShadowFrustum = FrustumPlanes(Frame.Projection * Frame.WorldToView);
     else Clipper.Setup(Frame.Projection * Frame.WorldToView, {}, vec4(0,0,0,1));
     // The light's frustum, not the player's visible set, supplies occluders.
     ProcessNode(&engine->Level->Model->Nodes[0]);
+    // Moving actors may extend beyond their BSP node's static scenery bounds.
+    // Test their own bounds independently of surface-subtree rejection.
+    if(IndependentShadowCasters)
+        for(auto* actor:engine->Level->Actors)if(actor && !actor->bDeleteMe() && !actor->bHidden()) {
+            int draw=actor->DrawType();
+            if(draw!=DT_Mesh && draw!=6 && draw!=DT_Brush)continue;
+            VisibleActor visible;visible.Process(this,actor);
+        }
 }
 
 void VisibleFrame::DrawShadow()

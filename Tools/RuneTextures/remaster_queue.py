@@ -150,7 +150,7 @@ def ingest(args):
         candidate.unlink()
         raise ValueError('A different master already exists for this job')
     candidate.replace(dest)
-    job.update(status='review', master=str(dest.relative_to(args.queue)), master_sha256=sha(dest),
+    job.update(status='review', master=dest.relative_to(args.queue).as_posix(), master_sha256=sha(dest),
                generated_original=str(args.image.resolve()), generator=args.generator)
     if args.prompt_file:
         job['generation_prompt'] = args.prompt_file.read_text().strip()
@@ -211,7 +211,7 @@ def record_failed(args):
     if not dest.exists():
         shutil.copy2(args.image, dest)
     note = {'job': args.job, 'primary': job['primary'], 'source_sha256': job['source_sha256'],
-            'candidate_sha256': digest, 'candidate': str(dest.relative_to(args.queue)),
+            'candidate_sha256': digest, 'candidate': dest.relative_to(args.queue).as_posix(),
             'generator': args.generator, 'reason': args.reason,
             'prompt': args.prompt_file.read_text().strip() if args.prompt_file else job['prompt']}
     write_json(folder / (digest + '.json'), note)
@@ -281,6 +281,27 @@ def decide(args):
     print(job['primary'], job['status'])
 
 
+def material_estimate(identity):
+    """Conservative fallback for unreviewed originals, not an artist approval."""
+    name = identity.lower()
+    if name.startswith(('wood.', 'wood101.', 'wood107.')) or any(s in name for s in ('plank', 'wood', 'wdwall')):
+        return 'wood'
+    if name.startswith(('rock.', 'brckston.', 'brckston101.', 'brckston107.')) or any(s in name for s in ('brick', 'stone')):
+        return 'stone'
+    # Keep the runtime's existing broad classification when no region recipe
+    # exists. These remain flagged estimates, especially for mixed UV atlases.
+    if any(s in name for s in ('metal', 'steel', 'iron', 'axe', 'sword', 'hammer', 'blade', 'shield')):
+        return 'metal'
+    if any(s in name for s in ('cloth', 'banner', 'fabric', 'sail')):
+        return 'cloth'
+    if any(s in name for s in ('ship', 'hull')):
+        return 'wood'
+    if any(s in name for s in ('ragnar', 'goblin', 'viking', 'dwarf', 'crab', 'skin', 'sark')):
+        return 'skin'
+    # Ambiguous mixed atlases stay neutral until their regions are described.
+    return 'neutral'
+
+
 def export_recipe(args):
     """Write an immutable builder input from approved masters and every alias."""
     if args.output.exists():
@@ -288,13 +309,15 @@ def export_recipe(args):
     plan = json.loads((args.queue / 'plan.json').read_text())
     source_root = Path(plan['source_root']) / 'source'
     materials = json.loads(args.materials.read_text()) if args.materials else {}
-    assets, neutral = [], []
+    assets, neutral, estimated = [], [], []
+    include_original = getattr(args, 'include_original', False)
     for descriptor in plan['jobs']:
         job = json.loads((args.queue / 'jobs' / (descriptor['id'] + '.json')).read_text())
-        if job['status'] != 'approved':
+        approved = job['status'] == 'approved'
+        if not approved and not include_original:
             continue
-        master = args.queue / job['master']
-        if sha(master) != job['master_sha256']:
+        master = args.queue / job['master'] if approved else None
+        if master is not None and sha(master) != job['master_sha256']:
             raise ValueError('Approved master changed: ' + job['primary'])
         primary_material = materials.get(job['primary'].lower())
         for alias in job['aliases']:
@@ -307,22 +330,27 @@ def export_recipe(args):
             elif primary_material:
                 material = primary_material.copy()
             else:
-                material = {'material': 'neutral'}
-                neutral.append(identity)
+                material = {'material': material_estimate(identity) if include_original else 'neutral',
+                            'material_source': 'estimated; no reviewed region definition'}
+                estimated.append(identity)
+                if material['material'] == 'neutral':
+                    neutral.append(identity)
             if material['material'] == 'stone' or any(r['material'] == 'stone' for r in material.get('regions', [])):
                 material.setdefault('stone_detail_gain', 0.7)
-            assets.append({'identity': identity,
-                           'source': str(source.relative_to(source_root)),
-                           'master': master.name,
+            asset = {'identity': identity,
+                           'source': source.relative_to(source_root).as_posix(),
                            'source_sha256': alias['sha256'],
-                           'master_sha256': job['master_sha256'],
-                           **material})
+                           **material}
+            if approved:
+                asset.update(master=master.name, master_sha256=job['master_sha256'])
+            assets.append(asset)
     assets.sort(key=lambda a: a['identity'].lower())
-    recipe = {'version': 1, 'scope': 'approved queue masters only',
+    recipe = {'version': 1, 'scope': ('all eligible static originals plus approved masters' if include_original else 'approved queue masters only'),
               'assets': assets, 'neutral_material_aliases': neutral,
+              'estimated_material_aliases': estimated,
               'inventory_sha256': plan['inventory_sha256']}
     write_json(args.output, recipe)
-    print(json.dumps({'approved_assets': len(assets), 'neutral_material_aliases': len(neutral),
+    print(json.dumps({'assets': len(assets), 'approved_assets': sum('master' in a for a in assets), 'neutral_material_aliases': len(neutral),
                       'output': str(args.output)}, indent=2))
 
 
@@ -340,7 +368,7 @@ def main():
     p = sub.add_parser('record-failed'); p.add_argument('--queue', type=Path, required=True); p.add_argument('--job', required=True); p.add_argument('--image', type=Path, required=True); p.add_argument('--generator', required=True); p.add_argument('--prompt-file', type=Path); p.add_argument('--reason', required=True); p.set_defaults(run=record_failed)
     p = sub.add_parser('audit'); p.add_argument('--queue', type=Path, required=True); p.add_argument('--job', required=True); p.set_defaults(run=audit)
     p = sub.add_parser('decide'); p.add_argument('--queue', type=Path, required=True); p.add_argument('--job', required=True); p.add_argument('--decision', choices=('approve', 'reject'), required=True); p.add_argument('--note', required=True); p.set_defaults(run=decide)
-    p = sub.add_parser('export-recipe'); p.add_argument('--queue', type=Path, required=True); p.add_argument('--materials', type=Path); p.add_argument('--output', type=Path, required=True); p.set_defaults(run=export_recipe)
+    p = sub.add_parser('export-recipe'); p.add_argument('--queue', type=Path, required=True); p.add_argument('--materials', type=Path); p.add_argument('--output', type=Path, required=True); p.add_argument('--include-original', action='store_true', help='Also prepare original-art material data for pending/review static assets; does not approve their masters'); p.set_defaults(run=export_recipe)
     p = sub.add_parser('status'); p.add_argument('--queue', type=Path, required=True); p.set_defaults(run=status)
     args = ap.parse_args(); args.run(args)
 

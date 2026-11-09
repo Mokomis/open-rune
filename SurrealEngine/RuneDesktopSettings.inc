@@ -18,7 +18,11 @@ add("materialLighting","Material lighting","Physical adds roughness-aware GGX hi
 add("environmentProbes","Local environment lighting","Baked room color and broad reflections. Static scenery only; prepared when first enabled. Requires Remastered lighting.",{"Off","On"},0,0,1);
 add("materialMaps","Material maps","Generated normal and roughness detail for Remastered lighting.",{"Original","Enhanced"},0,0,1);
 add("texturePack","Texture artwork","Work-in-progress remastered artwork. Unfinished or unavailable textures keep their original artwork.",{"Original","WIP 2×","WIP 4×"},0,0,2);
+#ifdef _WIN32
+add("water","Water","Enhanced adds flowing ripples, depth colour, glints and gentle underwater distortion. Legacy reflections redraw the scene and cost more.",{"Original","Enhanced","Legacy reflections"},0,0,2);
+#else
 add("water","Water reflections","Approximate adds ripples and an environment sheen. Full scene reflects nearby scenery at higher cost.",{"Original","Approximate","Full scene"},0,0,2);
+#endif
 add("shadowLights","Shadow-casting lights","Maximum nearby shadow-casting lights. Higher counts cost more rendering time. Requires Remastered lighting.",{"One nearby","Three nearby","Four nearby","Six nearby","Eight nearby"},0,0,4);
 add("ambientOcclusion","Ambient occlusion","Experimental contact shading around corners and objects. Off is recommended at native resolution until this effect is faster.",{"Off","Low","Medium","High"},0,0,3);
 add("detail","Surface detail","Generated relief on stone and wood. High strengthens shading.",{"Off","Low","Medium","High"},0,0,3);
@@ -38,10 +42,12 @@ add("networkDiagnostics","Network diagnostics","Multiplayer frame times, acknowl
 add("networkSmoothing","Network smoothing","Adaptive smooths remote movement against packet jitter with a bounded buffer. Local controls stay responsive; gameplay remains server controlled.",{"Original","Adaptive"},1,0,1);
 add("kick","Combat kicks","F / right-stick click. Raised shields absorb damage and most knockback.",{"Off","On"},1,0,1);
 add("bash","Shield bash","Double-tap Block. Brief stagger and small shove; raised shields counter it.",{"Off","On"},1,0,1);
-add("bloodlustMoves","Bloodlust moves","While bloodlust is active: double-tap Jump for a giant leap; hold Block and press Attack for shield charge. Each costs half a meter, with a 4-second cooldown. Selected Dark Vikings can use them too. Server rules govern multiplayer moves.",{"Off","On"},1,0,1);
+add("bloodlustMoves","Giant leap & shield rush","Giant leap is multiplayer-only: double-tap Jump. Shield rush works in campaign and multiplayer: hold Block and press Attack. Available without bloodlust by default, with a shared 4-second cooldown. Rush requires a shield. Eligible enemies and bots can use them too. Multiplayer follows the host.",{"Off","On"},1,0,1);
 add("dualWield","Dual wield","Use two light weapons and a weaker crossed block. Your shield stays in inventory; turn this off to use it again. Compatible Vikings can dual wield too.",{"Off","On"},1,0,1);
 add("tactics","Enemy tactics","Tactical humanoids use spacing, delayed defense, kicks and shield bashes. Bosses and scripted scenes keep their original behavior.",{"Original","Tactical"},1,0,1);
 add("difficulty","New campaign difficulty","Applies when you start a new campaign. Saves retain their difficulty.",{"Easy","Medium","Hard","Very hard"},1,0,3);
 add("fullscreen","Window mode","Switch between a normal window and fullscreen.",{"Windowed","Fullscreen"},0,0,1);
 
-add("normalBloodlust","Leap & rush without bloodlust","Allow giant leap and shield rush outside bloodlust. Outside bloodlust no meter is spent; the shared 4-second cooldown and shield requirement remain. Host setting applies to new matches.",{"Off","On"},0,0,1);
+add("normalBloodlust","Leap & rush availability","Normal combat is the default: neither move needs or spends bloodlust. The shared 4-second cooldown and shield requirement remain. Choose Bloodlust only to restore the old requirement. Multiplayer follows the host.",{"Bloodlust only","Normal combat"},1,0,1);
+
+add("physics","Cinematic physics","Articulated bodies, recoverable knockdowns and throwable props. Chaos increases force and bounce. Bosses and scripted scenes are protected. Multiplayer follows host rules.",{"Original","Cinematic","Chaos"},0,0,2);

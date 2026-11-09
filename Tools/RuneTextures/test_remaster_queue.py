@@ -45,6 +45,14 @@ class QueueTest(unittest.TestCase):
             self.assertEqual(json.loads((out / 'jobs' / (digest + '.json')).read_text())['status'], 'pending')
             self.assertTrue((out / 'rejected' / digest / (queue.sha(wrong_shape) + '.json')).exists())
 
+            originals = base / 'original-materials.json'
+            queue.export_recipe(type('Args', (), {'queue': out, 'materials': None,
+                                                  'output': originals, 'include_original': True})())
+            original_assets = json.loads(originals.read_text())['assets']
+            self.assertEqual(len(original_assets), 2)
+            self.assertTrue(all('master' not in a for a in original_assets))
+            self.assertEqual(json.loads((out / 'jobs' / (digest + '.json')).read_text())['status'], 'pending')
+
             generated = base / 'generated.png'
             Image.new('RGB', (256, 256), (56, 44, 34)).save(generated)
             prompt = base / 'prompt.txt'; prompt.write_text('Preserve the original.\n')

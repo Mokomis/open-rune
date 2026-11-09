@@ -70,12 +70,13 @@ final class RuneMenuView extends FrameLayout {
     final RuneHostConfig hostConfig=new RuneHostConfig();
     String hostAddress="";
     String hostFocus="";
-    int invitationSlot=2;
+    int invitationSlot=2,lawsPage=0;
     final ArrayList<Runnable> refreshers=new ArrayList<>();
     final HashMap<View,Integer> hiddenAccessibility=new HashMap<>();
 
     RuneMenuView(Context context,Host host) {
         super(context); this.host=host;settings=host.settings();
+        hostConfig.laws=settings.prefs.getInt("laws.host",RuneBattleLaws.ALL)&RuneBattleLaws.ALL;hostConfig.normalBloodlust=(hostConfig.laws&RuneBattleLaws.NORMAL)!=0;hostConfig.physics=Math.max(0,Math.min(2,settings.prefs.getInt("laws.hostPhysics",0)));
         Bitmap bitmap=null;
         try(InputStream in=context.getAssets().open("menu-background.png")) { bitmap=BitmapFactory.decodeStream(in); }
         catch(IOException ignored) {}
@@ -95,7 +96,7 @@ final class RuneMenuView extends FrameLayout {
         });
         setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
     }
-    void open(boolean title) { titleMode=title;history.clear();renderedPage="";showHome(); }
+    void open(boolean title) { RuneUpdates.check(getContext(),false);titleMode=title;history.clear();renderedPage="";showHome(); }
     void setNotice(String text) { notice=text; refresh(); }
     void refresh() {
         for(Runnable update:new ArrayList<>(refreshers)) update.run();
@@ -121,6 +122,7 @@ final class RuneMenuView extends FrameLayout {
         if(key.startsWith("notices:")){showNotices(key.substring(8));return;}
         if(key.startsWith("notice:")){showNoticeText(key.substring(7));return;}
         switch(key){
+        case "campaignLaws":showBattleLaws("campaign");break;case "newLaws":showBattleLaws("new");break;case "hostLaws":showBattleLaws("host");break;case "matchLaws":showBattleLaws("match");break;
         case "multiplayer":showMultiplayer();break;case "findgames":showFindGames(false);break;
         case "host":showHostSetup();break;case "hostRules":showHostRules();break;case "advancedJoin":showAdvancedJoin();break;
         case "maps":showHostMaps();break;case "invitations":showInvitations();break;
@@ -241,6 +243,7 @@ final class RuneMenuView extends FrameLayout {
         status=label(f,notice,62,28,830,60,21,MUTED,false);
         String[] keys=keysFor(screen);
         if(settingsPage&&keys.length>0)button(f,"Reset this section",955,24,300,58,false,()->confirm("Reset this section?","Only the controls in this section will return to their defaults. Other sections and layouts are kept.","Reset",()->{for(String key:keys)if(!hostControlled(key))settings.set(key,settings.items.get(key).defaultValue);settings.comparing=false;host.settings().listener.changed("compare");restorePage(screen);}));
+        if(settingsPage&&screen.endsWith(":physics")&&!host.multiplayer())button(f,"Physics playground",62,24,480,58,false,()->confirm("Enter physics playground?","This replaces the live scene. Campaign saves stay separate. Use lifts a prop or intact corpse; Attack or Throw launches it.","Enter",()->{if(settings.get("physics")==0)settings.set("physics",1);runSession(9,0);}));
         button(f,"Back",1285,24,220,58,true,this::back);
     }
     private String[] keysFor(String key){return key.startsWith("settings:")?RuneMenuSections.keys(key.substring(key.lastIndexOf(':')+1)):new String[0];}
@@ -257,7 +260,7 @@ final class RuneMenuView extends FrameLayout {
             Button b=button(page,names[i],76,menuTop+i*96,474,86,false,()-> {
                 if(titleMode) {
                     if(index==0) { if(hasSession) host.resume();else showSaves(false); }
-                    if(index==1) confirm("Begin a new saga?","Unsaved progress will be replaced. Existing save slots are kept.","Begin",()->runSession(1,9));
+                    if(index==1){lawsPage=0;showBattleLaws("new");}
                     if(index==2)showSaves(false);
                     if(index==3)showSettings(lastSettings);
                     if(index==4)showMultiplayer();
@@ -286,6 +289,8 @@ final class RuneMenuView extends FrameLayout {
             x+=155;
         }
 
+        Button updateAvailable=button(f,"Update available",800,12,350,60,false,()->showSection("Support","updates"));
+        refreshers.add(()->updateAvailable.setVisibility(RuneUpdates.current.available?View.VISIBLE:View.GONE));
         button(f,"About & support",1220,12,260,60,false,()->showAbout()).setBackgroundColor(Color.TRANSPARENT);
         refresh();
     }
@@ -324,7 +329,7 @@ final class RuneMenuView extends FrameLayout {
         } else {
             label(page,"Deathmatch · Team Deathmatch · Arena · HeadBall",112,295,1300,72,30,IVORY,false);
             label(page,"Find a public game, host your own, or use a private invitation.\nPlayers need matching Open Rune builds and game files.",112,370,1250,100,26,MUTED,false);
-            Button create=button(page,"Host game",740,500,590,82,false,()->{hostConfig.normalBloodlust=settings.get("normalBloodlust")!=0;showHostSetup();});
+            Button create=button(page,"Host game",740,500,590,82,false,()->{hostConfig.normalBloodlust=(hostConfig.laws&RuneBattleLaws.NORMAL)!=0;showHostSetup();});
             Button join=button(page,"Advanced joining",112,710,590,82,false,this::showAdvancedJoin);
             Button rejoin=button(page,"Rejoin last match",112,605,590,82,false,()->{if(hasSession)confirm("Rejoin this match?","Unsaved campaign progress will be replaced. Existing saves are kept.","Join",()->host.rejoinMultiplayer());else host.rejoinMultiplayer();});
             refreshers.add(()->{join.setEnabled(host.ready());rejoin.setEnabled(host.hasInvitation()&&host.ready());});
@@ -534,20 +539,54 @@ final class RuneMenuView extends FrameLayout {
         hostChoice("Visibility",hostConfig.discoverable?"Public · Find games":"Private invitation",800,320,()->{hostConfig.discoverable=!hostConfig.discoverable;showHostSetup();});
         hostChoice("Player capacity · includes you",Integer.toString(hostConfig.players),112,435,()->{hostConfig.players=nextChoice(hostConfig.players,new int[]{2,4,6,8,12,16});showHostSetup();});
         hostChoice("Starting bots",Integer.toString(hostConfig.bots),800,435,()->{hostConfig.bots=(hostConfig.bots+1)%hostConfig.players;showHostSetup();});
+        hostChoice("Laws of Battle","Players and bots",112,665,()->{lawsPage=0;showBattleLaws("host");});
         hostChoice("Map rotation",hostConfig.maps.isEmpty()?"Choose maps":hostConfig.maps.get(0)+(hostConfig.maps.size()>1?" + "+(hostConfig.maps.size()-1)+" more":""),112,550,this::showHostMaps);
         hostChoice("Match rules",(hostConfig.score==0?"No score limit":hostConfig.score+" points")+" · "+(hostConfig.minutes==0?"No time limit":hostConfig.minutes+" min"),800,550,this::showHostRules);
-        label(page,"Player capacity includes the host, other players and bots.\nThe host must remain open while others play.",112,710,1298,100,25,MUTED,false);
+        label(page,"Player capacity includes the host, other players and bots.\nThe host must remain open while others play.",112,780,1298,50,20,MUTED,false);
         button(page,"Back",112,840,300,76,false,this::back);
         Button start=button(page,"Start & join",1030,840,380,76,true,()->confirm("Start this match?",(hostConfig.discoverable?"Your match will appear in Find games. ":"Share a separate invitation with each player. ")+"Unsaved campaign progress will be replaced; saved games are kept.","Host",()->{try{host.hosting().start(hostConfig,hostAddress);showMultiplayer();}catch(RuntimeException e){setNotice(e.getMessage());}}));
         refreshers.add(()->start.setEnabled(host.ready()&&(hostConfig.discoverable||!hostAddress.isEmpty())&&!hostConfig.maps.isEmpty()));status=label(page,"",445,840,550,76,23,MUTED,false);refresh();
     }
+
+    private void showBattleLaws(String scope){
+        boolean multi=scope.equals("host")||scope.equals("match"),readOnly=scope.equals("match");
+        screen=scope.equals("host")?"hostLaws":scope.equals("match")?"matchLaws":scope.equals("new")?"newLaws":"campaignLaws";
+        base("Laws of Battle / "+(multi?"Multiplayer":"Single player"));
+        int mask=readOnly?MainActivity.nativeBattleLaws():multi?hostConfig.laws:RuneBattleLaws.campaign(settings);
+        lawsPage=Math.max(0,Math.min(2,lawsPage));
+        FrameLayout body=panel(84,200,1368,650,readOnly?"CURRENT HOST RULES":multi?"NEW HOSTED MATCH · PLAYERS AND BOTS":"CAMPAIGN · PLAYERS AND ELIGIBLE ENEMIES");
+        for(int row=0;row<4;row++){
+            final int index=lawsPage*4+row,bit=1<<index;int y=70+row*142;
+            boolean locked=readOnly||(!multi&&bit==RuneBattleLaws.LEAP)||(multi&&bit==1024)||(bit==RuneBattleLaws.CROSS&&(mask&RuneBattleLaws.DUAL)==0);
+            boolean checked=(RuneBattleLaws.effective(mask)&bit)!=0;
+            Button toggle=button(body,(checked?"[x]  ":"[ ]  ")+RuneBattleLaws.NAMES[index]+(!multi&&bit==RuneBattleLaws.LEAP?" · Disabled in campaign":multi&&bit==1024?" · Campaign only":bit==RuneBattleLaws.CROSS&&(mask&RuneBattleLaws.DUAL)==0?" · Requires dual wield":""),24,y,1320,50,checked,()->{
+                if(multi){hostConfig.laws^=bit;hostConfig.normalBloodlust=(hostConfig.laws&RuneBattleLaws.NORMAL)!=0;settings.prefs.edit().putInt("laws.host",hostConfig.laws).apply();}
+                else RuneBattleLaws.campaign(settings,RuneBattleLaws.campaign(settings)^bit);
+                showBattleLaws(scope);
+            });
+            toggle.setEnabled(!locked);
+            label(body,RuneBattleLaws.HELP[index],42,y+54,1280,86,22,MUTED,false);
+        }
+        FrameLayout f=place(page,new FrameLayout(getContext()),0,906,1536,118);f.setBackgroundColor(0xee0b1011);
+        button(f,"Back",50,24,210,58,false,this::back);
+        button(f,"Previous",280,24,190,58,false,()->{lawsPage--;showBattleLaws(scope);}).setEnabled(lawsPage>0);
+        button(f,"Next",490,24,190,58,false,()->{lawsPage++;showBattleLaws(scope);}).setEnabled(lawsPage<2);
+        label(f,(lawsPage+1)+" / 3",710,24,120,58,24,GOLD,true);
+        if(scope.equals("new"))button(f,"Begin campaign",1000,24,470,58,true,()->confirm("Start a new campaign?","Use these Laws of Battle. Unsaved progress will be replaced; existing save slots are kept.","Begin",()->runSession(1,9)));
+        else if(!readOnly)button(f,"Physics: "+new String[]{"Original","Cinematic","Chaos"}[multi?hostConfig.physics:settings.get("physics")],930,24,540,58,false,()->{
+            if(multi){hostConfig.physics=(hostConfig.physics+1)%3;settings.prefs.edit().putInt("laws.hostPhysics",hostConfig.physics).apply();}else settings.set("physics",(settings.get("physics")+1)%3);
+            showBattleLaws(scope);
+        });
+    }
+
     private void showHostRules(){
         screen="hostRules";base("Match rules");
         int y=240;
         if(!hostConfig.mode.equals("dm")){hostChoice(hostConfig.mode.equals("arena")?"Arena team size":"Teams",hostConfig.mode.equals("arena")?hostConfig.arenaSize+" vs "+hostConfig.arenaSize:Integer.toString(hostConfig.teams),112,y,()->{if(hostConfig.mode.equals("arena"))hostConfig.arenaSize=hostConfig.arenaSize%4+1;else hostConfig.teams=hostConfig.teams==4?2:hostConfig.teams+1;hostConfig.normalize(host.hosting().game);showHostRules();});}
         hostChoice(hostConfig.mode.equals("arena")?"Round limit":"Score limit",hostConfig.score==0?"No limit":Integer.toString(hostConfig.score),800,y,()->{hostConfig.score=nextChoice(hostConfig.score,new int[]{0,5,10,20,30,50,100});if(hostConfig.score==0&&hostConfig.minutes==0)hostConfig.minutes=10;showHostRules();});
         hostChoice("Time limit",hostConfig.minutes==0?"No limit":hostConfig.minutes+" minutes",112,360,()->{hostConfig.minutes=nextChoice(hostConfig.minutes,new int[]{0,5,10,15,20,30,60});if(hostConfig.minutes==0&&hostConfig.score==0)hostConfig.score=20;showHostRules();});
-        hostChoice("Leap & rush without bloodlust",hostConfig.normalBloodlust?"On":"Off",800,360,()->{hostConfig.normalBloodlust=!hostConfig.normalBloodlust;showHostRules();});
+        hostChoice("Laws of Battle","Choose permitted moves",800,360,()->{lawsPage=0;showBattleLaws("host");});
+        hostChoice("Cinematic physics",new String[]{"Original","Cinematic","Chaos"}[hostConfig.physics],112,580,()->{hostConfig.physics=(hostConfig.physics+1)%3;settings.prefs.edit().putInt("laws.hostPhysics",hostConfig.physics).apply();showHostRules();});
         if(hostConfig.mode.equals("headball"))hostChoice("Severed limbs score",hostConfig.limbs?"On":"Off",112,480,()->{hostConfig.limbs=!hostConfig.limbs;showHostRules();});
         if(!hostConfig.discoverable){ArrayList<String> addresses=host.hosting().addresses();hostChoice("Local network address",hostAddress.isEmpty()?"Connect to Wi-Fi":hostAddress,800,480,()->{if(!addresses.isEmpty())hostAddress=addresses.get((addresses.indexOf(hostAddress)+1)%addresses.size());showHostRules();});}
         label(page,"These rules apply to the new hosted match. Campaign preferences are unchanged.\nKicks, shield bash, dual wield and bloodlust moves follow the host’s supported combat rules.",112,650,1298,130,25,MUTED,false);footer(false);refresh();
@@ -629,6 +668,7 @@ final class RuneMenuView extends FrameLayout {
         if(category.equals("Connection"))button(page,"Connection",44,780,292,62,true,()->showSettings("Connection"));
     }
     private void showSection(String category,String section){
+        if(section.equals("combat")){lawsPage=0;showBattleLaws(host.multiplayer()?"match":"campaign");return;}
         lastSettings=category;screen="settings:"+category+":"+section;settingsFrame(category,category+" / "+RuneMenuSections.title(section));
         FrameLayout p=panel(370,216,750,650,RuneMenuSections.title(section).toUpperCase(Locale.ROOT));
         FrameLayout help=panel(1140,216,352,650,"DETAILS");
@@ -642,15 +682,24 @@ final class RuneMenuView extends FrameLayout {
         if(section.equals("touch"))button(p,"Edit touch controls",36,300,678,72,false,()->host.editTouch());
         if(section.equals("hud"))button(p,"Edit HUD layout",36,300,678,72,false,()->host.editHud());
         if(section.equals("campaign"))button(p,"Campaign character & skin",36,250,678,72,false,()->showCharacters(true));
-        if(section.equals("gamepad")){label(p,host.controllerStatus(),36,110,678,100,25,GOLD,false);label(p,"Move / look: left / right stick\nJump: A · Crouch / dive: B\nAttack: X / RT · Block: LB / LT\nUse: Y / left-stick click · Throw: RB\nKick: right-stick click · Rune Power: Select / View\nWeapons: D-pad · Pause: Start\nShield bash: double-tap Block\nBloodlust: double-tap Jump or Block + Attack",36,240,678,350,24,IVORY,false);}
+        if(section.equals("gamepad")){label(p,host.controllerStatus(),36,110,678,100,25,GOLD,false);label(p,"Move / look: left / right stick\nJump: A · Crouch / dive: B\nAttack: X / RT · Block: LB / LT\nUse: Y / left-stick click · Throw: RB\nKick: right-stick click · Rune Power: Select / View\nWeapons: D-pad · Pause: Start\nShield bash: double-tap Block\nTwo-hand slam: 2× Jump, then Attack\nBloodlust: double-tap Jump or Block + Attack",36,240,678,350,24,IVORY,false);}
         if(section.equals("input"))label(p,"Keyboard: WASD move · Enter attack · Space jump\nRight Ctrl block · Left Ctrl use · E Rune Power\nF kick · Q throw · Escape menu",36,360,678,200,23,MUTED,false);
         if(section.equals("vibration")){button(p,"Test vibration",36,470,678,68,false,host::testRumble);TextView actual=label(p,host.rumbleStatus(),36,550,678,75,21,MUTED,false);refreshers.add(()->actual.setText(host.rumbleStatus()));}
+        if(section.equals("updates")){
+            label(p,RuneUpdates.identity(),36,92,678,80,23,GOLD,false);
+            TextView releaseStatus=label(p,RuneUpdates.current.message,36,180,678,90,24,IVORY,false);
+            Button check=button(p,"Check for updates",36,280,328,64,false,()->RuneUpdates.check(getContext(),true));
+            Button auto=button(p,"",386,280,328,64,false,()->RuneUpdates.setAutomatic(getContext(),!RuneUpdates.automatic(getContext())));
+            Button downloads=button(p,"Open releases page",36,365,678,64,false,()->{if(!RuneUpdates.open(getContext()))setNotice("Could not open your browser.");});
+            TextView notes=label(p,"",36,450,678,170,22,MUTED,false);notes.setMovementMethod(new android.text.method.ScrollingMovementMethod());notes.setVerticalScrollBarEnabled(true);
+            refreshers.add(()->{RuneUpdates.Result r=RuneUpdates.current;releaseStatus.setText(r.message);check.setEnabled(!r.busy);auto.setText(RuneUpdates.automatic(getContext())?"Startup checks: On":"Startup checks: Off");downloads.setText(r.available?"View update & downloads":"Open releases page");notes.setText(r.notes.isEmpty()?"The client and host must use compatible network and gameplay rules. Your saves, settings and game files stay separate from updates.":r.notes);});
+        }
         if(section.equals("support")){button(p,"Licenses & notices",36,170,678,72,false,()->showNotices("licenses"));button(p,"Developer tools",36,270,678,72,false,this::showDeveloper);label(p,"Open Rune · SurrealEngine fork\nNative ARM64 · Vulkan\nRequires your original Rune game files.",36,390,678,170,24,MUTED,false);}
         footer(true);refresh();p.post(()->{if(rememberedFocus.getOrDefault(screen,"").isEmpty())focusFirstControl(p);});
         if(section.equals("campaign"))status.setText("Applies to a new campaign; saves retain their difficulty.");
         if(section.equals("combat")||section.equals("enemies"))status.setText(host.multiplayer()?"Host-controlled during multiplayer":"Campaign preference · multiplayer uses host rules");
     }
-    private boolean hostControlled(String key){return host.multiplayer()&&Arrays.asList("difficulty","tactics","kick","bash","dualWield","bloodlustMoves","normalBloodlust").contains(key);}
+    private boolean hostControlled(String key){return host.multiplayer()&&Arrays.asList("difficulty","tactics","kick","bash","dualWield","bloodlustMoves","normalBloodlust","physics").contains(key);}
     private String dependency(String key){if(key.equals("soundRemaster")&&!new File(getContext().getFilesDir(),"game/SoundPacks/OpenRune-Layered-v1/runtime.json").isFile())return "Optional sound pack is not installed. Original sounds will be used.";if((key.equals("materialMaps")||key.equals("shadowLights")||key.equals("materialLighting")||key.equals("environmentProbes"))&&settings.get("pixelLighting")!=2)return "Requires Remastered lighting. Your saved choice is kept.";if(key.equals("scalingMethod")&&settings.get("resolution")==0)return "Native resolution bypasses upscaling. Your saved method is kept.";return "";}
     private void updateHelp(String key){if(settingHelp==null)return;RuneSettings.Item i=settings.items.get(key);String note=hostControlled(key)?"Host-controlled in this match.":dependency(key);settingHelp.setText(i.name+"\n\n"+i.hint+(note.isEmpty()?"":"\n\n"+note));}
     private void customRate(String key){

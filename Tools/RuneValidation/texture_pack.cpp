@@ -2,12 +2,31 @@
 #include <cassert>
 #include <iostream>
 #include <random>
+#include <chrono>
 
 int main(int argc,char** argv)
 {
     using namespace TexturePack;
     assert(Key("Players.Head")=="players.head");
+    assert(IdentityKey("Galleon.Inside ship")=="galleon.inside~20ship");
+    assert(IdentityKey("Rag_2.my lava")=="rag_2.my~20lava");
+    assert(IdentityKey("Galleon.Inside~20ship")!="galleon.inside~20ship");
+    assert(Key("galleon.inside~20ship")=="galleon.inside~20ship");
+    for(auto s : {"a~2f","a~","a~2","a~00","a~2e"}) assert(Key(s).empty());
     for(auto s : {"../bad","a/b","a\\b","a..b",".a","a.",""}) assert(Key(s).empty());
+    auto indexDir=std::filesystem::temp_directory_path()/
+        ("open-rune-index-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directory(indexDir);
+    auto indexPath=indexDir/"index.tsv";
+    for(const char* ending : {"\n","\r\n"})
+    {
+        {std::ofstream out(indexPath,std::ios::binary);out<<"OPENRUNE_TEXTURES_1"<<ending<<"galleon.inside~20ship\t64\t128\tabcd"<<ending;}
+        auto entries=ReadIndex(indexPath);assert(entries.size()==1);
+        auto e=entries.at("galleon.inside~20ship");assert(e.width==64 && e.height==128 && e.hash==0xabcd);
+    }
+    {std::ofstream out(indexPath,std::ios::binary);out<<"OPENRUNE_TEXTURES_1 \r\n";}
+    bool badVersion=false;try{ReadIndex(indexPath);}catch(const std::exception&){badVersion=true;}assert(badVersion);
+    std::filesystem::remove_all(indexDir);
     auto reject=[](const std::vector<uint8_t>& data) {try{Decode(data);return false;}catch(const std::exception&){return true;}};
     std::vector<uint8_t> valid={0xab,0x4b,0x54,0x58,0x20,0x31,0x31,0xbb,0x0d,0x0a,0x1a,0x0a};
     auto push=[&](uint32_t n){for(int i=0;i<4;i++)valid.push_back(uint8_t(n>>(8*i)));};

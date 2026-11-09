@@ -1,3 +1,4 @@
+#include "RuneBattleLaws.h"
 #include "Precomp.h"
 #include "RuneCorpse.h"
 #include "RuneCharacters.h"
@@ -22,6 +23,9 @@
 #include "VM/ScriptCall.h"
 #include <iostream>
 using namespace openrune::net;
+#include "RuneCorpseMotionProbe.h"
+#include "RuneSlamProbe.h"
+
 void RunRuneCorpseProbe(Engine& game) {
     unsigned checks=0;auto check=[&](bool v,const char* why){++checks;if(!v)throw std::runtime_error(std::string("corpse probe: ")+why);};
     auto mode=commandline->GetArg("","--rune-corpse-probe","single");bool multi=mode!="single",teamMode=mode=="team";
@@ -43,6 +47,7 @@ void RunRuneCorpseProbe(Engine& game) {
     }check(lane,"clear lane");
     for(auto* a:{p,target,donor}){a->SetLocation(origin+direction*(a==p?0.f:a==target?260.f:400.f));a->Velocity()=a->Acceleration()=vec3(0);a->SetPhysics(PHYS_Walking);}
     p->SetRotation(Rotator::FromVector(direction));p->ViewRotation()=p->Rotation();target->SetRotation(Rotator::FromVector(-direction));target->ViewRotation()=target->Rotation();
+    if(commandline->HasArg("","--rune-slam-probe")){CheckRuneSlam(game,p,target,origin,direction,tick,check,authority);return;}
     donor->Health()=0;CallEvent(donor,"Died",{ExpressionValue::ObjectValue(p),ExpressionValue::NameValue("blunt"),ExpressionValue::VectorValue(donor->Location())});tick(210);
     UActor* body=nullptr;for(auto* a:game.Level->Actors)if(a && a->IsA("RuneCarcass") && !a->bDeleteMe())body=a;
     check(body,"original death produces body");body->TimerRate()=0;
@@ -82,6 +87,8 @@ void RunRuneCorpseProbe(Engine& game) {
         check(encodeSnapshot(s,nullptr,wire)&&decodeSnapshot(wire,nullptr,decoded)&&s==decoded,"snapshot wire");check(replica.install(decoded),"snapshot install");replica.present(1);
         return world;
     };
+    {auto laws=RuneBattleLaws::Campaign.load();RuneBattleLaws::Campaign=laws&~RuneBattleLaws::Corpse;
+     check(RuneCorpse::Throwable(body)&&!RuneCorpse::Pickup(p,body)&&!RuneCorpse::Use(p),"unchecked corpse interaction rejects valid reachable body");RuneBattleLaws::Campaign=laws;}
     check(action(ActionKind::Use),"use action");check(RuneCorpse::Held(p)==body,"Use lifts body");check(!RuneCorpse::Pickup(target,body),"cannot steal carried body");
     check(RuneCorpse::SpeedScale(p)<.7f,"carrying slows movement");
     auto carryOrigin=p->Location();p->Acceleration()=direction*p->AccelRate();tick(30);
@@ -133,7 +140,12 @@ void RunRuneCorpseProbe(Engine& game) {
     check(p->Weapon()==weapon && weapon->Owner()==p,"weapon ownership retained");
     // Reuse, drop, save normalization and death cleanup.
     p->SetLocation(origin);p->SetPhysics(PHYS_Walking);p->Velocity()=vec3(0);p->GotoState("PlayerWalking","Begin");p->GetUObject("AnimProxy")->GotoState("Idle","Begin");target->SetLocation(origin+direction*400.f);tick(80);moveBody();
-    check(RuneCorpse::Pickup(p,body),"body reusable");RuneCorpse::BeforeSave();check(!RuneCorpse::Busy(p) && !body->CorpseBody.active,"save drops transient carry");tick(100);moveBody();
+    check(RuneCorpse::Pickup(p,body),"body reusable");
+    {auto laws=RuneBattleLaws::Campaign.load();RuneBattleLaws::Campaign=laws&~RuneBattleLaws::Corpse;RuneCorpse::Tick(p,.02f);
+     check(!RuneCorpse::Held(p)&&!body->bCarriedItem(),"disabling corpse law safely drops held body");RuneBattleLaws::Campaign=laws;}
+    tick(100);moveBody();check(RuneCorpse::Pickup(p,body),"re-enabled corpse law restores pickup");
+    std::cout<<"LAWS_CORPSE_INTERACTION_OK valid_body disabled_pickup safe_drop reenable\n";
+    RuneCorpse::BeforeSave();check(!RuneCorpse::Busy(p) && !body->CorpseBody.active,"save drops transient carry");tick(100);moveBody();
     check(RuneCorpse::Pickup(p,body),"pickup after save");p->Health()=0;RuneCorpse::Tick(p,.02f);check(!RuneCorpse::Held(p),"death drops carry");p->Health()=1000;tick(100);moveBody();
     // Shield defence and an original inventory item's Use priority.
     auto* shield=UObject::TryCast<UActor>(target->GetUObject("Shield"));
@@ -178,7 +190,13 @@ void RunRuneCorpseProbe(Engine& game) {
         tick(105);check(npc->CorpseCarry.throws==1,"campaign AI winds up and throws");tick(100);check(!body->CorpseBody.active,"campaign throw settles");
         npc->Destroy();p->SetLocation(origin);p->SetPhysics(PHYS_Walking);p->Velocity()=vec3(0);moveBody();p->CorpseCarry.cooldown=0;
     }
-    check(RuneCorpse::Pickup(p,body),"disconnect pickup");authority.unbind(1);check(!RuneCorpse::Busy(p),"disconnect drops body");tick(100);moveBody();p->CorpseCarry.cooldown=0;
+    check(RuneCorpse::Pickup(p,body),"disconnect pickup");CheckRuneCorpseMotion(game,p,body,check);
+    snapshot();auto* cosmeticReplica=replica.actor(authority.identity(body));
+    check(cosmeticReplica && RuneCorpse::Posed(cosmeticReplica),"remote carried body uses cosmetic pose");
+    RuneCorpse::TickMotion(cosmeticReplica,1.f/120);
+    check(cosmeticReplica->CorpseBody.motionReady && !cosmeticReplica->CorpseBody.limbs.empty(),"replica runs local limb dynamics without physics authority");
+    authority.unbind(1);check(!RuneCorpse::Busy(p),"disconnect drops body");tick(100);
+    RuneCorpse::TickMotion(body,1.f/60);check(!body->CorpseBody.motionReady,"settled corpse discards carry dynamics");moveBody();p->CorpseCarry.cooldown=0;
     check(RuneCorpse::Pickup(p,body),"pickup for deletion");body->Destroy();check(!RuneCorpse::Held(p) && !p->CorpseCarry.body,"destroyed body unlinks");
     std::cout<<"RUNE_CORPSE_OK mode="<<mode<<" checks="<<checks<<" render_checks="<<renderChecks<<" hits="<<p->CorpseCarry.hits<<std::endl;
 }

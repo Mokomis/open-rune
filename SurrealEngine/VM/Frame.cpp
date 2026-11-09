@@ -1,5 +1,6 @@
 
 #include "Precomp.h"
+#include "RunePhysics.h"
 #ifdef OPENRUNE_ENABLE_NETWORK
 #include "RuneNetwork.h"
 #endif
@@ -9,6 +10,7 @@
 #include "RuneKick.h"
 #include "RuneBash.h"
 #include "RuneBloodlust.h"
+#include "RuneSlam.h"
 #include "RuneDualWield.h"
 #include "RuneTactics.h"
 #include "Bytecode.h"
@@ -329,9 +331,15 @@ ExpressionValue Frame::Call(UFunction* func, UObject* instance, const ArrayView<
 #endif
 	if(func->Name=="UseNotify" && RuneKick::Notify(instance)) return ExpressionValue::NothingValue();
     // Keep the original AI's defend/dodge decisions, but let it see a winding-up kick or bash.
-    if(func->Name=="InDangerFromAttack" && (RuneKick::Threat(instance) || RuneBash::Threat(instance))) return ExpressionValue::BoolValue(true);
+    if(func->Name=="InDangerFromAttack" && (RuneKick::Threat(instance) || RuneBash::Threat(instance) || RuneSlam::Threat(instance))) return ExpressionValue::BoolValue(true);
 	if(func->Name=="Timer" && RuneTactics::Controls(instance))return ExpressionValue::NothingValue();
 	TraceCall(func, instance, args);
+    // A prepared aerial slam can intentionally replace the giant-leap state,
+    // whose original script ignores Fire. Other state restrictions are checked
+    // by the move itself before this early hook accepts anything.
+    ExpressionValue slamResult;
+    if(RunePhysics::ScriptCall(func,instance,args,slamResult))return slamResult;
+    if(RuneSlam::ScriptCall(func,instance,args,slamResult))return slamResult;
 
 	if (!instance->IsEventEnabled(func->Name))
 	{
@@ -405,6 +413,7 @@ ExpressionValue Frame::Call(UFunction* func, UObject* instance, const ArrayView<
 				argindex++;
 		}
 
+        RunePhysics::AfterScriptCall(func,instance,args);
 		return result;
 	}
 }

@@ -11,6 +11,7 @@ class UPlayerPawn;
 class UNavigationPoint;
 class ULevel;
 class UActor;
+class UBrush;
 namespace RuneBot {
 struct Decision { openrune::net::Input input; std::optional<openrune::net::ActionKind> action; };
 // A normal authenticated client: no authority, damage, teleport or input-reading privileges.
@@ -22,15 +23,31 @@ public:
     uint64_t maxThinkUs=0;
     unsigned decisions=0,attacks=0,defenses=0,specials=0,objectives=0,routes=0,supportMoves=0,powers=0,bashes=0,crossBlocks=0,leaps=0,charges=0;
 private:
+    friend struct TraversalFixture;
     std::mt19937 rng;
     int difficulty=1,side=1,lastHealth=0;
     uint32_t life=0;
     uint64_t nextThink=0,readyAt=0,guardUntil=0,kickAt=0,bashAt=0,useAt=0,seenAt=0,lastSeen=0,threatAt=0,blockedAt=0,routeAt=0,patrolAt=0,progressAt=0,debugAt=0,jumpAt=0,searchUntil=0,equipmentUntil=0,woundedAt=0,leapAt=0,jumpUntil=0,unreachableAt=0,supportUntil=0,guardAt=0,powerAt=0,escapeUntil=0,trafficUntil=0,trafficWaitUntil=0,corpseAt=0,carrySince=0;
     uint16_t leapYaw=0;
+    uint64_t slamAt=0,slamCooldown=0;
+    uint8_t slamStage=0;
     float defenseRoll=1;
-    bool wasThreat=false,partialRoute=false,teamNavigation=false;
+    bool wasThreat=false,partialRoute=false;
     openrune::net::EntityRef target{},trafficBlocker{},carriedBody{};
+    openrune::net::EntityRef supplyTarget{};
+    unsigned supplyTries=0;
     vec3 remembered{},progress{},waypoint{},jumpGoal{},supportGoal{},escapeGoal{},trafficGoal{};
+    struct LiftStop {vec3 center{};std::vector<vec3> landings;};
+    struct LiftPlan {vec3 offset{};UBrush* actor=nullptr;std::vector<LiftStop> stops;UActor* trigger=nullptr;bool use=false,automatic=false;float cycleSeconds=0;};
+    std::vector<LiftPlan> lifts;
+    ULevel* liftLevel=nullptr;float liftRadius=0,liftHeight=0;
+    int liftActive=-1,liftFrom=0,liftTo=0,liftPhase=0;
+    uint64_t liftDeadline=0,liftUseAt=0,liftRetryAt=0,liftScanAt=0,liftMovedAt=0,liftWakeAt=0,liftApproachAt=0;
+    float liftLastZ=0,liftApproachDistance=0;
+    vec3 liftEntry{},liftExit{},liftGoal{};
+    unsigned liftTrips=0,liftWaits=0;
+    void discoverLifts(Engine&,UPlayerPawn*,uint64_t now=0);
+    std::optional<Decision> liftStep(Engine&,UPlayerPawn*,const openrune::net::Entity&,vec3,uint64_t);
     struct Link { int to; float cost; };
     std::vector<vec3> navPoints;
     std::vector<float> navRadius,navHeight;

@@ -1,5 +1,6 @@
 #pragma once
 #include "RuneBloodlust.h"
+#include "RuneStairPresentation.h"
 #include "VisibleFrame.h"
 #include "Packages/Engine/UViewport.h"
 #include "Packages/Engine/Actors/Pawn/UPlayerPawn.h"
@@ -32,6 +33,7 @@ inline void DrawBloodlustHalo(VisibleFrame* frame,UActor* actor) {
     TextureInfo info;info.CacheID=(uint64_t)(uintptr_t)&mip;info.Format=TextureFormat::RGBA8_;info.USize=info.VSize=64;info.Mips=&mip;info.NumMips=1;
     auto bones=model->ActorJointMatrices(actor);
     auto center=(GetRuneMeshToWorld(actor)*bones[head]*vec4(0,0,0,1)).xyz();
+    center.z+=RuneStairPresentation::Offset(actor);
     float radius=14*actor->DrawScale();auto side=frame->ViewRotation.YAxis*radius,up=frame->ViewRotation.ZAxis*radius;
     GouraudVertex v[4];v[0].Point=center-side-up;v[1].Point=center+side-up;v[2].Point=center+side+up;v[3].Point=center-side+up;
     v[0].UV={0,0};v[1].UV={64,0};v[2].UV={64,64};v[3].UV={0,64};

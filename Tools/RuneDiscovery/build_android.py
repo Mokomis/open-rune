@@ -46,6 +46,6 @@ for package in (ROOT/'node_modules').rglob('package.json'):
             target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(f,target)
 manifest={'gameProtocol':protocol,'bareKit':VERSION,'archiveSha256':SHA256,'hyperdht':'6.35.0','sha256':{}}
 for f in [out/'discovery.bundle',*(out/'android').rglob('*.so'),*(out/'addons').rglob('*.so'),out/'android/bare-kit/classes.jar',*notices.rglob('*')]:
-    if f.is_file():manifest['sha256'][str(f.relative_to(out))]=hashlib.sha256(f.read_bytes()).hexdigest()
+    if f.is_file():manifest['sha256'][f.relative_to(out).as_posix()]=hashlib.sha256(f.read_bytes()).hexdigest()
 (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 print(out)

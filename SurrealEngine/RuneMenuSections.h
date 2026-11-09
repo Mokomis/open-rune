@@ -18,10 +18,11 @@ inline const std::vector<MenuSection>& RuneMenuSections(){
   {"vibration","Vibration","Controls",{"rumble","rumbleStrength"},"Impact feedback uses supported XInput controllers. Vibration ends when paused or disconnected. Test vibration previews the selected intensity."},
   {"hud","HUD & FPS display","Interface",{"counter"},"The engine FPS counter is separate from measured display cadence. Touch controls and HUD layout editing are available on Android; those unsupported controls are omitted here."},
   {"campaign","Campaign","Gameplay",{"difficulty"},"Difficulty applies to new campaigns. Loaded saves retain their difficulty. Character selection returns here when you finish browsing."},
-  {"combat","Combat moves","Gameplay",{"kick","bash","dualWield","bloodlustMoves","normalBloodlust"},"Campaign preferences apply locally; multiplayer uses host rules. Set normal-combat leap and rush under Match rules when hosting."},
-  {"enemies","Enemy behavior","Gameplay",{"tactics"},"Tactical humanoids use spacing and defense. Bosses, scripted scenes and other creatures retain their original behavior. Multiplayer bots use host rules."},
+  {"combat","Laws of Battle","Gameplay",{},"Campaign preferences apply locally; multiplayer uses host rules. Set normal-combat leap and rush under Match rules when hosting."},
+  {"physics","Cinematic physics","Gameplay",{"physics"},"Use picks up loose props; Attack or Throw launches them. Existing corpse controls work with articulated bodies. Original restores normal physics. Multiplayer follows host rules."},
   {"connection","Connection smoothing","Connection",{"networkSmoothing"},"Adaptive varies a bounded visual buffer for remote movement. Local controls remain responsive and damage/blocking remain authoritative. Counters are under About & support → Diagnostics."},
   {"diagnostics","Diagnostics","Support",{"networkDiagnostics"},"Optional troubleshooting counters. Transmission timeouts are not a direct packet-loss measurement. Diagnostics do not change gameplay."},
+  {"updates","Updates","Support",{},"Published stable releases only. Release versions are separate from network and gameplay compatibility. Open the release page for complete notes and downloads."},
   {"support","About & licenses","Support",{},"Open Rune is an independent SurrealEngine fork and requires your original game files. License notices and applicable source offers remain beside the executable."}
  };return pages;
 }

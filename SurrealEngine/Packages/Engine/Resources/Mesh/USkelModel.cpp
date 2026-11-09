@@ -1,4 +1,7 @@
 #include "Precomp.h"
+#include "RunePhysics.h"
+#include "RuneSlam.h"
+#include "RuneBash.h"
 #include "USkelModel.h"
 #include "RuneDualWield.h"
 #include "RuneRushPose.h"
@@ -68,6 +71,36 @@ Array<mat4> USkelModel::ActorJointMatrices(UActor* actor) const
 	for(size_t i=0;i<Sequences.size();i++) if(Sequences[i].Info.Name==name){sequence=i;break;}
 	int frame=(int)(std::max(0.0f,actor->AnimFrame())*Sequences[sequence].Info.NumFrames)%Sequences[sequence].Info.NumFrames;
 	return JointMatrices(DecodeFrame(sequence,frame,false,actor));
+}
+
+BBox USkelModel::PoseBounds(UActor* actor) const
+{
+    const auto* geometry=GetRuneGeometry(actor);
+    if(!geometry || geometry->Meshes.empty())return BoundingBox;
+    int variant=actor->GetByte("SkelMesh");if(variant>=int(geometry->Meshes.size()))variant=0;
+    auto& cache=geometry->InfluenceBoxes;
+    if(cache.size()!=geometry->Meshes.size())cache.resize(geometry->Meshes.size());
+    auto& boxes=cache[variant];
+    if(boxes.empty()) {
+        boxes.resize(Joints.size());for(auto& box:boxes)box.IsValid=false;
+        auto include=[&](int joint,vec3 point) {
+            if(joint<0 || joint>=int(boxes.size()))return;
+            auto& box=boxes[joint];
+            if(!box.IsValid){box=BBox(point,point);return;}
+            for(int k=0;k<3;++k){box.min[k]=std::min(box.min[k],point[k]);box.max[k]=std::max(box.max[k],point[k]);}
+        };
+        for(const auto& vertex:geometry->Meshes[variant].Vertices) {
+            if(vertex.Weight>0)include(vertex.Joint[0],vertex.Point[0]);
+            if(vertex.Weight<1)include(vertex.Joint[1],vertex.Point[1]);
+        }
+    }
+    auto bones=ActorJointMatrices(actor);BBox result;result.IsValid=false;
+    for(size_t j=0;j<boxes.size() && j<bones.size();++j)if(boxes[j].IsValid) {
+        auto box=boxes[j].transform(bones[j]);
+        if(!result.IsValid)result=box;
+        else for(int k=0;k<3;++k){result.min[k]=std::min(result.min[k],box.min[k]);result.max[k]=std::max(result.max[k],box.max[k]);}
+    }
+    return result.IsValid?result:BoundingBox;
 }
 
 void USkelModel::InitializeDynamics(UActor* actor) const
@@ -229,6 +262,7 @@ mat4 GetRuneActorToWorld(UActor* actor,int depth)
 
 mat4 GetRuneMeshToWorld(UActor* actor,int depth)
 {
+    if(engine->LaunchInfo.IsRune() && RunePhysics::CustomTransform(actor))return RunePhysics::MeshToWorld(actor);
     if(engine->LaunchInfo.IsRune() && RuneCorpse::CustomTransform(actor))return RuneCorpse::MeshToWorld(actor);
 	auto* mesh=GetRuneDisplayMesh(actor);
 	mat4 actorToWorld=GetRuneActorToWorld(actor,depth);
@@ -271,6 +305,7 @@ void UpdateRuneAttachments(UActor* actor)
 
 void USkelModel::Load(ObjectStream* s)
 {
+    LegMirrorBasis.clear();
 	UPrimitive::Load(s);
 	int numMeshes=s->ReadInt32(), numJoints=s->ReadInt32(), numFrames=s->ReadInt32(), numSequences=s->ReadInt32();
 	NumSkins=s->ReadInt32(); RootJoint=s->ReadInt32();
@@ -390,7 +425,9 @@ Array<RuneJointPose> USkelModel::DecodeFrame(size_t sequence, int frame, bool va
 		ApplyDynamicPose(actor,result);
 		for (size_t i=0;i<result.size() && i<50;i++) result[i].Rotation+=actor->RuneJointOffsets[i];
         RuneRushPose::Apply(*this,actor,result);
+        RuneSlam::Apply(*this,actor,result);
         RuneCorpse::ApplyPose(*this,actor,result);
+        RunePhysics::ApplyPose(actor,result);
 	}
 	return result;
 }
@@ -448,14 +485,22 @@ Array<RuneJointPose> USkelModel::ActorPose(UActor* actor) const
             if(actor->NetworkReplica && proxy->RuneCombatPreviewModel==this &&
                proxy->RuneCombatPreviewWeight>0 && proxy->RuneCombatPreviewPose.size()==upper.size())
                 for(size_t j=0;j<upper.size();++j)upper[j]=BlendRunePose(upper[j],proxy->RuneCombatPreviewPose[j],proxy->RuneCombatPreviewWeight);
-            for(size_t j=0;j<pose.size();j++)if(Joints[j].Group==1)pose[j]=upper[j];
+            // A standing spin cannot combine hips from the body tween with
+            // a torso from the proxy's different tween/attack phase.
+            auto* wholeBody=RuneDualWield::FullBodyPoseSource(actor);
+            if(wholeBody==proxy)pose=std::move(upper);
+            else if(wholeBody!=actor)
+                for(size_t j=0;j<pose.size();j++)if(Joints[j].Group==1)pose[j]=upper[j];
         }
     }
     RuneDualWield::ApplyPose(*this,actor,pose);
     ApplyDynamicPose(actor,pose);
     for(size_t j=0;j<pose.size() && j<50;j++) pose[j].Rotation+=actor->RuneJointOffsets[j];
     RuneRushPose::Apply(*this,actor,pose);
+    RuneSlam::Apply(*this,actor,pose);
+    RuneBash::ApplyPose(*this,actor,pose);
     RuneCorpse::ApplyPose(*this,actor,pose);
+    RunePhysics::ApplyPose(actor,pose);
     return pose;
 }
 

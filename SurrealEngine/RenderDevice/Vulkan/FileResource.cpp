@@ -12,7 +12,8 @@ std::string FileResource::readAllText(const std::string& filename)
 	if (filename == "shaders/Scene.vert")
 	{
 		return R"(
-			layout(push_constant) uniform ScenePushConstants
+			layout(constant_id=1002) const bool OpenRuneFixedPbr=false;
+            layout(push_constant) uniform ScenePushConstants
 			{
 				mat4 objectToProjection;
 				mat4 objectToView;
@@ -62,7 +63,7 @@ std::string FileResource::readAllText(const std::string& filename)
                 vec3 diffuse=(N.x>=0.0?xp:xn)*n2.x+(N.y>=0.0?yp:yn)*n2.y+(N.z>=0.0?zp:zn)*n2.z;
                 vec3 reflected=(R.x>=0.0?xp:xn)*r2.x+(R.y>=0.0?yp:yn)*r2.y+(R.z>=0.0?zp:zn)*r2.z;
                 vec4 material=meshLights[index].material;
-                float rough=material.w>0.5?material.y:sqrt(sqrt(2.0/(material.y+2.0)));
+                float rough=(OpenRuneFixedPbr || material.w>0.5)?material.y:sqrt(sqrt(2.0/(material.y+2.0)));
                 // These probes contain only broad room color, so evaluate their
                 // smooth direction weights per vertex. Direct lights and normal
                 // maps still use per-fragment shading and actual roughness.
@@ -127,7 +128,9 @@ std::string FileResource::readAllText(const std::string& filename)
 	else if (filename == "shaders/Scene.frag")
 	{
 		return std::string("#define SHADOW_CAPACITY ")+std::to_string(RuneShadows::Capacity)+"\n#define SHADOW_COLUMNS "+std::to_string(RuneShadows::Columns)+"\n#define SHADOW_ROWS "+std::to_string(RuneShadows::Rows)+"\n#define SHADOW_SLOT_BITS "+std::to_string(RuneShadows::Slots::Bits)+"\n#define SHADOW_SLOT_MASK "+std::to_string(RuneShadows::Slots::Mask)+"u\n"+R"(
-			layout(binding = 0) uniform sampler2D textures[];
+			layout(constant_id=1001) const bool OpenRuneFixedRemastered=false;
+            layout(constant_id=1002) const bool OpenRuneFixedPbr=false;
+            layout(binding = 0) uniform sampler2D textures[];
 
 			layout(location = 0) flat in uint flags;
 			layout(location = 1) centroid in vec2 texCoord;
@@ -159,7 +162,7 @@ std::string FileResource::readAllText(const std::string& filename)
             };
             layout(set=1, binding=2) uniform sampler2D dynamicShadow;
             layout(set=1, binding=3) uniform sampler2D waterReflection;
-            bool remastered() { return lightingCamera.w > 0.5; }
+            bool remastered() { return OpenRuneFixedRemastered || lightingCamera.w > 0.5; }
 
             float contactShadow(vec3 position, vec3 normal, int mask)
             {
@@ -196,7 +199,7 @@ std::string FileResource::readAllText(const std::string& filename)
 
             float movingShadow(int slot, vec3 position, vec3 N, vec3 lightDirection)
             {
-                if(slot<0 || slot>=SHADOW_CAPACITY || shadowLights[slot].position.w<0.5) return 1.0;
+                if(slot<0 || slot>=SHADOW_CAPACITY || shadowLights[slot].position.w<=0.0) return 1.0;
                 vec3 lightPosition=shadowLights[slot].position.xyz;
                 #ifdef CULL_LIGHTING
                 vec3 L=lightDirection;
@@ -217,12 +220,12 @@ std::string FileResource::readAllText(const std::string& filename)
                 vec4 compared=step(vec4(q.z-0.000015),textureGather(dynamicShadow,uv));
                 float visibility=mix(mix(compared.w,compared.z,f.x),mix(compared.x,compared.y,f.x),f.y);
                 float edge=1.0-smoothstep(0.80,0.98,max(abs(q.x),abs(q.y)));
-                return mix(1.0,visibility,edge);
+                return mix(1.0,visibility,edge*shadowLights[slot].position.w);
             }
 
             LIGHTP vec3 materialHighlight(LIGHTP vec3 V,LIGHTP vec3 N,LIGHTP vec3 L,LIGHTP vec3 light,LIGHTP vec4 material,LIGHTP vec3 albedo)
             {
-                if(material.w>0.5) {
+                if((OpenRuneFixedPbr || material.w>0.5)) {
                     if(dot(N,L)<=0.0 || dot(N,V)<=0.0)return vec3(0);
                     // GGX distribution, Schlick Fresnel and separable Smith
                     // visibility. High precision prevents half-float overflow
@@ -276,7 +279,7 @@ std::string FileResource::readAllText(const std::string& filename)
                 }
                 }
                 LIGHTP float rough=clamp(packed.a,0.18,0.98);
-                material.y=material.w>0.5?rough:clamp(2.0/(rough*rough*rough*rough)-2.0,4.0,128.0);
+                material.y=(OpenRuneFixedPbr || material.w>0.5)?rough:clamp(2.0/(rough*rough*rough*rough)-2.0,4.0,128.0);
                 material.x*=mix(1.7,0.55,rough);
                 if(meshLights[index].materialMaps.w!=0) {
                     LIGHTP vec2 response=texture(textures[nonuniformEXT(meshLights[index].materialMaps.z)],uv).rg;
@@ -441,7 +444,7 @@ std::string FileResource::readAllText(const std::string& filename)
                             LIGHTP float visibility=movingShadow(slot,position,N,L/distance);
                             LIGHTP vec3 energy=lightColor.rgb*falloff*wave*shadow*visibility;
                             total+=energy*angle*localLightBoost(unitDistance);
-                            LIGHTP vec3 facingN=dot(N,material.w>0.5?viewDirection:L)>=0.0?N:-N;
+                            LIGHTP vec3 facingN=dot(N,(OpenRuneFixedPbr || material.w>0.5)?viewDirection:L)>=0.0?N:-N;
                             highlights+=materialHighlight(viewDirection,facingN,L/distance,energy*2.0,material,albedo)*angle;
                         }
                         else total += min(lightColor.rgb * falloff * angle * wave * shadow,vec3(1.0));
@@ -465,6 +468,83 @@ std::string FileResource::readAllText(const std::string& filename)
                 const bool water=false;
                 #endif
                 vec2 wave=vec2(0);
+                #ifdef WATER_SURFACE
+                if(waterParameters.w>1.5) {
+                    float t=waterParameters.x;
+                    vec2 p=meshPosition.xy;
+                    // Four directional bands. Derivative-based fade removes
+                    // subpixel waves/glints in distant/grazing water.
+                    vec4 phase=vec4(dot(p,vec2(.035,.013))-t*.65,
+                                    dot(p,vec2(-.079,.156))+t*1.23,
+                                    dot(p,vec2(.322,.179))-t*1.87,
+                                    dot(p,vec2(-.571,.346))+t*2.43);
+                    // Cross-modulate the short ripples to avoid long, perfectly
+                    // repeating sine ridges while keeping the cost bounded.
+                    phase.zw+=.55*sin(vec2(phase.y,phase.x)*1.37);
+                    vec4 bandFade=1.0-smoothstep(vec4(.45),vec4(2.2),fwidth(phase));
+                    vec4 slopes=cos(phase)*bandFade*vec4(.10,.16,.11,.065);
+                    vec2 gradient=slopes.x*vec2(.938,.349)+slopes.y*vec2(-.452,.892)+slopes.z*vec2(.874,.486)+slopes.w*vec2(-.855,.518);
+                    vec3 N=normalize(vec3(-gradient,1));
+                    vec3 V=normalize(lightingCamera.xyz-meshPosition);
+                    if(V.z<0.0)N=-N;
+                    float nv=clamp(dot(N,V),0.0,1.0);
+                    float fresnel=.02+.98*pow(1.0-nv,5.0);
+                    vec3 sourceColor=darkClamp(textureTex(texCoord+gradient*.012)).rgb;
+                    vec3 authored=sourceColor;
+                    float sourceLuma=dot(authored,vec3(.2126,.7152,.0722));
+                    vec3 hue=clamp(authored/max(sourceLuma,.06),vec3(.35),vec3(1.8));
+                    // Original fluid textures often contain large cloudy white
+                    // patches. Retain their hue, not those baked pseudo-waves.
+                    authored=vec3(.21,.32,.36)*mix(vec3(1),hue,.35)*(.75+.25*sourceLuma);
+                    vec3 lighting=(flags&1u)!=0u?clamp(textureLightmap(texCoord2).rgb*2.0,vec3(0),vec3(1)):color.rgb;
+                    vec3 base=clamp(authored*lighting,vec3(0),vec3(1));
+                    float brightness=dot(base,vec3(.2126,.7152,.0722));
+                    float depth=clamp(color.a,1.0,2048.0);
+                    float deep=1.0-exp(-depth*.006);
+                    // Keep the map's colour and exposure, with a restrained
+                    // cool absorption gradient rather than opaque blue paint.
+                    vec3 body=mix(base*vec3(.78,1.02,1.08),base*vec3(.38,.68,.78),deep);
+                    body*=.91+.09*sin(phase.x+sin(phase.y)*.65);
+                    vec3 R=reflect(-V,N);
+                    vec3 environment=waterWorldToClip[0].rgb;
+                    float outdoors=waterWorldToClip[0].w;
+                    // Indoor caustic textures are often the only authored light
+                    // cues on translucent water. Preserve their energy rather
+                    // than replacing a bright basin with dark absorption.
+                    if(outdoors<.5)body=mix(body,sourceColor*lighting*.65,.65);
+                    vec3 room=body*.85+environment*.15;
+                    vec3 sky=mix(room,max(environment,vec3(.04,.06,.08)),outdoors);
+                    float horizon=pow(1.0-clamp(abs(R.z),0.0,1.0),3.0);
+                    if(outdoors>.5 && waterWorldToClip[3].x>.5) {
+                        int skyIndex=int(waterWorldToClip[3].x)-1;
+                        vec2 skyUV=R.xy/(abs(R.z)+.35)*.65+vec2(waterParameters.x*.001,0);
+                        vec3 skyDetail=texture(textures[nonuniformEXT(skyIndex)],skyUV).rgb;
+                        sky=mix(sky,skyDetail,.65);
+                    }
+                    sky*=.75+.55*horizon;
+                    float direct=waterWorldToClip[1].w;
+                    vec3 lightVector=direct>.01?waterWorldToClip[1].xyz-meshPosition:waterWorldToClip[1].xyz;
+                    vec3 L=lightVector*inversesqrt(max(dot(lightVector,lightVector),1e-8));
+                    if(direct<.01) {L=normalize(vec3(.35,-.45,1));direct=outdoors*.65;}
+                    vec3 H=V+L;H*=inversesqrt(max(dot(H,H),1e-8));
+                    float roughness=.12+clamp(length(fwidth(N))*1.3,0.0,.25);
+                    float power=clamp(2.0/(roughness*roughness)-2.0,12.0,150.0);
+                    float sparkle=pow(max(dot(N,H),0.0),power)*direct;
+                    vec3 lamp=waterWorldToClip[2].rgb;
+                    lamp=mix(vec3(.95,.98,1),clamp(lamp,vec3(0),vec3(1)),step(.01,dot(lamp,lamp)));
+                    vec3 waterColor=mix(body,sky,.18+.78*fresnel)+lamp*sparkle*(.35+brightness*.7);
+                    float crest=dot(sin(phase)*bandFade,vec4(.45,.30,.17,.08));
+                    float foam=smoothstep(.82,.99,crest)*.09*(.3+.7*brightness);
+                    waterColor=mix(waterColor,vec3(brightness*.85),foam);
+                    if((flags&8u)!=0u) {vec4 fog=textureDetail(texCoord4);waterColor=mix(waterColor,clamp(fog.rgb/max(fog.a,.001),vec3(0),vec3(1)),clamp(fog.a,0.0,.25));}
+                    float opacity=(flags&131072u)!=0u?1.0:clamp(.18+.25*deep+.48*fresnel,.18,.95);
+                    outColor=vec4(clamp(waterColor,vec3(0),vec3(1.2))*opacity,opacity);
+                    #ifndef NO_HIT_OUTPUT
+                    outHitIndex=hitIndex;
+                    #endif
+                    return;
+                }
+                #endif
                 if(water) {
                     float t=waterParameters.x;
                     vec2 p=meshPosition.xy;
@@ -665,6 +745,7 @@ std::string FileResource::readAllText(const std::string& filename)
 				float ShadowLift;
 				float AmbientOcclusion;
 				int AmbientSamples;
+                vec4 Underwater;
 			};
 
 			layout(binding = 0) uniform sampler2D texSampler;
@@ -821,6 +902,16 @@ std::string FileResource::readAllText(const std::string& filename)
 			{
 				vec3 coord = vec3(texCoord, 1.0);
 				vec2 sampleCoord = vec2(dot(TextureRow0.xyz, coord), dot(TextureRow1.xyz, coord));
+                if(Underwater.y>0.0) {
+                    // A two-pixel world-centre shimmer. Fade completely at HUD
+                    // edges, and disable while menus are open. No extra pass.
+                    vec2 edge=smoothstep(vec2(.08),vec2(.22),texCoord)*smoothstep(vec2(.08),vec2(.22),vec2(1)-texCoord);
+                    float mask=edge.x*edge.y*Underwater.y;
+                    float t=Underwater.x;
+                    vec2 ripple=vec2(sin(texCoord.y*23.0+t*1.3)+.35*sin(texCoord.y*47.0-t*.7),
+                                     sin(texCoord.x*19.0-t*1.1)+.3*sin(texCoord.x*41.0+t*.9));
+                    sampleCoord=clamp(sampleCoord+ripple*SourceSize.xy*1.4*mask,SourceSize.xy*.5,vec2(1)-SourceSize.xy*.5);
+                }
 				vec3 color = Upscale != 0 ? upscaleSGSR(sampleCoord) : adaptiveSharpen(sampleCoord);
 				#ifdef AMBIENT_OCCLUSION
 				color *= ambientVisibility(sampleCoord);

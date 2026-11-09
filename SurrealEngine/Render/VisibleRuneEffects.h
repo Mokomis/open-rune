@@ -9,7 +9,7 @@
 // consume gameplay randomness, or change particle lifetimes/physics.
 namespace RuneEffects {
 inline constexpr int FlameFrames=64;
-inline constexpr float FlameFps=32.f; // Two-second cycle; preserve frame cadence.
+inline constexpr float FlameFps=48.f; // Livelier 1.33-second cycle, with the same 64 frames.
 enum Kind { Original, Flame, Metal, Wood, Stone, Blood, GreenBlood };
 inline Kind Classify(UActor* actor) {
     static const NameString fire("Fire"),torch("TorchFire"),small("SmallFire"),big("BigFire");
@@ -41,17 +41,18 @@ struct Sprite {
             if(flame && h>=0 && h<=1) {
                 // A tapered, three-tongue flame with a hot base and ember tips.
                 float center=.16f*std::sin(h*8-angle)+.08f*std::sin(h*17+angle*2);
-                float width=.055f+.43f*std::pow(1-h,.85f);
-                float body=std::exp(-std::pow((px-center)/width,2.f)*2.2f);
+                float width=.065f+.53f*std::pow(1-h,.85f);
+                float body=std::exp(-std::pow((px-center)/width,2.f)*1.65f);
                 for(int branch=-1;branch<=1;branch+=2) {
-                    float top=.65f+.12f*std::sin(angle+branch);
+                    float top=.72f+.12f*std::sin(angle+branch);
                     float reach=std::clamp((top-h)*8.f,0.f,1.f);
                     float tongue=.25f*branch+.08f*std::sin(h*11-angle+branch);
-                    float spread=.035f+.12f*(1-h);
+                    float spread=.045f+.16f*(1-h);
                     body=std::max(body,.8f*reach*std::exp(-std::pow((px-tongue)/spread,2.f)*2.f));
                 }
-                float split=.72f+.28f*std::sin(px*13+h*16-angle*2);
-                a=body*split*std::clamp(h*18.f,0.f,1.f)*std::clamp((1-h)*9.f,0.f,1.f);
+                float split=.84f+.16f*std::sin(px*13+h*16-angle*2);
+                a=body*split*std::clamp(h*18.f,0.f,1.f)*std::clamp((1-h)*9.f,0.f,1.f)
+                    *std::clamp((.96f-std::abs(px))*14.f,0.f,1.f);
                 float heat=std::clamp(body*(1-h)*1.35f,0.f,1.f);
                 rgb=vec3(1.f,.18f+.77f*heat,.015f+.42f*heat*heat)*a;
             } else if(!flame) {
@@ -104,7 +105,7 @@ inline void WorldTexture(TextureInfo& info,float time) {
     enhanced.USize=info.USize;enhanced.VSize=info.VSize;
     enhanced.UScale=info.UScale;enhanced.VScale=info.VScale;
     info=enhanced;
-    static bool logged=false;if(!logged){logged=true;LogMessage("RUNE_EFFECTS_WORLD texture=RuneFX2.DMflame2 frames=64 cycle_seconds=2 size=128 embers=4");}
+    static bool logged=false;if(!logged){logged=true;LogMessage("RUNE_EFFECTS_WORLD texture=RuneFX2.DMflame2 frames=64 cycle_seconds="+std::to_string(FlameFrames/FlameFps)+" size=128 embers=4 fullness=wide");}
 }
 inline void Quad(VisibleFrame* frame,TextureInfo& texture,const vec3& center,const vec3& side,const vec3& up,const vec3& color,float opacity,uint32_t flags) {
     GouraudVertex v[4];
@@ -137,7 +138,7 @@ inline bool Draw(VisibleFrame* frame,UActor* actor,RuneParticles::ArrayView& par
         if(index==0&&distance<900) {
             auto ember=Texture(0,false);
             for(int i=0;i<4&&frame->EffectQuadBudget>0;i++) {
-                float t=std::fmod(time*.325f+i*.25f,1.f);
+                float t=std::fmod(time*.4875f+i*.25f,1.f);
                 vec3 q=p+vec3(std::sin(time*.65f+i*2.4f)*sx*.4f,std::cos(time*.5f+i*2.f)*sx*.35f,(t-.15f)*sy);
                 float glow=std::sin(t*3.14159265f)*opacity*fade;
                 float radius=std::clamp(sx*.035f,.35f,.9f);

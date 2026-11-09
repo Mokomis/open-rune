@@ -10,9 +10,9 @@ final class RuneInvitation {
         String text=new String(data,StandardCharsets.UTF_8).replace("\r\n","\n").trim();
         String[] t=text.split("\\s+");
         try{
-            if(t.length<8||!t[0].matches("OPEN-RUNE-INVITE-[1-4]"))throw new IllegalArgumentException();
+            if(t.length<8||!t[0].matches("OPEN-RUNE-INVITE-[1-5]"))throw new IllegalArgumentException();
             int version=t[0].charAt(t[0].length()-1)-'0';
-            if(t.length!=(version==4?13:7+version))throw new IllegalArgumentException();
+            if(t.length!=(version==5?14:version==4?13:7+version))throw new IllegalArgumentException();
             String[] ip=t[1].split("\\.",-1);if(ip.length!=4)throw new IllegalArgumentException();
             for(String part:ip){if(!part.matches("[0-9]{1,3}"))throw new IllegalArgumentException();number(part,0,255);}
             if(t[1].equals("0.0.0.0")||Integer.parseInt(ip[0])>=224)throw new IllegalArgumentException();
@@ -21,7 +21,8 @@ final class RuneInvitation {
             if(!t[6].matches("[0-9a-f]{32}")||!t[7].matches("[0-9a-f]{64}"))throw new IllegalArgumentException();
             long players=version>=2?number(t[8],2,16):2;if(slot>players)throw new IllegalArgumentException();
             if(version>=3)number(t[9],1,4);
-            if(version==4){number(t[10],2,4);number(t[11],1,4);number(t[12],0,1);}
+            if(version>=4){number(t[10],2,4);number(t[11],1,4);number(t[12],0,1);}
+            if(version==5)number(t[13],0,4095);
             // The native reader requires the magic on its own line; retain its
             // whitespace format and normalize Windows line endings only.
             if(!text.startsWith(t[0]+"\n"))throw new IllegalArgumentException();

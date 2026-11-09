@@ -46,11 +46,11 @@ bool UPawn::ActorReachable(UActor* anActor, bool checkNavpoint)
 				const auto& specs = XLevel()->ReachSpecs;
 				for (int index : cur->Paths())
 				{
-					if (index < 0 || (size_t)index >= specs.size())
-						break;
+					if (index < 0)break;
+                    if ((size_t)index >= specs.size())continue;
 					const LevelReachSpec& reachSpec = specs[index];
 
-					if (reachSpec.endActor != navPoint)
+					if (reachSpec.startActor != cur || reachSpec.endActor != navPoint)
 						continue; // Not a path to this nav point
 
 					if (reachSpec.collisionRadius < radius || reachSpec.collisionHeight < height || reachSpec.bPruned)
@@ -70,11 +70,11 @@ bool UPawn::ActorReachable(UActor* anActor, bool checkNavpoint)
 
 				for (int index : cur->PrunedPaths())
 				{
-					if (index < 0 || (size_t)index >= specs.size())
-						break;
+					if (index < 0)break;
+                    if ((size_t)index >= specs.size())continue;
 					const LevelReachSpec& reachSpec = specs[index];
 
-					if (reachSpec.endActor != navPoint)
+					if (reachSpec.startActor != cur || reachSpec.endActor != navPoint)
 						continue; // Not a path to this nav point
 
 					if (reachSpec.collisionRadius < radius || reachSpec.collisionHeight < height || reachSpec.bPruned)

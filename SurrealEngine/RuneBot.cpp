@@ -1,5 +1,7 @@
+#include "RuneBattleLaws.h"
 #include "Precomp.h"
 #include "RuneCorpse.h"
+#include "RuneSlam.h"
 #include "RuneBot.h"
 #ifdef OPENRUNE_ENABLE_NETWORK
 #include "RuneTacticsPolicy.h"
@@ -91,7 +93,7 @@ void Brain::avoidTeammates(UPlayerPawn* p,RuneNetworkReplica& replica,const Worl
     if(status.mode==GameMode::Deathmatch || ownTeam>=4 || status.phase!=MatchPhase::Playing || self.health<=0 ||
         !(self.flags&2) || self.combat.phase || (out.action && (*out.action==ActionKind::Jump || *out.action==ActionKind::BloodLeap || *out.action==ActionKind::ShieldCharge)))return;
     float magnitude=std::hypot(float(out.input.forward),float(out.input.strafe));
-    if(magnitude<100)return;
+    if(magnitude<100 || (liftActive>=0 && liftPhase>=2))return;
     float yaw=float(out.input.yaw)*6.2831853f/65536;vec3 facing(std::cos(yaw),std::sin(yaw),0),right(-facing.y,facing.x,0);
     auto wanted=direction(facing*float(out.input.forward)+right*float(out.input.strafe));auto here=position(self);
     struct Neighbor {const Entity* state;vec3 at,velocity;float radius;};std::vector<Neighbor> nearby;
@@ -239,7 +241,6 @@ bool Brain::rejectedAt(vec3 point,uint64_t now){
 }
 void Brain::rejectGoal(vec3 point,uint64_t now){
     std::erase_if(rejected,[&](const auto& r){return now>=r.until || length(r.point-point)<100;});
-    if(!teamNavigation)rejected.clear();
     if(rejected.size()>=8)rejected.erase(rejected.begin());
     rejected.push_back({point,now+8000});
 }
@@ -251,7 +252,7 @@ vec3 Brain::navigate(Engine& game, UPlayerPawn* p, vec3 goal, uint64_t now)
     if (now>=routeAt || length(goal-waypoint)>180)
     {
         if(length(goal-waypoint)>180)unreachableAt=0;
-        routeAt=now+(teamNavigation?4000:1200); partialRoute=false;waypoint=goal; route.clear(); routeIndex=0;
+        routeAt=now+4000; partialRoute=false;waypoint=goal; route.clear(); routeIndex=0;
         if(navPoints.empty()) {
         std::vector<UNavigationPoint*> nodes;
         std::unordered_map<UNavigationPoint*,int> index;
@@ -374,19 +375,19 @@ vec3 Brain::navigate(Engine& game, UPlayerPawn* p, vec3 goal, uint64_t now)
             const int destination=bridge>=0?bridge:goalNode;
             if(destination>=0) {
                 auto connection=localPath(p,here,points[destination],navRadius[destination],navHeight[destination]);
-                if(!connection.empty()){route=std::move(connection);routeAt=now+(teamNavigation?8000:5000);}
+                if(!connection.empty()){route=std::move(connection);routeAt=now+8000;}
                 else {
                     // A nearest node in the wrong component is not a route.
                     // Do not spend a whole patrol interval circling its wall.
-                    routeAt=now+3000;partialRoute=teamNavigation;
+                    routeAt=now+3000;partialRoute=true;
                 }
             }
         }
         if (debug) std::cout<<"OPEN_RUNE_AI_PATH nodes="<<count<<" reachable="<<visited<<" route="<<route.size()<<std::endl;
     }
     while (routeIndex<route.size() && flat(route[routeIndex]-here)<24 && std::abs(route[routeIndex].z-here.z)<64) ++routeIndex;
-    if(teamNavigation && routeIndex>=route.size() && length(goal-here)>120 && !walkableLine(p,here,goal))partialRoute=true;
-    if(teamNavigation && partialRoute){
+    if(routeIndex>=route.size() && length(goal-here)>120 && !walkableLine(p,here,goal))partialRoute=true;
+    if(partialRoute){
         // Give ordinary jumps, ledge grabs and door Use a chance before
         // rejecting a missing graph connection. Stopping immediately here
         // prevents the movement recovery below from ever running.
@@ -398,10 +399,9 @@ vec3 Brain::navigate(Engine& game, UPlayerPawn* p, vec3 goal, uint64_t now)
     return result;
 }
 Decision Brain::think(Engine& game,RuneNetworkReplica& replica,const World& world,const MatchStatus& status,EntityRef own,uint64_t now){
-    teamNavigation=status.mode==GameMode::TeamDeathmatch;
     const auto* self=find(world,own);auto* p=UObject::TryCast<UPlayerPawn>(replica.actor(own));
     if(!self || !p)return {};
-    if(life!=self->life){life=self->life;lastHealth=self->health;searchUntil=0;equipmentUntil=now+25000;target={};nextThink=readyAt=guardUntil=kickAt=bashAt=useAt=routeAt=patrolAt=progressAt=jumpAt=woundedAt=leapAt=jumpUntil=unreachableAt=supportUntil=guardAt=powerAt=escapeUntil=trafficUntil=trafficWaitUntil=0;trafficBlocker={};seenAt=lastSeen=threatAt=blockedAt=0;wasThreat=false;route.clear();rejected.clear();searchedPatrols.clear();intent={};side=random()<.5f?-1:1;}
+    if(life!=self->life){supplyTarget={};supplyTries=0;liftActive=-1;liftRetryAt=0;slamAt=slamCooldown=0;slamStage=0;life=self->life;lastHealth=self->health;searchUntil=0;equipmentUntil=now+25000;target={};nextThink=readyAt=guardUntil=kickAt=bashAt=useAt=routeAt=patrolAt=progressAt=jumpAt=woundedAt=leapAt=jumpUntil=unreachableAt=supportUntil=guardAt=powerAt=escapeUntil=trafficUntil=trafficWaitUntil=0;trafficBlocker={};seenAt=lastSeen=threatAt=blockedAt=0;wasThreat=false;route.clear();rejected.clear();searchedPatrols.clear();intent={};side=random()<.5f?-1:1;}
     if(now<nextThink){auto out=intent;out.action.reset();out.input.life=life;return out;}
     const auto decisionStarted=std::chrono::steady_clock::now();
     nextThink=now+100;++decisions;Decision out;out.input.life=life;out.input.yaw=self->angles[1];
@@ -422,14 +422,26 @@ Decision Brain::think(Engine& game,RuneNetworkReplica& replica,const World& worl
         intent=out;return out;
     };
     auto act=[&](ActionKind a,uint64_t recovery){if(now>=readyAt){out.action=a;readyAt=now+recovery;return true;}return false;};
+    if(self->physical.kind==1 || self->physical.kind==3){liftActive=-1;slamStage=0;intent=out;return out;}
     if(status.phase!=MatchPhase::Playing)return finish();
+    if(liftActive>=0 && self->health>0){if(auto lift=liftStep(game,p,*self,liftGoal,now)){out=*lift;return finish();}}
     if(self->health<=0){act(ActionKind::Respawn,1500);return finish();}
     const auto here=position(*self);auto temperament=RuneTactics::ForDifficulty(difficulty);const auto reaction=uint64_t(temperament.reaction*1000);
+    if(slamStage) {
+        if(now>=slamAt) {
+            if(!RuneBattleLaws::Allowed(RuneBattleLaws::Slam) || now>slamAt+300 || !RuneSlam::Heavy(p->Weapon()) || self->combat.phase || (self->flags&2)) {slamStage=0;return finish();}
+            if(slamStage==1 && act(ActionKind::BloodLeap,100)){slamStage=2;slamAt=now+100;}
+            else if(slamStage==2 && act(ActionKind::Attack,900)){slamStage=0;++specials;}
+        }
+        return finish();
+    }
     auto yawDirection=[&](uint16_t yaw){float a=float(yaw)*6.2831853f/65536;return vec3(std::cos(a),std::sin(a),0);};
     auto aim=[&](vec3 at){auto d=at-here;int wanted=Rotator::FromVector(d).Yaw;int change=int16_t(uint16_t(wanted-self->angles[1]));out.input.yaw=uint16_t(self->angles[1]+std::clamp(change,-4369,4369));}; // 240 degrees/sec at 10 Hz.
     auto move=[&](vec3 at,float speed=850.f){auto d=direction(at-here);auto f=yawDirection(out.input.yaw);out.input.forward=int16_t(dot(d,f)*speed);out.input.strafe=int16_t(dot(d,vec3(-f.y,f.x,0))*speed);};
     if(leapAt) {
-        if(now>=leapAt && now<=leapAt+200 && (self->combat.ready&1)) {
+        const auto* leapTarget=find(world,target);
+        if(RuneBattleLaws::Allowed(RuneBattleLaws::Leap) && leapTarget && leapTarget->health>0 && !(leapTarget->flags&32) && enemy(status,own,leapTarget->ref) &&
+           p->FastTrace(position(*leapTarget),here) && now>=leapAt && now<=leapAt+200 && (self->combat.ready&1)) {
             out.input.yaw=leapYaw;out.input.forward=850;
             if(act(ActionKind::BloodLeap,1800)){++specials;++leaps;}
         }
@@ -451,7 +463,7 @@ Decision Brain::think(Engine& game,RuneNetworkReplica& replica,const World& worl
     if(status.mode==GameMode::HeadBall && !status.headBallStarted)canFight=false;
     const Entity* foe=nullptr;float best=1e9f;
     if(canFight)for(const auto& e:world){if(e.kind!=EntityKind::Pawn || e.health<=0 || (e.flags&32) || !enemy(status,own,e.ref))continue;
-        if(teamNavigation && rejectedAt(position(e),now) && length(position(e)-here)>160)continue;
+        if(rejectedAt(position(e),now) && length(position(e)-here)>160)continue;
         auto d=position(e)-here;float distance=length(d);if(distance>1600 || (distance>110 && dot(yawDirection(self->angles[1]),direction(d))<-.15f))continue;
         if(!p->FastTrace(position(e)+vec3(0,0,20),here+vec3(0,0,20)))continue;
         float score=distance*(e.ref==target?.65f:1.f);
@@ -595,16 +607,22 @@ Decision Brain::think(Engine& game,RuneNetworkReplica& replica,const World& worl
     }
     // Seek useful visible supplies; never know a hidden pickup's live availability.
     if((!goalSet || (status.mode==GameMode::Arena && team(status,own)>=2 && !self->weapon.id)) && (!foe || self->health<35 || !self->weapon.id || (status.mode==GameMode::HeadBall && status.headBallStarted))){
-        float closest=700;
+        float closest=700;EntityRef chosenSupply{};
         for(const auto& e:world)if(!e.owner.id && !(e.flags&32) && (e.kind==EntityKind::Weapon || e.kind==EntityKind::Limb || e.kind==EntityKind::Shield || e.kind==EntityKind::Pickup)){
             auto* a=replica.actor(e.ref);if(!a)continue;
             bool scoring=status.mode==GameMode::HeadBall && (a->IsA("Head") || (limbsScore && a->IsA("LimbWeapon")));
             if(foe && flat(position(*foe)-here)<140 && self->health>=35 && self->weapon.id && !scoring)continue;
-            bool useful=((!self->weapon.id || (!self->shield.id && !self->combat.offhand.id && RuneDualWield::OneHanded(p->Weapon()) && RuneDualWield::OneHanded(UObject::TryCast<UWeapon>(a)))) && (e.kind==EntityKind::Weapon || e.kind==EntityKind::Limb)) || (!self->shield.id && !self->combat.offhand.id && e.kind==EntityKind::Shield) || (self->health<70 && a->IsA("Food")) ||
+            bool useful=((!self->weapon.id || (RuneBattleLaws::Allowed(RuneBattleLaws::Dual) && !self->shield.id && !self->combat.offhand.id && RuneDualWield::OneHanded(p->Weapon()) && RuneDualWield::OneHanded(UObject::TryCast<UWeapon>(a)))) && (e.kind==EntityKind::Weapon || e.kind==EntityKind::Limb)) || (!self->shield.id && !self->combat.offhand.id && e.kind==EntityKind::Shield) || (self->health<70 && a->IsA("Food")) ||
                 (a->IsA("RuneOfPowerRefill")?self->combat.runePower<self->combat.runeCapacity:(a->IsA("RuneOfPower")&&(self->combat.runeCapacity<200||self->combat.runePower<self->combat.runeCapacity))) || scoring;
             float d=length(position(e)-here);if(rejectedAt(position(e),now))continue;
-            if(useful && d<closest && std::abs(position(e).z-here.z)<120 && p->FastTrace(position(e),here)){closest=d;goal=position(e);goalSet=true;}}
-        if(goalSet && closest<90){aim(goal);if(now>=useAt && act(ActionKind::Use,350)){useAt=now+800;++objectives;}return finish();}
+            if(useful && d<closest && std::abs(position(e).z-here.z)<120 && p->FastTrace(position(e),here)){closest=d;goal=position(e);goalSet=true;chosenSupply=e.ref;}}
+        if(goalSet && closest<90){
+            if(supplyTarget!=chosenSupply){supplyTarget=chosenSupply;supplyTries=0;}
+            // A duplicate or unreachable pickup can remain visible after Use.
+            // Give normal pickup/replication time to complete, then move on.
+            if(supplyTries>=3){rejectGoal(goal,now);supplyTarget={};goalSet=false;}
+            else {aim(goal);if(now>=useAt && act(ActionKind::Use,350)){useAt=now+800;++objectives;++supplyTries;}return finish();}
+        }
     }
     if(!goalSet && canFight && status.mode!=GameMode::Arena && !self->weapon.id && !self->combat.offhand.id) {
         // An unarmed bot should re-equip, not remain in a shield/kick stalemate.
@@ -623,7 +641,7 @@ Decision Brain::think(Engine& game,RuneNetworkReplica& replica,const World& worl
     // objective detour or an attack through a teammate. Only authenticated
     // Use/Throw intents are emitted; the host revalidates the complete pickup.
     const Entity* heldBody=nullptr;
-    for(const auto& e:world)if(e.kind==EntityKind::Corpse && e.owner==own && e.attachmentJoint!=255){heldBody=&e;break;}
+    for(const auto& e:world)if(((e.kind==EntityKind::Corpse&&e.attachmentJoint!=255)||(e.kind==EntityKind::Pickup&&e.physical.kind==2)) && e.owner==own){heldBody=&e;break;}
     if(heldBody) {
         if(carriedBody!=heldBody->ref){carriedBody=heldBody->ref;carrySince=now;}
         if(foe) {
@@ -642,16 +660,16 @@ Decision Brain::think(Engine& game,RuneNetworkReplica& replica,const World& worl
         return finish();
     }
     carriedBody={};carrySince=0;
-    if(!goalSet && foe && now>=corpseAt && now>=readyAt && RuneCorpse::Eligible(p)) {
+    if(!goalSet && foe && (RuneBattleLaws::Allowed(RuneBattleLaws::Corpse)||RuneBattleLaws::Allowed(RuneBattleLaws::Props)) && now>=corpseAt && now>=readyAt && RuneCorpse::Eligible(p)) {
         float distance=flat(position(*foe)-here);
-        if(distance>180 && distance<500)for(const auto& e:world)if(e.kind==EntityKind::Corpse && !e.owner.id && !(e.flags&32) && length(position(e)-here)<100) {
+        if(distance>180 && distance<500)for(const auto& e:world)if((e.kind==EntityKind::Corpse||(e.kind==EntityKind::Pickup&&e.physical.kind==2)) && !e.owner.id && !(e.flags&32) && length(position(e)-here)<100) {
             auto* body=replica.actor(e.ref);
-            if(body && RuneCorpse::Throwable(body) && p->FastTrace(position(e),here) && act(ActionKind::Use,700)){corpseAt=now+3500;return finish();}
+            if(body && ((e.kind==EntityKind::Pickup&&RuneBattleLaws::Allowed(RuneBattleLaws::Props))||(e.kind==EntityKind::Corpse&&RuneBattleLaws::Allowed(RuneBattleLaws::Corpse)&&RuneCorpse::Throwable(body))) && p->FastTrace(position(e),here) && act(ActionKind::Use,700)){corpseAt=now+3500;return finish();}
         }
     }
     if(!goalSet && foe){
         auto delta=position(*foe)-here;float distance=flat(delta);aim(position(*foe));
-        bool threat=swinging(replica.actor(foe->ref)) && distance<180 && dot(yawDirection(foe->angles[1]),-direction(delta))>.35f;
+        bool threat=(swinging(replica.actor(foe->ref)) || foe->combat.phase==6) && distance<(foe->combat.phase==6?220:180) && dot(yawDirection(foe->angles[1]),-direction(delta))>.35f;
         if(threat && !wasThreat){threatAt=now;defenseRoll=random();}wasThreat=threat;
         bool blocking=(foe->flags&4)||(foe->combat.flags&2);if(blocking && !blockedAt)blockedAt=now;if(!blocking)blockedAt=0;
         if(now-seenAt<reaction)return finish();
@@ -662,11 +680,11 @@ Decision Brain::think(Engine& game,RuneNetworkReplica& replica,const World& worl
         const float bashReach=p->CollisionRadius()+(opponent?opponent->CollisionRadius():18.f)+32.f;
         bool inHeight=std::abs(delta.z)<std::min(42.f,p->CollisionHeight());
         if(!recovering && threat && now-threatAt>=reaction && defenseRoll<temperament.blockChance){
-            if((self->shield.id || self->combat.offhand.id) && facing){if(act(ActionKind::RaiseShield,650)){guardUntil=now+450;++defenses;if(self->combat.offhand.id)++crossBlocks;out.input.held=2;}return finish();}
+            if((self->shield.id || (RuneBattleLaws::Allowed(RuneBattleLaws::Cross)&&self->combat.offhand.id)) && facing){if(act(ActionKind::RaiseShield,650)){guardUntil=now+450;++defenses;if(self->combat.offhand.id)++crossBlocks;out.input.held=2;}return finish();}
             auto back=here-direction(delta)*48.f;if(safe(p,here,back)){move(back,700);++defenses;return finish();}
         }
         if(!recovering && !threat && facing && distance>80 && distance<175 &&
-           (self->shield.id || self->combat.offhand.id) && now>=guardAt &&
+           (self->shield.id || (RuneBattleLaws::Allowed(RuneBattleLaws::Cross)&&self->combat.offhand.id)) && now>=guardAt &&
            dot(yawDirection(foe->angles[1]),-direction(delta))>.65f){
             // A short prepared guard can catch a fast wind-up that a purely
             // reactive block cannot. One roll per opportunity, with a cooldown.
@@ -698,10 +716,35 @@ Decision Brain::think(Engine& game,RuneNetworkReplica& replica,const World& worl
         if(!recovering && facing && inHeight && distance<bashReach && ((blocking && blockedAt && now-blockedAt>=reaction)||(threat && now-threatAt>=reaction)) && self->shield.id && now>=bashAt && RuneBash::Compatible(p)){
             if(act(ActionKind::Bash,900)){bashAt=now+4200;++specials;++bashes;}return finish();}
         if(!recovering && facing && inHeight && distance<74 && (!blocking || !self->shield.id) && now>=kickAt && RuneKick::Compatible(p)){
-            if(act(ActionKind::Kick,850)){kickAt=now+2700;++specials;}return finish();}
-        if(!recovering && facing && inHeight && distance>180 && distance<350 && now-seenAt>reaction+300 && !blocking && !threat){
-            if((self->combat.ready&2) && safe(p,here,here+direction(delta)*48.f)){if(act(ActionKind::ShieldCharge,2000)){out.input.held=2;++specials;++charges;}return finish();}
-            if((self->combat.ready&1) && safe(p,position(*foe),position(*foe))){if(act(ActionKind::Jump,100)){leapAt=now+100;leapYaw=out.input.yaw;out.input.forward=850;}return finish();}
+            const float crowdedReach=p->CollisionRadius()+(opponent?opponent->CollisionRadius():18.f)+18.f;
+            const bool useful=!self->weapon.id || (foe->combat.flags&2) || (!blocking && distance<crowdedReach);
+            if(useful){
+                kickAt=now+uint64_t((RuneKick::AIIntervalMin+random()*RuneKick::AIIntervalSpan)*1000);
+                if(random()<RuneKick::AIChance && act(ActionKind::Kick,850)){++specials;return finish();}
+            }
+        }
+        if(!recovering && facing && inHeight && distance>180 && distance<650 && now-seenAt>reaction+300 && !threat){
+            const auto forward=direction(delta);
+            bool clearLane=true;
+            if(status.mode!=GameMode::Deathmatch)for(const auto& ally:world)if(ally.kind==EntityKind::Pawn && ally.ref!=own && ally.health>0 && team(status,ally.ref)==team(status,own)){
+                auto offset=position(ally)-here;float along=dot(offset,forward);
+                if(along>0 && along<600 && flat(offset-forward*along)<p->CollisionRadius()*2+12 && std::abs(offset.z)<80)clearLane=false;
+            }
+            // Rush closes a shorter gap and counters an observed held shield.
+            // Leap closes a longer gap, even with a shield equipped. Check the
+            // actual full travel/landing corridor instead of just its first step.
+            bool rush=RuneBattleLaws::Allowed(RuneBattleLaws::Rush) && clearLane && distance<350 && (self->combat.ready&2) &&
+                (!blocking || (blockedAt && now-blockedAt>=reaction)) && safe(p,here,here+forward*560.f);
+            bool leap=RuneBattleLaws::Allowed(RuneBattleLaws::Leap) && clearLane && distance>=300 && (self->combat.ready&1) &&
+                safe(p,here+forward*600.f,here+forward*600.f) && p->FastTrace(here+forward*600.f,here);
+            if(rush && (blocking || distance<300 || !leap || random()<.65f)){
+                if(act(ActionKind::ShieldCharge,2000)){out.input.held=2;++specials;++charges;}return finish();
+            }
+            if(leap){if(act(ActionKind::Jump,100)){leapAt=now+100;leapYaw=out.input.yaw;out.input.forward=850;}return finish();}
+        }
+        if(!recovering && facing && inHeight && distance>110 && distance<180 && !blocking && !threat &&
+            (self->flags&2) && !(self->combat.ready&1) && now>=slamCooldown && RuneBattleLaws::Allowed(RuneBattleLaws::Slam) && RuneSlam::Heavy(p->Weapon()) && safe(p,here,here) && random()<.12f) {
+            if(act(ActionKind::Jump,100)){slamStage=1;slamAt=now+100;slamCooldown=now+6000;out.input.forward=400;}return finish();
         }
         if(!recovering && facing && inHeight && distance<attackRange && !blocking && self->weapon.id){if(act(ActionKind::Attack,650+uint64_t(random()*250))){++attacks;}return finish();}
         if(inHeight && distance<130 && (blocking || (self->health<30 && now>=woundedAt))){
@@ -720,9 +763,9 @@ Decision Brain::think(Engine& game,RuneNetworkReplica& replica,const World& worl
     }
     if(!goalSet && target.id && lastSeen){goal=remembered;goalSet=true;}
     if(!goalSet){
-        const bool arrived=flat(waypoint-here)<70 && (!teamNavigation || std::abs(waypoint.z-here.z)<80);
+        const bool arrived=flat(waypoint-here)<70 && std::abs(waypoint.z-here.z)<80;
         if(now>=patrolAt || arrived){
-            if(teamNavigation && arrived && patrolAt){
+            if(arrived && patrolAt){
                 // Remember searched areas, not unseen enemies. Otherwise the
                 // nearest few nodes can keep a squad on one empty floor.
                 if(searchedPatrols.size()>=8)searchedPatrols.erase(searchedPatrols.begin());
@@ -737,8 +780,8 @@ Decision Brain::think(Engine& game,RuneNetworkReplica& replica,const World& worl
                 auto* zone=game.LevelInfo->GetLocZone(a->Location(),{}).Zone;
                 if(!zone || zone->bPainZone() || zone->bWaterZone() || zone->IsA("HeadBallZone"))continue;
                 // Shared map geography, never an unseen opponent's position.
-                float score=length(a->Location()-center)+length(a->Location()-here)*.25f+std::abs(a->Location().z-here.z)*(teamNavigation?.6f:3.f)+random()*400.f;
-                if(teamNavigation)for(auto searched:searchedPatrols)if(length(a->Location()-searched)<240)score+=900;
+                float score=length(a->Location()-center)+length(a->Location()-here)*.25f+std::abs(a->Location().z-here.z)*.6f+random()*400.f;
+                for(auto searched:searchedPatrols)if(length(a->Location()-searched)<240)score+=900;
                 spots.push_back({score,a->Location()});
             }
             if(!spots.empty()) {
@@ -749,6 +792,7 @@ Decision Brain::think(Engine& game,RuneNetworkReplica& replica,const World& worl
             patrolAt=now+45000;route.clear();routeAt=0;}
         goal=waypoint;
     }
+    if(auto lift=liftStep(game,p,*self,goal,now)){out=*lift;return finish();}
     auto next=navigate(game,p,goal,now);if(!foe)aim(next);
     auto step=here+direction(next-here)*std::clamp(flat(next-here),8.f,16.f);
     if(safe(p,here,step))move(next,std::clamp(flat(next-here)*15.f,180.f,850.f));

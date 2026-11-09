@@ -3,7 +3,17 @@ const fs = require('#fs')
 const path = require('#path')
 const udp = require('#dgram')
 const p = require('./protocol.cjs')
-function atomic(file, data) { fs.writeFileSync(file+'.tmp',data,{mode:0o600}); fs.renameSync(file+'.tmp',file) }
+// Windows readers and scanners can briefly deny replacement of the old entry.
+// Keep atomic publication; never truncate the live JSON or silently lose a credential.
+const renamePause=typeof process!=='undefined'&&process.platform==='win32'?new Int32Array(new SharedArrayBuffer(4)):null
+function atomic(file, data) {
+  const tmp=file+'.tmp';fs.writeFileSync(tmp,data,{mode:0o600})
+  const deadline=Date.now()+250
+  for(;;)try{fs.renameSync(tmp,file);return}catch(e){
+    if(!renamePause||!['EPERM','EACCES','EBUSY'].includes(e.code)||Date.now()>=deadline)throw e
+    Atomics.wait(renamePause,0,0,5)
+  }
+}
 function json(file) { return JSON.parse(fs.readFileSync(file,'utf8')) }
 const delay = ms => new Promise(r=>setTimeout(r,ms))
 function safe(socket) { socket.on('error',()=>{}) ; return socket }

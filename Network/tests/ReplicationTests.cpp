@@ -77,8 +77,36 @@ void codecs()
     CHECK(encodeSnapshot(normal,nullptr,b));CHECK(decodeSnapshot(b,nullptr,decoded) && decoded==normal);
     invalidDual=normal;invalidDual.world[0].combat.cooldown=1;CHECK(!validWorld(invalidDual.world));
     invalidDual=normal;invalidDual.world[0].combat.phase=1;CHECK(!validWorld(invalidDual.world));
+    auto slam=normal;slam.world[0].combat={};slam.world[0].combat.phase=6;slam.world[0].combat.age=225;
+    CHECK(encodeSnapshot(slam,nullptr,b));CHECK(decodeSnapshot(b,nullptr,decoded) && decoded==slam);
+    slam.world[0].combat.phase=7;CHECK(encodeSnapshot(slam,nullptr,b));CHECK(decodeSnapshot(b,nullptr,decoded) && decoded==slam);
+    slam.world[0].combat.phase=8;CHECK(!validWorld(slam.world));
     auto endDual=dual;endDual.id=2;endDual.baseline=1;endDual.tick++;endDual.world[0].combat={};
     CHECK(encodeSnapshot(endDual,&dual,b));CHECK(decodeSnapshot(b,&dual,decoded) && decoded==endDual);
+    auto physical=s;physical.world[0].physical.kind=1;physical.world[0].physical.root={-25,120,13};physical.world[0].physical.joints.resize(38,{65000,127,32900});
+    CHECK(encodeSnapshot(physical,nullptr,b));CHECK(decodeSnapshot(b,nullptr,decoded)&&decoded==physical);
+    auto physicalNext=physical;physicalNext.id=2;physicalNext.baseline=1;physicalNext.tick++;physicalNext.world[0].physical.joints[1][0]++;
+    CHECK(encodeSnapshot(physicalNext,&physical,b));CHECK(decodeSnapshot(b,&physical,decoded)&&decoded==physicalNext);
+    for(size_t n=0;n<b.size();++n)CHECK(!decodeSnapshot(std::span(b).first(n),&physical,decoded)&&decoded==physicalNext);
+    auto seeded=physical;seeded.world[0].physical.kind=3;
+    seeded.world[0].physical.basis={{1,{-32704,24,32704},{4096,2048,16384}},{37,{2,3,4},{1,4096,4096}}};
+    CHECK(encodeSnapshot(seeded,nullptr,b));CHECK(decodeSnapshot(b,nullptr,decoded)&&decoded==seeded);
+    for(size_t n=0;n<b.size();++n)CHECK(!decodeSnapshot(std::span(b).first(n),nullptr,decoded)&&decoded==seeded);
+    auto movedSeed=seeded;movedSeed.id=2;movedSeed.baseline=1;movedSeed.tick++;
+    movedSeed.world[0].physical.joints[0][0]++;
+    CHECK(encodeSnapshot(movedSeed,&seeded,b));CHECK(decodeSnapshot(b,&seeded,decoded)&&decoded==movedSeed);
+    auto badSeed=seeded;badSeed.world[0].physical.basis.clear();CHECK(!validWorld(badSeed.world));
+    badSeed=seeded;badSeed.world[0].physical.basis[1].joint=1;CHECK(!validWorld(badSeed.world));
+    badSeed=seeded;badSeed.world[0].physical.basis[1].joint=38;CHECK(!validWorld(badSeed.world));
+    badSeed=seeded;badSeed.world[0].physical.basis[0].scale[1]=0;CHECK(!validWorld(badSeed.world));
+    badSeed=seeded;badSeed.world[0].physical.basis[0].scale[1]=16385;CHECK(!validWorld(badSeed.world));
+    badSeed=seeded;badSeed.world[0].physical.kind=1;CHECK(!validWorld(badSeed.world));
+    badSeed=seeded;badSeed.world[0].physical.kind=4;CHECK(!validWorld(badSeed.world));
+    auto invalidPhysical=physical;invalidPhysical.world[0].physical.joints.resize(65);CHECK(!validWorld(invalidPhysical.world));
+    invalidPhysical=physical;invalidPhysical.world[0].physical.kind=0;CHECK(!validWorld(invalidPhysical.world));
+    invalidPhysical=physical;invalidPhysical.world[1].physical=physical.world[0].physical;CHECK(!validWorld(invalidPhysical.world));
+    auto rigid=s;rigid.world[0].physical.kind=2;rigid.world[0].physical.rotation={0,0,0,32767};CHECK(encodeSnapshot(rigid,nullptr,b));CHECK(decodeSnapshot(b,nullptr,decoded)&&decoded==rigid);
+    rigid.world[0].physical.rotation={};CHECK(!validWorld(rigid.world));
     auto bad=w; bad.push_back(w.back()); CHECK(!validWorld(bad));
     bad=w; bad[1].ref=bad[0].ref; CHECK(!validWorld(bad));
     bad=w; bad[0].shield.generation=2; CHECK(!validWorld(bad));
@@ -571,11 +599,11 @@ void combatBackpressure()
     }
     CHECK(next==66 && player.combatOverflowed() && player.drainCombat().empty());
 }
-void incompatibleMatch(bool modeMismatch=false)
+void incompatibleMatch(int mismatch=0)
 {
     auto key=generateInvitationKey();
     SecureSession server(true,key,"match-gate",{1,2},7),client(false,key,"match-gate",{1,3},7);
-    auto other=testMatch();if(modeMismatch)other.mode=GameMode::TeamDeathmatch;else other.mapHash[0]^=1;
+    auto other=testMatch();if(mismatch==1)other.mode=GameMode::TeamDeathmatch;else if(mismatch==2)++other.rulesRevision;else if(mismatch==3)other.gameplayHash[0]^=1;else other.mapHash[0]^=1;
     ReplicationPeer host(server,testMatch()),player(client,other);
     CHECK(host.snapshots.capture(makeWorld(2),1));
     for(uint64_t t=0;t<5000 && !host.matchMismatch() && !player.matchMismatch();t+=5)
@@ -720,7 +748,7 @@ int main(int argc,char** argv)
         }
         if(argc>1 && std::string(argv[1])=="sound-profile") {soundDelivery(false);return 0;}
         codecs(); inputActions(); snapshots();
-        if (argc==1) { for (unsigned seed=1;seed<=10;++seed) integration(seed); sameFrameActions(true); sameFrameActions(); soundDelivery(); combatBackpressure(); incompatibleMatch(); incompatibleMatch(true); closeSession(); matchTravel(); }
+        if (argc==1) { for (unsigned seed=1;seed<=10;++seed) integration(seed); sameFrameActions(true); sameFrameActions(); soundDelivery(); combatBackpressure(); incompatibleMatch(); incompatibleMatch(1); incompatibleMatch(2); incompatibleMatch(3); closeSession(); matchTravel(); }
         std::cout<<"PASS replication "<<checks<<" checks\n";
     }
     catch (const std::exception& e) { std::cerr<<"FAIL "<<e.what()<<'\n'; return 1; }

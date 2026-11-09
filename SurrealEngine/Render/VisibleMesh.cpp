@@ -1,6 +1,7 @@
 
 #include "Precomp.h"
 #include "RuneGore.h"
+#include "RuneStairPresentation.h"
 #include "VisibleMesh.h"
 #include "VisibleFrame.h"
 #include "RenderSubsystem.h"
@@ -51,6 +52,7 @@ bool VisibleMesh::DrawMesh(VisibleFrame* frame, UActor* actor, bool wireframe, b
 	mat4 meshToWorld = GetRuneMeshToWorld(actor);
     auto originalToWorld=meshToWorld;
     meshToWorld=RuneGore::MeshTransform(actor,mesh,meshToWorld);
+    meshToWorld[14]+=RuneStairPresentation::Offset(actor);
 
 	// Note: using transpose seems to be wrong here
 	mat3 meshNormalToWorld = mat3(Coords::Rotation(actor->Rotation()).ToMatrix() * Coords::Rotation(mesh->RotOrigin).ToMatrix());

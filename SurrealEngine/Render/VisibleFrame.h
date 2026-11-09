@@ -17,6 +17,7 @@ public:
     void DrawShadow();
     bool ShadowView = false;
     bool FastShadowCulling = false;
+    bool IndependentShadowCasters = false;
     FrustumPlanes ShadowFrustum;
     bool IsBoxVisible(const BBox& box)
     {

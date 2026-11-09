@@ -77,7 +77,11 @@ struct PresentPushConstants
 	float ShadowLift = 0.0f;
 	float AmbientOcclusion = 0.0f;
 	int AmbientSamples = 0;
+    alignas(16) vec4 Underwater = vec4(0.0f); // time, blend, unused, unused
+
 };
+
+static_assert(offsetof(PresentPushConstants, Underwater)==112 && sizeof(PresentPushConstants)==128, "Present push layout must fit Vulkan's minimum limit");
 
 struct BloomPushConstants
 {

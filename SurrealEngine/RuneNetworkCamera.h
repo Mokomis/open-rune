@@ -18,3 +18,17 @@ public:
     }
     void reset(){ready=false;}
 };
+
+// A conservative spring arm: move in before upcoming stair treads, ease back
+// out after an obstruction, and always obey the current collision-safe length.
+class RuneNetworkCameraBoom {
+    bool ready=false;uint32_t life=0;float length=185;
+public:
+    float update(float clear,float preview,uint32_t currentLife,bool continuous,float dt){
+        clear=std::clamp(clear,0.f,185.f);preview=std::clamp(preview,0.f,clear);
+        if(!ready||life!=currentLife||!continuous||dt<=0||dt>.2f)length=clear;
+        else length+=(preview-length)*(-std::expm1(-dt/.14f));
+        length=std::clamp(length,0.f,clear);ready=true;life=currentLife;return length;
+    }
+    void reset(){ready=false;}
+};

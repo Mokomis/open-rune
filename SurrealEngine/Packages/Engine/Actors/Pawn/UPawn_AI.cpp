@@ -195,6 +195,52 @@ float UPawn::AICanSmell(UActor* other, std::optional<float> smell)
 
 bool UPawn::PickWallAdjust()
 {
+    if(engine->LaunchInfo.IsRune() && Physics()==PHYS_Falling)return false;
+    if(engine->LaunchInfo.IsRune() && Physics()==PHYS_Walking && !bIsPlayer()) {
+        // Original Engine.dll PickWallAdjust (export 0x10302045): use body-sized
+        // sideways clearance, full-cylinder sweeps and a forward exit check.
+        // A one-unit destination completes before an actor clears the corner.
+        auto forward=Destination()-Location();forward.z=0;
+        if(length(forward)<.01f){forward=Acceleration();forward.z=0;}
+        if(length(forward)<.01f)return false;
+        forward=normalize(forward);
+        auto sweep=[&](vec3 from,vec3 delta) {
+            // TryMove(dryRun) has no callbacks or collision-index writes, just
+            // like the existing reachability simulation's temporary location.
+            const auto saved=Location();Location()=from;
+            auto hit=TryMove(delta,true);Location()=saved;return hit;
+        };
+        auto safeFloor=[&](vec3 at) {
+            auto* zone=Level()->GetLocZone(at,{}).Zone;
+            if(!zone || zone->bPainZone() || zone->bWaterZone())return false;
+            auto floor=sweep(at,vec3(0,0,-std::clamp(MaxStepHeight()+8.f,16.f,56.f)));
+            return floor.Fraction<1 && floor.Normal.z>.7f;
+        };
+        auto from=Location();
+        auto forwardHit=sweep(from,forward*14.f);
+        // Jump only over a demonstrated low obstacle, with real headroom and
+        // safe landing support. A clear one-unit diagonal is not that proof.
+        if(bCanJump() && JumpZ()>0 && forwardHit.Fraction<1 && std::abs(forwardHit.Normal.z)<.7f) {
+            const vec3 rise(0,0,48);
+            float across=CollisionRadius()+16;
+            if(sweep(from,rise).Fraction==1 &&
+               sweep(from+rise,forward*across).Fraction==1 &&
+               safeFloor(from+forward*across)) {
+                bFromWall()=false;Velocity().z=JumpZ();
+                Destination()=from+forward*across;SetPhysics(PHYS_Falling);
+                return true;
+            }
+        }
+        float sideDistance=CollisionRadius()+16+(bCanJump()?CollisionRadius()*.5f:0);
+        vec3 side(forward.y,-forward.x,0);
+        for(float sign:{1.f,-1.f}) {
+            auto delta=side*(sideDistance*sign),at=from+delta;
+            if(sweep(from,delta).Fraction<1 ||
+               sweep(at,forward*14.f).Fraction<1 || !safeFloor(at))continue;
+            Destination()=at;bFromWall()=true;return true;
+        }
+        return false;
+    }
 	auto kneeHeight = CollisionHeight() * 0.45f;
 
 	auto forwards = normalize(Acceleration().xy());

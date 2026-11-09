@@ -1,5 +1,6 @@
 #include "Precomp.h"
 #include "RuneTactics.h"
+#include "RuneNavigationProbe.h"
 #include "RuneCharacters.h"
 #include "RuneCharacterPreview.h"
 #include "RuneKick.h"
@@ -15,6 +16,7 @@
 #include "VM/ScriptCall.h"
 #include "VM/Frame.h"
 #include "Utils/CommandLine.h"
+#include "Utils/Random.h"
 #include <iostream>
 #include <stdexcept>
 #include <set>
@@ -23,6 +25,7 @@ void RunRuneDualWieldProbe(Engine& game);
 void RunRuneBloodlustProbe(Engine& game);
 void RunRuneRelocationProbe(Engine& game);
 void RunRuneTacticsProbe(Engine& game) {
+    if(commandline->GetArg("","--rune-tactics-probe","")=="navigation") { RunRuneNavigationProbe(game);return; }
     if(commandline->GetArg("","--rune-tactics-probe","")=="previews") { RuneCharacterPreview::Probe(game);return; }
     if(commandline->GetArg("","--rune-tactics-probe","")=="characters") { RuneCharacters::Probe(game);return; }
     if(commandline->GetArg("","--rune-tactics-probe","")=="bloodlust") { RunRuneBloodlustProbe(game);return; }
@@ -30,13 +33,19 @@ void RunRuneTacticsProbe(Engine& game) {
     RuneBloodlust::Enabled=false; // Separate ordinary-combat regression.
     if(commandline->GetArg("","--rune-tactics-probe","")=="dual") { RunRuneDualWieldProbe(game);return; }
     RuneDualWield::Enabled=false; // Baseline original single-weapon AI regression.
+    ScopedRandomSeed fixtureRandom(20261107);
     auto check=[](bool value,const char* why) { if(!value)throw std::runtime_error(std::string("tactics fixture: ")+why); };
     auto url=game.GetDefaultURL("DM-Hildir.run");url.AddOrReplaceOption("game=RuneI.RuneSinglePlayer");url.AddOrReplaceOption("Difficulty=1");
     game.LoadMap(url);game.LoginPlayer();
     auto* player=game.viewport->Actor();player->bShowMenu()=false;
+    UPawn* timingPawn=nullptr;double kickStart=-1,kickContact=-1;int timingHits=0;
     auto tick=[&](int frames) {
         for(int i=0;i<frames;++i) {
             constexpr float dt=1.f/120;game.LevelInfo->TimeSeconds()+=dt;game.TotalTime+=dt;game.Level->Tick(dt,false);
+            if(timingPawn && kickContact<0){
+                if(kickStart<0 && timingPawn->RuneKickPending){kickStart=game.TotalTime;timingHits=timingPawn->RuneKickHits;}
+                if(kickStart>=0 && !timingPawn->RuneKickPending){if(timingPawn->RuneKickHits>timingHits)kickContact=game.TotalTime-kickStart;else kickStart=-1;}
+            }
         }
     };
     tick(60);
@@ -71,6 +80,9 @@ void RunRuneTacticsProbe(Engine& game) {
             p->Acceleration()=p->Velocity()=vec3(0);p->SetBool("bSwingingHigh",false);p->SetBool("bSwingingLow",false);
             CallEvent(p,"WeaponDeactivate");CallEvent(p,"ActivateShield",{ExpressionValue::BoolValue(false)});
         }
+        // Slam has a separate fixture; keep this older ordinary kick/bash
+        // regression from choosing a heavy aerial move during a reset.
+        RuneSlam::Cancel(enemy);enemy->Slam.cooldown=1000;enemy->Slam.armed=0;
         enemy->Tactics={};enemy->RuneKickActive=enemy->RuneKickPending=enemy->RuneBashPending=false;
         enemy->RuneBashPhase=0;enemy->RuneKickCooldown=enemy->RuneBashCooldown=0;
         enemy->GotoState("Fighting","Begin");CallEvent(enemy,"PlayWaiting",{ExpressionValue::FloatValue(.1f)});
@@ -92,9 +104,14 @@ void RunRuneTacticsProbe(Engine& game) {
     check(enemy->Tactics.attacks>0,"no natural weapon attack");
     check(player->Health()<10000,"authored attacks did not damage target");
     if(RuneKick::Compatible(enemy)) {
-        reset(55);int before=enemy->RuneKickHits;tick(300);
+        int before=enemy->RuneKickHits;timingPawn=enemy;
+        // Kicks are deliberately occasional now. Present separated crowding
+        // opportunities without resetting the AI decision timer between them.
+        for(int approach=0;approach<8 && enemy->RuneKickHits==before;++approach){reset(55);tick(840);}
         std::cout<<"TACTICS_KICK choices="<<enemy->Tactics.kicks<<" hits="<<enemy->RuneKickHits-before<<'\n';
         check(enemy->Tactics.kicks>0 && enemy->RuneKickHits>before,"crowding did not produce natural kick impact");
+        check(kickContact>=.34 && kickContact<=.41,"autonomous NPC kick uses the shared faster contact timing");
+        std::cout<<"NPC_KICK_TIMING contact_ms="<<kickContact*1000<<std::endl;timingPawn=nullptr;
     }
     if(RuneBash::Compatible(enemy)) {
         reset(75);shield(enemy);shield(player);

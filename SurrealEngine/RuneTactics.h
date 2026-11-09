@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include "Math/vec.h"
 class UPawn;
 class UObject;
 namespace RuneTactics {
@@ -12,6 +13,8 @@ struct State {
     float think=0, visibleFor=0, threatFor=0, blockingFor=0;
     float recovery=0, actionAge=0, actionLimit=0, lostSight=0, defenseRoll=1;
     float moveTime=0, repositionCooldown=0, counterWindow=0;
+    float moveSample=0,stalledFor=0;
+    vec3 moveOrigin{0};
     int lastAttackVariant=-1;
     Choice move=Choice::Wait;
     int side=1;

@@ -78,18 +78,44 @@ bool validEntity(const Entity& e)
         (e.flags & ~191) || ((e.flags&128) && e.kind!=EntityKind::Weapon) || !e.life || e.animationPhase==INT16_MIN || e.torsoPhase==INT16_MIN ||
         !validRef(e.owner) || !validRef(e.weapon) || !validRef(e.shield) ||
         !validRef(e.combat.offhand) || (e.combat.flags&~15) || e.combat.meter>100 ||
-        e.combat.phase>5 || e.combat.age>10000 || e.combat.cooldown>4000 || e.combat.ready>3 ||
+        e.combat.phase>7 || e.combat.age>10000 || e.combat.cooldown>4000 || e.combat.ready>3 ||
+        (e.combat.phase>=6 && (e.combat.offhand.id || (e.combat.flags&11) || e.combat.guard)) ||
         e.combat.runeCapacity>200 || e.combat.runePower>e.combat.runeCapacity ||
         (e.kind!=EntityKind::Pawn && e.combat!=NativeCombat{}) ||
         (!e.combat.offhand.id && ((e.combat.flags&3) || e.combat.guard)) ||
         (!e.combat.phase && (e.combat.age || (e.combat.flags&8))) ||
         (e.combat.ready && (e.combat.phase || e.combat.cooldown)) ||
         (e.attachmentJoint!=255 && !e.owner.id)) return false;
+    if(e.physical.kind>3 || e.physical.joints.size()>64 || e.physical.basis.size()>64)return false;
+    if(!e.physical.kind && e.physical!=PhysicalPose{})return false;
+    if((e.physical.kind==1 || e.physical.kind==3) && ((e.kind!=EntityKind::Pawn&&e.kind!=EntityKind::Corpse)||e.physical.joints.empty()||e.physical.rotation!=std::array<int16_t,4>{}))return false;
+    if(e.physical.kind==2){int64_t norm=0;for(auto x:e.physical.rotation)norm+=int64_t(x)*x;if(!e.physical.joints.empty()||norm<1000000000||norm>1150000000)return false;}
+    if(e.physical.kind!=3 && !e.physical.basis.empty())return false;
+    if(e.physical.kind==3) {
+        if(e.physical.basis.empty())return false;
+        int prior=-1;
+        for(const auto& b:e.physical.basis) {
+            if(b.joint<=prior || b.joint>=e.physical.joints.size())return false;
+            prior=b.joint;
+            for(auto scale:b.scale)if(!scale || scale>16384)return false;
+        }
+    }
     return std::all_of(e.position.begin(),e.position.end(),[](int32_t p){ return p >= -(1<<27) && p <= (1<<27); });
+}
+void writePhysical(Writer& w,const PhysicalPose& p){w.put(p.kind);if(!p.kind)return;for(auto v:p.root)w.put(v);
+    if(p.kind==1 || p.kind==3){w.put(uint8_t(p.joints.size()));for(auto& r:p.joints)for(auto v:r)w.put(v);}
+    else for(auto v:p.rotation)w.put(v);
+    if(p.kind==3){w.put(uint8_t(p.basis.size()));for(const auto& b:p.basis){w.put(b.joint);for(auto v:b.position)w.put(v);for(auto v:b.scale)w.put(v);}}
+}
+PhysicalPose readPhysical(Reader& r){PhysicalPose p;p.kind=r.get<uint8_t>();if(!p.kind)return p;if(p.kind>3){r.ok=false;return {};}
+    for(auto& v:p.root)v=r.get<int16_t>();if(p.kind==1 || p.kind==3){auto n=r.get<uint8_t>();if(!n||n>64){r.ok=false;return {};}p.joints.resize(n);for(auto& a:p.joints)for(auto& v:a)v=r.get<uint16_t>();}
+    else for(auto& v:p.rotation)v=r.get<int16_t>();
+    if(p.kind==3){auto n=r.get<uint8_t>();if(!n||n>64){r.ok=false;return {};}p.basis.resize(n);for(auto& b:p.basis){b.joint=r.get<uint8_t>();for(auto& v:b.position)v=r.get<int16_t>();for(auto& v:b.scale)v=r.get<uint16_t>();}}
+    return p;
 }
 void writeEntity(Writer& w,const Entity& e)
 {
-    w.ref(e.ref); w.put(uint8_t(e.kind)); w.put(uint8_t(e.flags|(e.combat!=NativeCombat{}?64:0))); w.put(e.health); w.put(e.life);
+    w.ref(e.ref); w.put(uint8_t(uint8_t(e.kind)|(e.physical.kind?128:0))); w.put(uint8_t(e.flags|(e.combat!=NativeCombat{}?64:0))); w.put(e.health); w.put(e.life);
     for (auto v:e.position) w.put(v);
     for (auto v:e.velocity) w.put(v);
     for (auto v:e.angles) w.put(v);
@@ -97,6 +123,7 @@ void writeEntity(Writer& w,const Entity& e)
     w.put(e.torsoPhase);w.put(e.torsoRate);
     w.ref(e.owner); w.ref(e.weapon); w.ref(e.shield);
     w.put(e.attachmentJoint);
+    if(e.physical.kind)writePhysical(w,e.physical);
     if(e.combat!=NativeCombat{}) {
         const auto& c=e.combat;w.ref(c.offhand);w.put(c.flags);w.put(c.guard);w.put(c.meter);
         w.put(c.phase);w.put(c.age);w.put(c.cooldown);w.put(c.ready);w.put(c.runePower);w.put(c.runeCapacity);
@@ -104,14 +131,14 @@ void writeEntity(Writer& w,const Entity& e)
 }
 Entity readEntity(Reader& r)
 {
-    Entity e; e.ref=r.ref(); e.kind=EntityKind(r.get<uint8_t>()); e.flags=r.get<uint8_t>(); e.health=r.get<int16_t>(); e.life=r.get<uint32_t>();
+    Entity e; e.ref=r.ref();auto type=r.get<uint8_t>();bool hasPhysical=(type&128)!=0;e.kind=EntityKind(type&127); e.flags=r.get<uint8_t>(); e.health=r.get<int16_t>(); e.life=r.get<uint32_t>();
     for (auto& v:e.position) v=r.get<int32_t>();
     for (auto& v:e.velocity) v=r.get<int16_t>();
     for (auto& v:e.angles) v=r.get<uint16_t>();
     e.bodyAnimation=r.get<uint16_t>(); e.torsoAnimation=r.get<uint16_t>();
     e.animationPhase=r.get<int16_t>(); e.animationRate=r.get<int16_t>();
     e.torsoPhase=r.get<int16_t>();e.torsoRate=r.get<int16_t>();
-    e.owner=r.ref(); e.weapon=r.ref(); e.shield=r.ref(); e.attachmentJoint=r.get<uint8_t>();
+    e.owner=r.ref(); e.weapon=r.ref(); e.shield=r.ref(); e.attachmentJoint=r.get<uint8_t>();if(hasPhysical){e.physical=readPhysical(r);if(!e.physical.kind)r.ok=false;}
     if(e.flags&64) {
         e.flags&=~64;auto& c=e.combat;c.offhand=r.ref();c.flags=r.get<uint8_t>();c.guard=r.get<uint8_t>();
         c.meter=r.get<uint8_t>();c.phase=r.get<uint8_t>();c.age=r.get<uint16_t>();c.cooldown=r.get<uint16_t>();c.ready=r.get<uint8_t>();
@@ -204,7 +231,7 @@ bool validActorEvent(const ActorEvent& e)
             return (c>='A' && c<='Z') || (c>='a' && c<='z') || (c>='0' && c<='9') || c=='_';
         });
     };
-    return ((e.kind==EntityKind::Mover || e.kind==EntityKind::Objective) ? name(e.mapActor) && e.proxyPackage.empty() : e.mapActor.empty()) &&
+    return ((e.kind==EntityKind::Mover || e.kind==EntityKind::Objective) ? name(e.mapActor) && e.proxyPackage.empty() : (e.mapActor.empty()||(e.kind==EntityKind::Pickup&&name(e.mapActor)))) &&
         name(e.package) && name(e.actorClass) &&
         (e.proxyPackage.empty()==e.proxyClass.empty()) &&
         (e.proxyPackage.empty() || (name(e.proxyPackage) && name(e.proxyClass)));
@@ -214,7 +241,7 @@ template<class T> std::vector<T> take(std::deque<T>& q)
 }
 bool validWorld(const World& world)
 {
-    if (world.size()>MaxEntities || std::count_if(world.begin(),world.end(),[](const Entity& e){return e.combat!=NativeCombat{};})>64) return false;
+    if (world.size()>MaxEntities || std::count_if(world.begin(),world.end(),[](const Entity& e){return e.physical.kind!=0;})>48 || std::count_if(world.begin(),world.end(),[](const Entity& e){return e.combat!=NativeCombat{};})>64) return false;
     uint32_t last=0;
     for (const auto& e:world)
     { if (!validEntity(e) || e.ref.id<=last) return false; last=e.ref.id; }
@@ -268,7 +295,7 @@ bool encodeSnapshot(const Snapshot& s,const Snapshot* base,Bytes& out)
         if (!old || *old!=e) changed.push_back(e);
     }
     if (base) for (auto& e:base->world) if (!find(s.world,e.ref.id)) removed.push_back(e.ref);
-    Writer w; w.put(uint16_t(6)); w.put(s.id); w.put(s.baseline); w.put(s.tick);
+    Writer w; w.put(uint16_t(7)); w.put(s.id); w.put(s.baseline); w.put(s.tick);
     w.put(uint16_t(changed.size())); w.put(uint16_t(removed.size()));
     w.put(uint8_t(s.movement.has_value()));
     if(s.movement) {
@@ -283,7 +310,7 @@ bool encodeSnapshot(const Snapshot& s,const Snapshot* base,Bytes& out)
 bool decodeSnapshot(std::span<const uint8_t> bytes,const Snapshot* base,Snapshot& out)
 {
     if (bytes.size()<31 || bytes.size()>MaxSnapshotBytes) return false;
-    Reader r{bytes}; if (r.get<uint16_t>()!=6) return false;
+    Reader r{bytes}; if (r.get<uint16_t>()!=7) return false;
     Snapshot s; s.id=r.get<uint64_t>(); s.baseline=r.get<uint64_t>(); s.tick=r.get<uint64_t>();
     auto changed=r.get<uint16_t>(),removed=r.get<uint16_t>();
     auto hasMovement=r.get<uint8_t>();

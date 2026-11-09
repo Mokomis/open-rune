@@ -1491,6 +1491,16 @@ void GLRenderDevice::DrawGouraudPolygon(SceneNode* Frame, TextureInfo& Info, con
 
 void GLRenderDevice::DrawTile(SceneNode* Frame, TextureInfo& Info, float X, float Y, float XL, float YL, float U, float V, float UL, float VL, float Z, vec4 Color, vec4 Fog, uint32_t PolyFlags)
 {
+    // Rune canvas style 5 supplies uniform opacity. Keep legacy tile callers
+    // (whose DrawColor alpha is often zero) on their original opaque behavior.
+    const bool canvasAlpha = PolyFlags != PF_SubpixelFont && (PolyFlags & PF_CanvasAlpha) != 0;
+    if (canvasAlpha)
+    {
+        PolyFlags = (PolyFlags & ~PF_CanvasAlpha) | PF_Highlighted;
+        float opacity = std::isfinite(Color.w) ? clamp(Color.w, 0.0f, 1.0f) : 1.0f;
+        if (opacity <= 0.0f) return;
+        Color = vec4(Color.xyz() * opacity, opacity); // Premultiplied blend pipeline.
+    }
 	PolyFlags = ApplyPrecedenceRules(PolyFlags);
 
 	if (PolyFlags == PF_SubpixelFont)
@@ -1545,7 +1555,7 @@ void GLRenderDevice::DrawTile(SceneNode* Frame, TextureInfo& Info, float X, floa
 			g = Color.y;
 			b = Color.z;
 		}
-		a = 1.0f;
+		a = canvasAlpha ? Color.w : 1.0f;
 
 		float rfx2z = RFX2 * Z;
 		float rfy2z = RFY2 * Z;

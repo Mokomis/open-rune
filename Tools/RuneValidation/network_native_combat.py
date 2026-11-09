@@ -22,6 +22,7 @@ p.add_argument('--game',type=Path,required=True)
 p.add_argument('--output',type=Path,required=True)
 p.add_argument('--fixture',choices=('dual','blood','bash'),required=True)
 p.add_argument('--latency',type=int,default=0)
+p.add_argument('--physics-mode',type=int,choices=(0,1,2),default=0)
 p.add_argument('--device')
 p.add_argument('--characters',nargs=2,default=['0:0','0:0'],help='Character ID:skin for the two desktop clients')
 p.add_argument('--touch-gesture',choices=('leap','charge'))
@@ -43,7 +44,7 @@ with tempfile.TemporaryDirectory(prefix='open-rune-native-net-') as folder:
         processes.append(proc);return proc
     try:
         host=launch('server',[f'--rune-server={invites}',f'--rune-net-address={a.host}','--rune-net-seconds=65',
-            '--probe-seed=1',f'--rune-net-native-fixture={a.fixture}'])
+            '--probe-seed=1',f'--rune-net-native-fixture={a.fixture}',f'--rune-physics={a.physics_mode}'])
         until=time.monotonic()+20
         while not (invites/'player2.rune-invite').exists():
             if host.poll() is not None or time.monotonic()>until:raise RuntimeError('No invitations; see server.log')
@@ -86,7 +87,7 @@ with tempfile.TemporaryDirectory(prefix='open-rune-native-net-') as folder:
         for client in clients:assert client.wait(timeout=55)==0,'Client failure'
         assert host.wait(timeout=45)==0,'Host failure'
         for log in logs:log.flush()
-        expected=192 if a.fixture=='bash' else 7 if a.fixture=='dual' else 40 if a.touch_gesture=='leap' else 56
+        expected=(64|256|512) if a.physics_mode and a.fixture=='bash' else 192 if a.fixture=='bash' else 7 if a.fixture=='dual' else 40 if a.touch_gesture=='leap' else 56
         texts=[(a.output/f'client{i}.log').read_text() for i in (1,2)]
         for i,text in enumerate(texts,1):
             if a.touch_gesture and i==2:continue
@@ -102,7 +103,7 @@ with tempfile.TemporaryDirectory(prefix='open-rune-native-net-') as folder:
             assert 'RUNE_BASH_HIT' in server and 'stagger=1' in server, 'Bash did not stagger target'
         elif a.fixture=='blood':
             for kind in (10,11):assert re.search(fr'OPEN_RUNE_ACTION player=\d+ kind={kind} accepted=1',server),f'Missing accepted action {kind}'
-        result={'passed':True,'binary_sha256':hashlib.sha256(a.binary.read_bytes()).hexdigest(),'returncodes':[proc.returncode for proc in [host,*clients]],'fixture':a.fixture,'characters':a.characters,'touch_gesture':a.touch_gesture,'platform':('Android + '+platform.system()) if a.device else (platform.system()+' x2'),'latency_each_way_ms':a.latency,
+        result={'passed':True,'binary_sha256':hashlib.sha256(a.binary.read_bytes()).hexdigest(),'returncodes':[proc.returncode for proc in [host,*clients]],'fixture':a.fixture,'physics_mode':a.physics_mode,'characters':a.characters,'touch_gesture':a.touch_gesture,'platform':('Android + '+platform.system()) if a.device else (platform.system()+' x2'),'latency_each_way_ms':a.latency,
             'expected_observed_mask':expected,'profiles':[re.findall(r'OPEN_RUNE_CLIENT_PROFILE[^\n]+',text) for text in texts]}
         (a.output/'result.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result,indent=2))
     finally:

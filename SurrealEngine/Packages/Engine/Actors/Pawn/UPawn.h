@@ -4,6 +4,7 @@
 #include "RuneTactics.h"
 #include "RuneDualWield.h"
 #include "RuneBloodlust.h"
+#include "RuneSlam.h"
 
 class USound;
 class UNavigationPoint;
@@ -21,6 +22,7 @@ public:
 	RuneTactics::State Tactics;
     RuneDualWield::State Dual;
     RuneBloodlust::State Bloodlust;
+    RuneSlam::State Slam;
     RuneCorpse::CarryState CorpseCarry;
 
 	// Transient combat-kick state. Save/load safely cancels a pending hit.
@@ -32,6 +34,7 @@ public:
     // Native-only bash state; pending impacts and stun protection reset on load.
     int RuneBashPhase=0, RuneBashHits=0, RuneBashBlocks=0, RuneBashStuns=0;
     bool RuneBashPending=false;
+    float RuneBashImpactAt=-1000, RuneBashImpactStrength=0; // transient confirmed-hit presentation
     float RuneBashCooldown=0, RuneBashImmunity=0, RuneBashThink=.7f, RuneBashAge=0, RuneBashTapTime=-1;
 
     void Tick(float elapsed) override;
@@ -87,7 +90,7 @@ public:
 	void ClearPaths();
 	UObject* FindRandomDest();
 	UObject* FindPathTo(const vec3& aPoint, bool bSinglePath);
-	UObject* FindPathToward(UObject* anActor, bool singlePath);
+	UObject* FindPathToward(UObject* anActor, bool singlePath, bool authoredOnly=false);
 	UObject* FindBestInventoryPath(bool predictRespawns, float& outBestWeight);
 	UNavigationPoint* FindClosestNavPoint(vec3 location);
 	bool MarkReachableNavEndPoints();

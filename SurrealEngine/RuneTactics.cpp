@@ -1,3 +1,4 @@
+#include "RuneBattleLaws.h"
 #include "Precomp.h"
 #include "RuneTactics.h"
 #include "RuneDualWield.h"
@@ -44,7 +45,7 @@ NameString AttackSequence(UPawn* p) {
 void Shield(UPawn* p,bool raised) {
     CallEvent(p,"ActivateShield",{ExpressionValue::BoolValue(raised)});
     RuneDualWield::Guard(p,raised);
-    p->Tactics.blocking=raised && (HasShield(p) || RuneDualWield::Equipped(p));
+    p->Tactics.blocking=raised && (HasShield(p) || (RuneBattleLaws::Allowed(RuneBattleLaws::Cross)&&RuneDualWield::Equipped(p)));
 }
 void Stop(UPawn* p) { p->Acceleration()=vec3(0);p->Velocity().x=0;p->Velocity().y=0;p->Tactics.moveTime=0; }
 void ColdWeapon(UPawn* p) {
@@ -79,7 +80,7 @@ bool Walk(UPawn* p,const vec3& direction,Choice choice,float stepLength=48.0f) {
     auto zone=p->Level()->GetLocZone(end,{}).Zone;
     if(!zone || zone->bPainZone() || zone->bWaterZone())return false;
     vec3 hit,normal;
-    vec3 extent(p->CollisionRadius(),p->CollisionRadius(),p->CollisionHeight()*.8f);
+    vec3 extent(p->CollisionRadius(),p->CollisionRadius(),std::max(1.f,p->CollisionHeight()-.5f));
     if(p->Trace(hit,normal,end,p->Location(),true,extent))return false;
     if(!p->Trace(hit,normal,end-vec3(0,0,p->CollisionHeight()+32),end,false,
                  vec3(p->CollisionRadius()*.6f,p->CollisionRadius()*.6f,0)) || normal.z<.7f)return false;
@@ -137,10 +138,10 @@ bool Controls(UObject* obj) {
 }
 bool SuppressRandomSpecial(UPawn* p) {
     if(!Eligible(p) || p->GetStateName()!="Fighting")return false;
-    return p->Tactics.active || (Enabled.load() && Sequence(p,AttackSequence(p)));
+    return p->Tactics.active || (RuneBattleLaws::Enabled(RuneBattleLaws::Tactics,Enabled.load()) && Sequence(p,AttackSequence(p)));
 }
 bool MayCommit(UPawn* p) {
-    if(!Enabled.load() || !Eligible(p) || !Alive(p->Enemy()))return true;
+    if(!RuneBattleLaws::Enabled(RuneBattleLaws::Tactics,Enabled.load()) || !Eligible(p) || !Alive(p->Enemy()))return true;
     const auto temperament=ForDifficulty(engine->GameInfo?engine->GameInfo->GetByte("Difficulty"):1);
     int attackers=0,checked=0;
     for(auto* ally=p->Level()->PawnList();ally && checked++<64;ally=ally->nextPawn()) {
@@ -159,11 +160,11 @@ void Tick(UPawn* p,float elapsed) {
     // interrupt it, nor change any scripted Uninterrupted animation.
     if(s.active && s.special && state=="Uninterrupted" && Alive(p))return;
     if(!Eligible(p) || state!="Fighting") { Release(p,false);return; }
-    if(!Enabled.load() && !s.attacking) { Release(p,true);return; }
+    if(!RuneBattleLaws::Enabled(RuneBattleLaws::Tactics,Enabled.load()) && !s.attacking) { Release(p,true);return; }
     auto* enemy=p->Enemy();
     if(!Alive(enemy)) { Release(p,true);return; }
     if(!s.active) {
-        if(!Enabled.load() || !Sequence(p,AttackSequence(p)))return;
+        if(!RuneBattleLaws::Enabled(RuneBattleLaws::Tactics,Enabled.load()) || !Sequence(p,AttackSequence(p)))return;
         // Let an in-progress original attack, equipment draw, or restored save
         // animation finish. Taking over must never truncate its hit window.
         if(Swinging(p) && p->bAnimFinished() && !p->RuneKickPending && !p->RuneBashPending)ColdWeapon(p);
@@ -171,6 +172,7 @@ void Tick(UPawn* p,float elapsed) {
         s.active=true;s.attacking=false;s.blocking=false;s.special=false;
         s.think=FRand()*.1f;s.visibleFor=0;s.recovery=.25f;
         s.side=FRand()<.5f?-1:1;s.observed=enemy;
+        s.moveSample=s.stalledFor=0;s.moveOrigin=p->Location();
         Stop(p);Shield(p,false);Idle(p);
     }
     const auto temperament=ForDifficulty(engine->GameInfo?engine->GameInfo->GetByte("Difficulty"):1);
@@ -196,6 +198,19 @@ void Tick(UPawn* p,float elapsed) {
         }
         return;
     }
+    // Validate actual walking progress as well as planned clearance. Temporary
+    // pawn traffic or a changing mover can invalidate an otherwise clear step.
+    if(s.moveTime>0 && s.recovery<=0 && !s.blocking) {
+        s.moveSample+=dt;
+        if(s.moveSample>=.4f) {
+            auto moved=p->Location()-s.moveOrigin;moved.z=0;
+            s.stalledFor=length(moved)<4?s.stalledFor+s.moveSample:0;
+            s.moveSample=0;s.moveOrigin=p->Location();
+            if(s.stalledFor>=.8f) {
+                Stop(p);Release(p,false);p->GotoState("Charging","Begin");return;
+            }
+        }
+    } else {s.moveSample=s.stalledFor=0;s.moveOrigin=p->Location();}
     s.recovery=std::max(0.0f,s.recovery-dt);
     s.repositionCooldown=std::max(0.f,s.repositionCooldown-dt);
     s.counterWindow=std::max(0.f,s.counterWindow-dt);
@@ -229,7 +244,7 @@ void Tick(UPawn* p,float elapsed) {
     s.blockingFor=blocking?(s.sawBlock?s.blockingFor+.1f:0):0;s.sawBlock=blocking;
     if(s.blocking) {
         s.actionAge+=.1f;
-        if(s.actionAge<.55f && (HasShield(p) || RuneDualWield::Equipped(p)))return;
+        if(s.actionAge<.55f && (HasShield(p) || (RuneBattleLaws::Allowed(RuneBattleLaws::Cross)&&RuneDualWield::Equipped(p))))return;
         Shield(p,false);s.recovery=.22f;Idle(p);
     }
     if(s.recovery>0)return;
@@ -237,7 +252,7 @@ void Tick(UPawn* p,float elapsed) {
     observation.visible=true;observation.visibleFor=s.visibleFor;
     observation.facing=dot(Forward(p),direction)>.85f;
     observation.threat=threat;observation.threatFor=s.threatFor;
-    observation.shield=HasShield(p) || RuneDualWield::Equipped(p);observation.targetBlocking=blocking;observation.blockingFor=s.blockingFor;
+    observation.shield=HasShield(p) || (RuneBattleLaws::Allowed(RuneBattleLaws::Cross)&&RuneDualWield::Equipped(p));observation.targetBlocking=blocking;observation.blockingFor=s.blockingFor;
     observation.distance=distance;
     observation.wounded=p->Health()<p->Class->GetDefaultObject<UPawn>()->Health()*.3f;
     observation.repositionReady=s.repositionCooldown<=0;
@@ -245,8 +260,8 @@ void Tick(UPawn* p,float elapsed) {
     observation.reach=p->CollisionRadius()+enemy->CollisionRadius()+std::clamp(p->MeleeRange(),20.0f,120.0f);
     if(RuneDualWield::Equipped(p))observation.reach=p->CollisionRadius()+enemy->CollisionRadius()+12;
     observation.contact=p->CollisionRadius()+enemy->CollisionRadius()+48;
-    observation.kick=RuneKick::Enabled.load() && p->RuneKickCooldown<=0 && RuneKick::Compatible(p);
-    observation.bash=RuneBash::Enabled.load() && HasShield(p) && p->RuneBashCooldown<=0 && RuneBash::Compatible(p);
+    observation.kick=RuneBattleLaws::Enabled(RuneBattleLaws::Kick,RuneKick::Enabled.load()) && p->RuneKickCooldown<=0 && p->RuneKickThink<=0 && RuneKick::Compatible(p);
+    observation.bash=RuneBattleLaws::Enabled(RuneBattleLaws::Bash,RuneBash::Enabled.load()) && HasShield(p) && p->RuneBashCooldown<=0 && RuneBash::Compatible(p);
     // Bounded local coordination: other species can still use their own AI.
     int checked=0;
     for(auto* ally=p->Level()->PawnList();ally && checked++<64;ally=ally->nextPawn()) {
@@ -267,6 +282,9 @@ void Tick(UPawn* p,float elapsed) {
     case Choice::Attack: Attack(p);break;
     case Choice::Kick:
     case Choice::Bash:
+        // Roll only after visibility, reaction, facing and crowding gates chose
+        // a genuine kick opportunity; observation must not consume its timer.
+        if(choice==Choice::Kick && !RuneKick::ConsiderAIKick(p)){s.recovery=.15f;break;}
         Stop(p);Shield(p,false);
         if(choice==Choice::Kick?RuneKick::Start(p):RuneBash::Start(p)) {
             s.special=true;if(choice==Choice::Kick)s.kicks++;else s.bashes++;

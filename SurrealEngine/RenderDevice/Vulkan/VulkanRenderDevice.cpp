@@ -1,6 +1,7 @@
 
 #include "Precomp.h"
 #include "VulkanRenderDevice.h"
+#include "ShaderOptimizationDefaults.h"
 #include "RenderDevice/VisualComparison.h"
 #include "CachedTexture.h"
 #include "Utils/Logger.h"
@@ -14,6 +15,7 @@
 #include "ShadowReceiverBounds.h"
 #include "Light/LightSystem.h"
 #include "Engine.h"
+#include "RuneMenu.h"
 #include "Packages/Engine/Resources/Level/ULevel.h"
 #include <cstring>
 #include <stdexcept>
@@ -109,7 +111,10 @@ VulkanRenderDevice::VulkanRenderDevice(Widget* InViewport)
         LogMessage("RUNE_SHADOW_RECEIVERS enabled="+std::to_string(CullShadowReceivers));
         GroupShadowPasses=commandline->GetArgInt("","--render-group-shadows",0)!=0;
         LogMessage("RUNE_SHADOW_GROUPING enabled="+std::to_string(GroupShadowPasses));
-		InPassResolve = commandline->GetArgInt("", "--render-inpass-resolve", 0) != 0;
+        // Qualified tile-renderer paths avoid a separate MSAA color resolve/store.
+        // Keep unqualified devices and drivers on their previous defaults.
+        const int inPassResolveDefault = UsesQualifiedShaderDefaults(*Device) ? 1 : 0;
+        InPassResolve = commandline->GetArgInt("", "--render-inpass-resolve", inPassResolveDefault) != 0;
 		LogMessage("RUNE_VULKAN_INPASS_RESOLVE enabled=" + std::to_string(InPassResolve));
 		OmitUnusedHit = commandline->GetArgInt("", "--render-omit-hit", defaultOverlap) != 0;
 		LogMessage("RUNE_VULKAN_OMIT_HIT enabled=" + std::to_string(OmitUnusedHit));
@@ -288,6 +293,13 @@ void VulkanRenderDevice::Lock(vec4 InFlashScale, vec4 InFlashFog, vec4 ScreenCle
 	OmitHitThisFrame = OmitUnusedHit && !InHitData;
 	HitSize = InHitSize;
 
+    if(commandline->HasArg("","--trace-rune-water") && Textures->Scene) {
+        static int width=0,height=0,samples=0;
+        if(width!=Textures->Scene->Width || height!=Textures->Scene->Height || samples!=int(Textures->Scene->SceneSamples)) {
+            width=Textures->Scene->Width;height=Textures->Scene->Height;samples=int(Textures->Scene->SceneSamples);
+            LogMessage("RUNE_WATER_TARGET width="+std::to_string(width)+" height="+std::to_string(height)+" samples="+std::to_string(samples));
+        }
+    }
 	FlashScale = InFlashScale;
 	FlashFog = InFlashFog;
 
@@ -340,6 +352,7 @@ void VulkanRenderDevice::Lock(vec4 InFlashScale, vec4 InFlashFog, vec4 ScreenCle
 
 void VulkanRenderDevice::StartScenePass()
 {
+    Commands->SetProfilePass(CommandBufferManager::GpuPass::Scene);
     auto cmdbuffer = Commands->GetDrawCommands();
 	PrepareResolveTarget(cmdbuffer, false);
 	RenderPassBegin()
@@ -373,6 +386,7 @@ void VulkanRenderDevice::FlushDrawBatchAndWait()
 
 void VulkanRenderDevice::ResumeScenePass()
 {
+    Commands->SetProfilePass(CommandBufferManager::GpuPass::Scene);
     auto drawcommands = Commands->GetDrawCommands();
 
     VkAccessFlags srcColorAccess = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
@@ -415,11 +429,14 @@ void VulkanRenderDevice::Unlock(bool Blit)
 			.Execute(Commands->GetDrawCommands(), VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
 	}
 
+	Commands->SetProfilePass(CommandBufferManager::GpuPass::Resolve);
 	BlitSceneToPostprocess();
 	if (Bloom || VisualEnhanced)
 	{
+		Commands->SetProfilePass(CommandBufferManager::GpuPass::Bloom);
 		RunBloomPass();
 	}
+	Commands->SetProfilePass(CommandBufferManager::GpuPass::Other);
 
 	int windowWidth = Viewport->GetNativePixelWidth();
 	int windowHeight = Viewport->GetNativePixelHeight();
@@ -543,7 +560,7 @@ void VulkanRenderDevice::DrawComplexSurface(SceneNode* Frame, SurfaceInfo& Surfa
 
 	if (WaterReflectionActive && Facet.Water) return;
     bool water=Facet.Water && (WorldFeatures&2048) && Buffers->ShadowLighting->WaterParameters.z>0.5f &&
-        Facet.VertexCount>0 && std::abs(Facet.Vertices[0].z-Buffers->ShadowLighting->WaterParameters.y)<1.0f;
+        Facet.VertexCount>0 && (UsesModernWater() || std::abs(Facet.Vertices[0].z-Buffers->ShadowLighting->WaterParameters.y)<1.0f);
     bool opaqueWater=water && !(Surface.PolyFlags&(PF_Translucent|PF_Modulated));
     if(water && !opaqueWater) PolyFlags=(PolyFlags & ~(PF_Translucent|PF_Modulated|PF_Masked|PF_Occlude))|PF_Highlighted;
     CachedTexture* tex = Textures->GetTexture(Surface.Texture, !!(PolyFlags & PF_Masked));
@@ -761,6 +778,7 @@ void VulkanRenderDevice::DrawComplexSurface(SceneNode* Frame, SurfaceInfo& Surfa
 			vptr->TexCoord4.s = (u - DetailUPan) * DetailUMult;
 			vptr->TexCoord4.t = (v - DetailVPan) * DetailVMult;
 			vptr->Color = color;
+            if(water && UsesModernWater()) vptr->Color.w=Facet.WaterDepth ? Facet.WaterDepth[i] : 512.0f;
 			vptr->TextureBinds = textureBinds;
 			vptr++;
 		}
@@ -922,6 +940,16 @@ void VulkanRenderDevice::DrawGouraudPolygon(SceneNode* Frame, TextureInfo& Info,
 
 void VulkanRenderDevice::DrawTile(SceneNode* Frame, TextureInfo& Info, float X, float Y, float XL, float YL, float U, float V, float UL, float VL, float Z, vec4 Color, vec4 Fog, uint32_t PolyFlags)
 {
+    // Rune canvas style 5 supplies uniform opacity. Keep legacy tile callers
+    // (whose DrawColor alpha is often zero) on their original opaque behavior.
+    const bool canvasAlpha = PolyFlags != PF_SubpixelFont && (PolyFlags & PF_CanvasAlpha) != 0;
+    if (canvasAlpha)
+    {
+        PolyFlags = (PolyFlags & ~PF_CanvasAlpha) | PF_Highlighted;
+        float opacity = std::isfinite(Color.w) ? clamp(Color.w, 0.0f, 1.0f) : 1.0f;
+        if (opacity <= 0.0f) return;
+        Color = vec4(Color.xyz() * opacity, opacity); // Premultiplied blend pipeline.
+    }
 	PolyFlags = ApplyPrecedenceRules(PolyFlags);
 
 	if (PolyFlags == PF_SubpixelFont)
@@ -959,7 +987,7 @@ void VulkanRenderDevice::DrawTile(SceneNode* Frame, TextureInfo& Info, float X, 
 		g = Color.y;
 		b = Color.z;
 	}
-	a = 1.0f;
+	a = canvasAlpha ? Color.w : 1.0f;
 
 	if (Textures->Scene->Multisample > 1)
 	{
@@ -1729,6 +1757,8 @@ PresentPushConstants VulkanRenderDevice::GetPresentPushConstants()
 	pushconstants.ShadowLift = IsOrtho ? 0.0f : clamp(ShadowLift, 0.0f, 0.65f);
 	pushconstants.AmbientOcclusion = IsOrtho ? 0.0f : ((WorldFeatures >> 14) & 3) * 0.20f;
 	pushconstants.AmbientSamples = 4;
+    bool underwater=UsesModernWater() && WaterSubmerged && !RuneMenu::Open.load() && commandline->GetArgInt("","--water-underwater",1)!=0;
+    pushconstants.Underwater=vec4(WaterViewTime,underwater?1.0f:0.0f,0,0);
 	pushconstants.HdrScale = 0.8f + HdrScale * (3.0f / 255.0f);
 	if (IsOrtho)
 	{
@@ -1790,6 +1820,7 @@ PresentPushConstants VulkanRenderDevice::GetPresentPushConstants()
 
 void VulkanRenderDevice::DrawPresentTexture(int width, int height)
 {
+    Commands->SetProfilePass(CommandBufferManager::GpuPass::Present);
 	int vpWidth = Viewport->GetNativePixelWidth();
 	int vpHeight = Viewport->GetNativePixelHeight();
 

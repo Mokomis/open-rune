@@ -11,6 +11,7 @@
 #include "Packages/Engine/UViewport.h"
 #include "Packages/Engine/Actors/Pawn/UPlayerPawn.h"
 #include "Packages/Engine/Actors/Info/ULevelInfo.h"
+#include "Packages/Engine/Actors/Info/UZoneInfo.h"
 #include "Packages/Engine/Resources/Level/ULevel.h"
 #include "Packages/Engine/Resources/Mesh/USkelModel.h"
 #include "VM/ScriptCall.h"
@@ -24,8 +25,68 @@ namespace
 {
 void check(bool v,const char* what) { if(!v)throw std::runtime_error(std::string("network engine fixture: ")+what); }
 }
+static void RunCrouchDiveProbe(Engine& game)
+{
+    float standaloneDiveAxis=0;
+    for(bool network:{false,true})for(bool swimming:{false,true}) {
+        game.NetworkAuthority=network;
+        auto url=game.GetDefaultURL(swimming?"SinkingShip2.run":"DM-Hildir.run");
+        url.AddOrReplaceOption(network?"game=RuneI.RuneMultiPlayer":"game=RuneI.RuneSinglePlayer");
+        game.LoadMap(url);game.LoadKeybindings();
+        UPlayerPawn* pawn;
+        if(network){pawn=game.LoginNetworkPlayer("CrouchProbe");game.viewport->Actor()=pawn;}
+        else {game.LoginPlayer();pawn=game.viewport->Actor();}
+        pawn->Health()=10000;pawn->bShowMenu()=false;
+        std::unique_ptr<RuneNetworkAuthority> authority;
+        if(network){authority=std::make_unique<RuneNetworkAuthority>(game);check(authority->bind(1,pawn,1),"crouch fixture bind");}
+        uint64_t tick=0;bool held=false;
+        auto step=[&](int frames){for(int n=0;n<frames;++n){
+            if(network){
+                authority->beginTick(++tick,1000+tick*17);Input input;input.life=1;input.sequence=tick;input.createdMs=1000+tick*17;input.held=held?4:0;
+                check(authority->input(1,input),"crouch complete input admitted");authority->commitContacts();
+            }else {
+                ++tick;
+                // Headless fixture has no OS event pump. Publish the real C
+                // alias's held button/axis exactly as UpdateInput does, then run
+                // the unmodified standalone PlayerInput/PlayerTick scripts.
+                for(const auto& button:game.activeInputButtons)pawn->SetBool(button.first,true);
+                for(const auto& axis:game.activeInputAxes)pawn->SetFloat(axis.first,axis.second.Value);
+            }
+            game.LevelInfo->TimeSeconds()+=1.f/60;game.TotalTime+=1.f/60;
+            game.Level->Tick(1.f/60,false);
+        }};
+        auto key=[&](bool down){held=down;if(!network){if(down)game.OnWindowKeyDown(IK_C);else game.OnWindowKeyUp(IK_C);}};
+        if(!swimming) {
+            pawn->GotoState("PlayerWalking","Begin");pawn->SetPhysics(PHYS_Walking);step(60);
+            float standing=pawn->CollisionHeight();
+            key(true);step(20);
+            std::cout<<"CROUCH_HELD network="<<network<<" crouched="<<bool(pawn->bIsCrouching())<<" height="<<pawn->CollisionHeight()<<" standing="<<standing<<std::endl;
+            check(pawn->bDuck() && pawn->bIsCrouching() && pawn->CollisionHeight()<standing,"held crouch changes real stance/collision");
+            key(false);step(20);
+            check(!pawn->bDuck() && !pawn->bIsCrouching() && std::abs(pawn->CollisionHeight()-standing)<.01f,"release stands with clear headroom");
+        }else {
+            bool water=pawn->Region().Zone && pawn->Region().Zone->bWaterZone();
+            if(!water)for(const auto& vertex:game.Level->Model->Points) {
+                if(pawn->SetLocation(vertex+vec3(0,0,80)) && pawn->Region().Zone && pawn->Region().Zone->bWaterZone() && pawn->HeadRegion().Zone && pawn->HeadRegion().Zone->bWaterZone()) {water=true;break;}
+            }
+            check(water,"real water volume available");
+            pawn->GotoState("PlayerSwimming","Begin");pawn->SetPhysics(PHYS_Swimming);
+            pawn->SetBool("bSurfaceSwimming",false);pawn->Velocity()=pawn->Acceleration()=vec3(0);
+            float start=pawn->Location().z;key(true);step(20);
+            std::cout<<"DIVE_HELD network="<<network<<" aUp="<<pawn->aUp()<<" accel_z="<<pawn->Acceleration().z<<" displacement_z="<<pawn->Location().z-start<<std::endl;
+            check(pawn->bDuck() && pawn->aUp()<0 && pawn->Acceleration().z<0 && pawn->Location().z<start,"held dive descends in real water");
+            if(!network)standaloneDiveAxis=pawn->aUp();
+            else check(std::abs(pawn->aUp()-standaloneDiveAxis)<.01f,"network dive matches original standalone axis strength");
+            key(false);step(2);check(!pawn->bDuck() && std::abs(pawn->aUp())<.001f,"dive release clears downward input");
+            if(network){held=true;step(1);authority->unbind(1);check(!pawn->bDuck() && pawn->aUp()==0,"disconnect clears dive");}
+        }
+        std::cout<<"CROUCH_DIVE_PASS network="<<network<<" swimming="<<swimming<<std::endl;
+    }
+}
+
 void RunRuneNetworkProbe(Engine& game)
 {
+    if(commandline->HasArg("","--rune-crouch-probe")){RunCrouchDiveProbe(game);return;}
     game.NetworkAuthority=true;
     auto url=game.GetDefaultURL("DM-Hildir.run"); url.Options.push_back("game=RuneI.RuneMultiPlayer");
     game.LoadMap(url);
@@ -201,6 +262,8 @@ void RunRuneNetworkProbe(Engine& game)
         CombatMove::Bash,CombatContact::Hit,77,true};
     check(replica.applyCombat(future)==RuneNetworkReplica::CombatApply::Applied &&
         targetProxy->Health()==77 && second->Health()==targetHealth,"result applies without server damage replay");
+    check(targetProxy->RuneBashImpactStrength==1,"confirmed bash carries head reaction");
+    auto reactionStamp=targetProxy->RuneBashImpactAt;
     auto older=*player1.world.installed(); older.id=replica.installedId()+1;older.tick=future.tick-1;
     check(replica.install(older) && targetProxy->Health()==77,"older snapshot cannot undo committed health");
     auto current=older;current.id++;current.tick=future.tick;
@@ -208,6 +271,7 @@ void RunRuneNetworkProbe(Engine& game)
     check(replica.install(current) && targetProxy->Health()==66,"authoritative snapshot replaces combat overlay");
     check(replica.applyCombat(future)==RuneNetworkReplica::CombatApply::Superseded &&
         targetProxy->Health()==66,"duplicate result does not replay damage");
+    check(targetProxy->RuneBashImpactAt==reactionStamp,"duplicate outcome does not restart head recoil");
     auto futureLife=future;futureLife.id=3;futureLife.tick=current.tick+2;futureLife.targetLife=2;
     check(replica.applyCombat(futureLife)==RuneNetworkReplica::CombatApply::Deferred &&
         targetProxy->Health()==66,"future life cannot affect current pawn");

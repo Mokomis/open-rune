@@ -1,5 +1,7 @@
 
 #include "Precomp.h"
+#include "RunePhysics.h"
+#include "RuneNavigation.h"
 #include "ULevel.h"
 #include "Packages/Engine/Actors/Info/ULevelInfo.h"
 #include "Packages/Engine/Actors/Pawn/UPlayerPawn.h"
@@ -132,6 +134,9 @@ void ULevel::Tick(float elapsed, bool gamePaused)
 		}
 	}
 	Actors.swap(newActorList);
+
+    RuneNavigation::Tick(this,elapsed,gamePaused);
+    RunePhysics::Tick(this,elapsed,gamePaused);
 
 	ticked = !ticked;
 }

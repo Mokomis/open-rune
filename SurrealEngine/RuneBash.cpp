@@ -1,4 +1,6 @@
+#include "RuneBattleLaws.h"
 #include "Precomp.h"
+#include "RunePhysics.h"
 #include "RuneBash.h"
 #include "RuneDualWield.h"
 #include "RuneFeedback.h"
@@ -64,7 +66,7 @@ void Commit(UPawn* p,int phase,const NameString& animation) {
 }
 void Impact(UPawn* attacker) {
     attacker->RuneBashPending=false;
-    auto* target=Enabled.load() && Shield(attacker)?RuneKick::Target(attacker):nullptr;
+    auto* target=RuneBattleLaws::Enabled(RuneBattleLaws::Bash,Enabled.load()) && Shield(attacker)?RuneKick::Target(attacker):nullptr;
     if(!target || !CombatState(target)) {
         LogMessage("RUNE_BASH_MISS");
 #ifdef OPENRUNE_ENABLE_NETWORK
@@ -82,6 +84,7 @@ void Impact(UPawn* attacker) {
 }
 void CommitImpact(UPawn* attacker,UPawn* target,bool blocked)
 {
+    if(!RuneBattleLaws::Enabled(RuneBattleLaws::Bash,Enabled.load()))return;
 #ifdef OPENRUNE_ENABLE_NETWORK
     if(engine->NetworkCombatAuthority)engine->NetworkCombatAuthority->prepareCombat(attacker,target);
 #endif
@@ -94,6 +97,7 @@ void CommitImpact(UPawn* attacker,UPawn* target,bool blocked)
         target->RuneBashStuns++;
         LogMessage("RUNE_BASH_STUN actor="+target->Class->Name.ToString());
     }
+    if(!blocked)PresentImpact(target,stagger);
     if(!blocked)CallEvent(target,"JointDamaged",{ExpressionValue::IntValue(2),ExpressionValue::ObjectValue(attacker),ExpressionValue::VectorValue(target->Location()),ExpressionValue::VectorValue(vec3(0)),ExpressionValue::NameValue("blunt"),ExpressionValue::IntValue(0)});
     if(Alive(target)) {
         vec3 direction=target->Location()-attacker->Location();direction.z=0;
@@ -102,18 +106,51 @@ void CommitImpact(UPawn* attacker,UPawn* target,bool blocked)
         target->RuneKickRecoil=(length(direction)>.01f?normalize(direction):vec3(1,0,0))*((blocked||resistant?6.0f:20.0f)*weight);
         target->RuneKickRecoilTime=.16f;
     }
+    if(target->Health()<before){auto d=target->Location()-attacker->Location();d.z=0;RunePhysics::Impact(attacker,target,(length(d)>.01f?normalize(d):vec3(1,0,0))*240.f+vec3(0,0,85),blocked);}
     auto* soundShield=blocked?Shield(target):Shield(attacker);
     BashSound(attacker,soundShield,blocked);
     RuneFeedback::Impact(attacker,target,blocked,true);
     attacker->RuneBashHits++;if(blocked)attacker->RuneBashBlocks++;
     LogMessage("RUNE_BASH_HIT attacker="+attacker->Class->Name.ToString()+" target="+target->Class->Name.ToString()+" blocked="+std::to_string(blocked)+" stagger="+std::to_string(stagger)+" resistant="+std::to_string(resistant)+" health_before="+std::to_string(before)+" health_after="+std::to_string(target->Health()));
 }
+void PresentImpact(UPawn* target,bool staggered) {
+    if(!Alive(target) || !engine || !engine->LevelInfo)return;
+    target->RuneBashImpactAt=engine->LevelInfo->TimeSeconds();
+    target->RuneBashImpactStrength=staggered?1.f:.45f;
+}
+void ApplyPose(const USkelModel& model,UActor* actor,Array<RuneJointPose>& pose) {
+    auto* p=UObject::TryCast<UPawn>(actor);
+    // Preview/model probes can query joints before a level exists.
+    if(!Alive(p) || !engine || !engine->LevelInfo || p->RuneBashImpactStrength<=0 || RunePhysics::Controls(p) || pose.size()!=model.Joints.size())return;
+    float age=engine->LevelInfo->TimeSeconds()-p->RuneBashImpactAt;
+    if(age<0 || age>=.34f)return;
+    // Fast recoil, smooth return. Only rotations change: bone lengths/scales remain intact.
+    float t=age<.045f?age/.045f:1-(age-.045f)/.295f;
+    t=std::clamp(t,0.f,1.f);t=t*t*(3-2*t)*p->RuneBashImpactStrength;
+    auto basis=Coords::Rotation(model.RotationOffset).ToMatrix();
+    auto inv=mat3::inverse(mat3(basis));auto inverse=mat4::identity();
+    for(int c=0;c<3;++c)for(int r=0;r<3;++r)inverse[c*4+r]=inv[c*3+r];
+    for(size_t j=1;j<model.Joints.size();++j) {
+        float angle=model.Joints[j].Name=="head"?-.52f:0.f;
+        if(!angle)continue;
+        auto bones=model.JointMatrices(pose);
+        auto parentInverse=mat3::inverse(mat3(bones[model.Joints[j].Parent]));
+        auto turn=mat3(inverse*mat4::rotate(angle*t,0,1,0)*basis);
+        auto local=parentInverse*turn*mat3(bones[model.Joints[j].Parent])*mat3(RunePoseRotation(pose[j].Rotation));
+        auto rotation=mat4::identity();
+        for(int c=0;c<3;++c){vec3 axis(local[c*3],local[c*3+1],local[c*3+2]);
+            float n=length(axis);if(n>.0001f)axis/=n;
+            for(int r=0;r<3;++r)rotation[c*4+r]=axis[r];}
+        pose[j].Rotation=RunePoseEuler(rotation);
+    }
+}
 bool Compatible(UPawn* p) {
+    if(!RuneBattleLaws::Enabled(RuneBattleLaws::Bash,Enabled.load()))return false;
     return engine->LaunchInfo.IsRune() && Alive(p) && (p->IsA("RunePlayer") || p->IsA("ScriptPawn")) && Sequence(p,Strike);
 }
 bool Start(UPawn* p) {
     if(RuneCorpse::Busy(p))return false;
-    if(RuneBloodlust::Busy(p) || !Enabled.load() || !Compatible(p) || !Shield(p) || p->RuneBashPhase || p->RuneKickActive || p->RuneBashCooldown>0 || p->Physics()!=PHYS_Walking || !CombatState(p))return false;
+    if(RuneBloodlust::Busy(p) || !RuneBattleLaws::Enabled(RuneBattleLaws::Bash,Enabled.load()) || !Compatible(p) || !Shield(p) || p->RuneBashPhase || p->RuneKickActive || p->RuneBashCooldown>0 || p->Physics()!=PHYS_Walking || !CombatState(p))return false;
     if(p->GetBool("bSwingingHigh") || p->GetBool("bSwingingLow"))return false;
     auto* proxy=UObject::TryCast<UActor>(p->GetUObject("AnimProxy"));
     if(proxy && proxy->GetStateName()!="Idle" && proxy->GetStateName()!="Defending")return false;
@@ -128,7 +165,7 @@ void BlockPressed(UPawn* p) {
     if(!p || !engine->LaunchInfo.IsRune())return;
     float now=engine->LevelInfo->TimeSeconds();
     bool twice=p->RuneBashTapTime>=0 && now-p->RuneBashTapTime<=.3f;
-    p->RuneBashTapTime=Enabled.load() && !twice?now:-1;
+    p->RuneBashTapTime=RuneBattleLaws::Enabled(RuneBattleLaws::Bash,Enabled.load()) && !twice?now:-1;
     if(twice)Start(p);
 }
 void Tick(UPawn* p,float elapsed) {
@@ -143,12 +180,12 @@ void Tick(UPawn* p,float elapsed) {
             p->RuneBashPhase=0;p->RuneBashPending=false;
         }
     }
-    if(!Enabled.load()) { p->RuneBashPending=false;p->RuneBashTapTime=-1; }
+    if(!RuneBattleLaws::Enabled(RuneBattleLaws::Bash,Enabled.load())) { p->RuneBashPending=false;p->RuneBashTapTime=-1; }
 #ifdef OPENRUNE_ENABLE_NETWORK
     if(pending && !p->RuneBashPending && engine->NetworkCombatAuthority)
         engine->NetworkCombatAuthority->cancelCombat(p,openrune::net::CombatMove::Bash);
 #endif
-    if(!Enabled.load())return;
+    if(!RuneBattleLaws::Enabled(RuneBattleLaws::Bash,Enabled.load()))return;
     if(!Alive(p) || UObject::TryCast<UPlayerPawn>(p))return;
     if(RuneTactics::SuppressRandomSpecial(p))return;
     p->RuneBashThink-=elapsed;
@@ -156,7 +193,7 @@ void Tick(UPawn* p,float elapsed) {
 }
 bool Threat(UObject* observer) {
     auto* p=UObject::TryCast<UPawn>(observer);auto* enemy=p?p->Enemy():nullptr;
-    return engine->LaunchInfo.IsRune() && Enabled.load() && Alive(p) && Alive(enemy) && enemy->RuneBashPhase==1 && enemy->RuneBashPending && RuneKick::Target(enemy)==p;
+    return engine->LaunchInfo.IsRune() && RuneBattleLaws::Enabled(RuneBattleLaws::Bash,Enabled.load()) && Alive(p) && Alive(enemy) && enemy->RuneBashPhase==1 && enemy->RuneBashPending && RuneKick::Target(enemy)==p;
 }
 bool PrepareAnimation(UActor* actor,const NameString& sequence,float& rate,float& tween) {
     if(!engine->LaunchInfo.IsRune())return false;

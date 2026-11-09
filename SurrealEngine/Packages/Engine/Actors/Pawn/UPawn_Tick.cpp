@@ -1,5 +1,6 @@
 
 #include "Precomp.h"
+#include "RunePhysics.h"
 #include "UPawn.h"
 #include "VM/ScriptCall.h"
 #include "VM/Frame.h"
@@ -12,7 +13,9 @@
 
 void UPawn::Tick(float elapsed)
 {
+    if(RunePhysics::Controls(this)){UActor::Tick(elapsed);return;}
     RuneCorpse::Tick(this,elapsed);
+    RuneSlam::Tick(this,elapsed);
 	RuneBloodlust::Tick(this,elapsed);
 	RuneDualWield::Tick(this,elapsed);
 	RuneTactics::Tick(this,elapsed);
@@ -247,8 +250,24 @@ bool UPawn::TickRotateTo(const vec3& target)
 
 bool UPawn::TickMoveTo(const vec3& target)
 {
-	if (MoveTimer() < 0.0f)
-		return true;
+    const bool preciseRuneStep=engine->LaunchInfo.IsRune() && !bIsPlayer() && Physics()==PHYS_Walking &&
+        !(StateFrame && StateFrame->GetLatentState()==LatentRunState::MoveToward && UObject::TryCast<UPawn>(MoveTarget()));
+    if (MoveTimer() < 0.0f) {
+        if(preciseRuneStep)Acceleration()=vec3(0);
+        return true;
+    }
+    if(preciseRuneStep) {
+        // Velocity squared * .05 was a 22-45-unit arrival radius at ordinary
+        // walking speed. That finishes a corner adjustment before the body
+        // clears it. Point/nav goals need a small tolerance; pawn pursuit keeps
+        // its existing melee/contact completion rule below.
+        auto delta=target-Location();auto horizontal=vec3(delta.x,delta.y,0);
+        if(dot(horizontal,horizontal)<16 && std::abs(delta.z)<=CollisionHeight()) {
+            Acceleration()=vec3(0);return true;
+        }
+        if(length(horizontal)>.001f)Acceleration()=normalize(horizontal)*AccelRate();
+        return false;
+    }
 
 	if (Physics() == PHYS_Walking)
 	{

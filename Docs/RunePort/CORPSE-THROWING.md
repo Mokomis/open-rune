@@ -25,9 +25,11 @@ Carried bodies use a relaxed reference pose, laid across the carrier with arms,
 head and lower legs hanging down. Only joint rotations change: reference joint
 positions, scales and bone lengths are preserved. Both hands use the shared
 two-bone solver, and the torso underside rests at the palms. The throw uses the
-carrier's authored throw animation where available. Flight retains the relaxed
-body pose; landing restores the original authored ground pose. This remains
-rigid body flight, not a full articulated ragdoll.
+carrier's authored throw animation where available. Carried and airborne limbs now use bounded pendulum motion around that relaxed
+pose: arms, lower legs and head react to translation and turning, with small
+thigh motion and a fixed torso support. Landing restores the authored ground
+pose. The authoritative body still uses rigid flight; individual limbs do not
+collide with scenery or apply damage. See the November 3 motion follow-up below.
 
 ## Physics, combat and bots
 
@@ -157,3 +159,40 @@ alongside the existing pickup/throw, shield, bot, movement and cleanup coverage.
 These checks establish proportion/replication invariants, not visual approval of
 every roster character. The Goblin pose was visually reviewed at native resolution
 with 4x AA on the Mac. Final evidence is in `outputs/corpse-shape-20261103`.
+
+## November 3 follow-up: movement-reactive limbs
+
+Actor-owned cosmetic pendulums update once after simulation/presentation and
+before drawing. Multiple mesh, shadow and reflection queries consume the same
+cached pose and cannot integrate it again. Steps are at most 1/120 second;
+higher refresh rates take smaller steps. Pauses freeze motion; large time gaps
+and relocations reset it safely. Joint cones, damping and bounded relative speed
+prevent unbounded flailing. Reference translations/scales and torso support stay
+unchanged. Posed visibility bounds follow the animated vertices.
+
+Multiplayer replicas simulate their own cosmetic motion from presented body and
+carrier transforms. Limb angles are not sent over the network; rigid trajectory,
+attachments, hit tests, saves, damage and protocol/rules 22 are unchanged. Different
+clients can show slightly different secondary motion without affecting combat.
+Grounded bodies discard the carry-motion state and resume their authored pose.
+
+Mac checks cover all 36 roster skeletons/variants, moving/turning support,
+30/60/120/144/240 Hz, finite transforms, unchanged bone lengths/scales, fixed torso,
+pause and repeated draw queries, relocation reset, posed culling, remote cosmetic
+initialization and unchanged body physics. Existing single/network/team fixtures
+also pass. Native 2816×1762/4× MSAA walking/turning/throw rendering completes;
+frames were reviewed. Focused CPU sampling averages roughly 0.2–0.3 ms per active
+body on this Mac during the build/test run, not an Android FPS measurement.
+
+Evidence: `outputs/corpse-motion-20261103`. This follow-up is validated on Mac and the signed Android update is installed.
+DM-Hildir is handed to the user as an isolated practice arena with two Dark
+Vikings and two Goblin Warriors, plus weapons. Normal campaign saves and INI
+files match pre-install hashes; existing graphics choices were retained.
+Android human carry/throw feedback is pending. Windows retains the prior pose.
+
+Practice setup correction: an autosave captured the temporary `PlayersOnly`
+setup freeze, so retry restored frozen AI and the non-player animation proxy
+required for Use. `DebugContinue` clears that flag idempotently. Live enemies
+resume and ordinary Ctrl/Use acquires a fresh hammer; the isolated practice
+checkpoint was rewritten after recovery. Normal saves/INI hashes match.
+Do not freeze world ticks while preparing a session that can autosave.

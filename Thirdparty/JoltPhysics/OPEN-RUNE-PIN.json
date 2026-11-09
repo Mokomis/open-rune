@@ -1,0 +1,13 @@
+{
+  "upstream": "https://github.com/jrouwe/JoltPhysics",
+  "tag": "v5.6.0",
+  "commit": "e77f175595e64cb44218cc9d9d56fc365ad0e36a",
+  "archive_sha256": "6e069ee0172478cc78182047aac87e5310ba14a67a53348ae14cc37801fd3f8e",
+  "vendored": [
+    "Jolt",
+    "Build/CMakeLists.txt",
+    "LICENSE",
+    "README.md"
+  ],
+  "license": "MIT"
+}

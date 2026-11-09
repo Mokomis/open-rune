@@ -103,6 +103,66 @@ void RunRuneDualWieldProbe(Engine& game) {
   auto a=grip(.30f),b=grip(.31f),mid=grip(.305f);
   check(length(b-a)>.001f && length(mid-a)>.0001f && length(mid-b)>.0001f,"hand pose snapped to keyframe");
  }
+ // Independent body/proxy clocks must not splice two phases of a standing spin.
+ // Hold the attack clock fixed while moving the unrelated body clock, including tweening.
+ for(bool left:{false,true})for(auto field:{"A_AttackStandA","A_AttackStandB"}) {
+  auto seq=player->Weapon()->GetName(field);if(seq.IsNone())continue;
+  player->Dual.left=left;player->Dual.lastWholeBody=-1;
+  proxyActor->AnimSequence()=player->AnimSequence()=seq;proxyActor->AnimFrame()=.37f;
+  player->AnimFrame()=.37f;auto coherent=model->ActorJointMatrices(player);
+  for(float phase:{-.01f,.05f,.73f}) {
+   player->AnimFrame()=phase;auto actual=model->ActorJointMatrices(player);
+   for(size_t j=0;j<actual.size();++j)for(int k=0;k<16;++k)
+    check(std::abs(actual[j][k]-coherent[j][k])<.005f,"standing spin mixes body and proxy animation clocks");
+  }
+ }
+ // Starting a right strike must not inherit the previous left spin's hip reflection.
+ player->Dual.left=false;player->Dual.lastWholeBody=-1;
+ proxyActor->AnimSequence()=player->AnimSequence()=player->Weapon()->GetName("A_AttackStandA");
+ proxyActor->AnimFrame()=player->AnimFrame()=.25f;
+ auto cleanRight=model->ActorJointMatrices(player);
+ player->Dual.lastWholeBody=game.TotalTime;player->Dual.nextLeft=false;
+ RuneDualWield::BeginSwing(player);
+ auto afterLeft=model->ActorJointMatrices(player);
+ for(size_t j=0;j<cleanRight.size();++j)for(int k=0;k<16;++k)
+  check(std::abs(cleanRight[j][k]-afterLeft[j][k])<.005f,"right strike inherits mirrored hips from preceding left strike");
+ player->Dual.lastWholeBody=-1;
+ std::cout<<"DUAL_PHASE_COHERENCE_OK both hands and standing spins use one clock\n";
+ // Validate the rendered calf mesh, not only bone lengths: opposite legs
+ // have different skinning bases, so a raw mirrored pose can stretch skin edges.
+ auto& geometry=GetRuneGeometry(player)->Meshes[player->GetByte("SkelMesh")];
+ auto lowerLeg=[&](int joint) {
+  while(joint>=0) {auto n=model->Joints[joint].Name;if(n=="lhip" || n=="rhip")return true;joint=model->Joints[joint].Parent;}
+  return false;
+ };
+ auto skin=[&](const Array<mat4>& bones,const RuneVertex& v) {
+  auto point=(bones[v.Joint[0]]*vec4(v.Point[0],1)).xyz()*v.Weight;
+  if(v.Weight!=1)point+=(bones[v.Joint[1]]*vec4(v.Point[1],1)).xyz()*(1-v.Weight);
+  return point;
+ };
+ float maxCalfStretch=0;int calfEdges=0;
+ for(auto field:{"A_AttackStandA","A_AttackStandB"})for(int frame=0;frame<=20;++frame) {
+  auto seq=player->Weapon()->GetName(field);if(seq.IsNone())continue;
+  player->AnimSequence()=proxyActor->AnimSequence()=seq;
+  player->AnimFrame()=proxyActor->AnimFrame()=frame*.0475f;player->Dual.lastWholeBody=-1;
+  player->Dual.left=false;auto normal=model->ActorJointMatrices(player);
+  player->Dual.left=true;auto mirror=model->ActorJointMatrices(player);
+  for(const auto& t:geometry.Triangles) {
+   bool calf=true;
+   for(int k=0;k<3;++k) {const auto& v=geometry.Vertices[t.Index[k]];calf=calf && lowerLeg(v.Joint[0]) && (v.Weight==1 || lowerLeg(v.Joint[1]));}
+   if(!calf)continue;
+   for(int k=0;k<3;++k) {
+    const auto& a=geometry.Vertices[t.Index[k]];const auto& b=geometry.Vertices[t.Index[(k+1)%3]];
+    float original=length(skin(normal,a)-skin(normal,b));
+    float mirrored=length(skin(mirror,a)-skin(mirror,b));
+    if(original<=.1f)continue;
+    maxCalfStretch=std::max(maxCalfStretch,mirrored/original);++calfEdges;
+   }
+  }
+ }
+ check(calfEdges>100,"calf skin regression did not exercise the mesh");
+ std::cout<<"DUAL_CALF_SKIN max_stretch="<<maxCalfStretch<<" edges="<<calfEdges<<'\n';
+ check(maxCalfStretch<5.f,"mirrored strike stretches calf skin despite valid bone lengths");
  // A whole-body left strike must reflect the hips and torso together, not only the torso.
  for(auto field:{"A_AttackA","A_AttackB","A_AttackC","A_AttackD","A_AttackStandA"})for(float phase:{.1f,.3f,.5f,.7f,.9f}) {
   auto seq=player->Weapon()->GetName(field);if(seq.IsNone())continue;
@@ -184,7 +244,11 @@ void RunRuneDualWieldProbe(Engine& game) {
   w->LifeSpan()=0;
   player->GotoState("PlayerWalking","Begin");player->GetUObject("AnimProxy")->GotoState("Idle","Begin");
   player->Velocity()=player->Acceleration()=vec3(0);player->bFire()=player->bAltFire()=0;
-  check(player->SetLocation(w->Location()+vec3(25,0,player->CollisionHeight()-w->CollisionHeight()+1)),"loot pickup position");
+  // Approach from the outside of the two dropped items. A fixed +X offset
+  // could put the other item closer, and Use correctly selected that instead.
+  auto* other=w==mainLoot?loot:mainLoot;auto away=w->Location()-other->Location();away.z=0;
+  away=length(away)>.01f?normalize(away):vec3(1,0,0);
+  check(player->SetLocation(w->Location()+away*25.f+vec3(0,0,player->CollisionHeight()-w->CollisionHeight()+1)),"loot pickup position");
   player->SetPhysics(PHYS_Walking);tick(30);
   check(CallEvent(w,"CanBeUsed",{ExpressionValue::ObjectValue(player)}).ToBool(),"corpse loot not usable");
   CallEvent(player,"Use");tick(420);

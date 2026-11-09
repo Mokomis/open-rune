@@ -27,6 +27,8 @@ bool Equipped(UPawn* p);
 bool Equip(UPawn* p,UWeapon* weapon);
 void Unequip(UPawn* p,bool drop=false);
 void Tick(UPawn* p,float elapsed);
+// One authored clock for full-body attacks; nullptr retains locomotion/torso layering.
+UActor* FullBodyPoseSource(UActor* actor);
 void UpdatePoseState(UPawn* p);
 void BeginSwing(UPawn* p);
 void Guard(UPawn* p,bool raised);
