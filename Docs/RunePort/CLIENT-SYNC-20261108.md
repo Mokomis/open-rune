@@ -1,3 +1,5 @@
+Latest water follow-up: **dev.11/build11**, protocol25/rules34 unchanged. [Enhanced water now runs on Mac and Android](WATER-REBUILD.md) as well as Windows, with stronger underwater refraction and geometry-based sky exposure. The Windows-only limitation in the original dev.7 checkpoint below is superseded.
+
 # Client consolidation — November 8, 2026
 
 Release identity: **0.1.0-dev.7 / build 7**. Network protocol/ALPN **25**, gameplay rules **34**. Matching client/host builds remain required. Android, Windows and macOS are rebuilt from the Windows primary source; no Unity runtime or bridge is included.

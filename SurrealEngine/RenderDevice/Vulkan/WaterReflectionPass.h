@@ -1,11 +1,7 @@
 // Enhanced water is a single surface pass; no wave-simulation thread or mirror view.
 bool VulkanRenderDevice::UsesModernWater() const
 {
-#ifdef _WIN32
     constexpr int defaultModel=1;
-#else
-    constexpr int defaultModel=0; // Other platforms require separate qualification.
-#endif
     static const bool enabled=commandline->GetArgInt("","--water-model",defaultModel)!=0;
     return (WorldFeatures&2048) && !(WorldFeatures&8192) && enabled;
 }

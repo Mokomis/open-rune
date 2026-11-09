@@ -1,3 +1,5 @@
+November 8 water follow-up: dev.11 enables the new Enhanced water on Android and macOS, adds stronger render-scale-independent underwater refraction, and corrects sky reflection detection. See [water behavior and qualification](../Docs/RunePort/WATER-REBUILD.md). Original/Legacy choices and normal saves/settings are preserved.
+
 November 8: dev.7/build7 is installed with the original certificate. See [matching client consolidation](../Docs/RunePort/CLIENT-SYNC-20261108.md) and [circular touch layout](../Docs/RunePort/TOUCH-CONTROLS.md). Normal saves and non-layout preferences are preserved. Only the Surreal production package remains for testing; Unity candidates are archived on Windows. Older deployment statements below describe earlier milestones.
 
 November 7 Android pass-profiling follow-up COMPLETE; user requested stopping after

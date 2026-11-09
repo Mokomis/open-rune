@@ -92,6 +92,7 @@ public:
     ShadowTransitions<RuneShadows::Capacity> ShadowFades;
     std::unordered_map<UTexture*,int> WaterMaterialKinds;
     vec3 WaterSkyColor=vec3(0);
+    std::unordered_map<const void*,bool> WaterSkyExposure;
     bool WaterSkyReady=false;
     UTexture* WaterSkyTexture=nullptr;
     std::map<std::array<int,3>,float> WaterDepthSamples;

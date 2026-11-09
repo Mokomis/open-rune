@@ -187,7 +187,7 @@ void RenderSubsystem::OnMapLoaded()
     }
     for (auto& light : ShadowLights) light = nullptr;
     ShadowFades.reset();
-    WaterMaterialKinds.clear(); WaterSkyReady=false; WaterSkyTexture=nullptr; WaterSkyColor=vec3(0); WaterDepthSamples.clear(); WaterFaceDepth.clear(); Device->InvalidateWaterReflection();
+    WaterMaterialKinds.clear(); WaterSkyExposure.clear(); WaterSkyReady=false; WaterSkyTexture=nullptr; WaterSkyColor=vec3(0); WaterDepthSamples.clear(); WaterFaceDepth.clear(); Device->InvalidateWaterReflection();
 	Device->Flush(true);
 	engine->Level->Light.OnMapLoaded();
 }

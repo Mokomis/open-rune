@@ -472,17 +472,19 @@ std::string FileResource::readAllText(const std::string& filename)
                 if(waterParameters.w>1.5) {
                     float t=waterParameters.x;
                     vec2 p=meshPosition.xy;
-                    // Four directional bands. Derivative-based fade removes
-                    // subpixel waves/glints in distant/grazing water.
-                    vec4 phase=vec4(dot(p,vec2(.035,.013))-t*.65,
-                                    dot(p,vec2(-.079,.156))+t*1.23,
-                                    dot(p,vec2(.322,.179))-t*1.87,
-                                    dot(p,vec2(-.571,.346))+t*2.43);
-                    // Cross-modulate the short ripples to avoid long, perfectly
-                    // repeating sine ridges while keeping the cost bounded.
-                    phase.zw+=.55*sin(vec2(phase.y,phase.x)*1.37);
+                    // Two broad, non-aligned currents bend every ripple band.
+                    // Local energy varies too, avoiding equally spaced comb-like ridges.
+                    // Reuses the two cross-modulation oscillators; no extra samples/pass.
+                    vec2 flow=sin(vec2(dot(p,vec2(.0091,.0137))+t*.17,
+                                       dot(p,vec2(-.0113,.0079))-t*.13));
+                    vec2 q=p+vec2(flow.x+.35*flow.y,flow.y-.30*flow.x)*24.0;
+                    vec4 phase=vec4(dot(q,vec2(.035,.013))-t*.65,
+                                    dot(q,vec2(-.079,.156))+t*1.23,
+                                    dot(q,vec2(.322,.179))-t*1.87,
+                                    dot(q,vec2(-.571,.346))+t*2.43);
                     vec4 bandFade=1.0-smoothstep(vec4(.45),vec4(2.2),fwidth(phase));
-                    vec4 slopes=cos(phase)*bandFade*vec4(.10,.16,.11,.065);
+                    vec4 energy=.65+.35*vec4(flow.x,flow.y,-flow.x,-flow.y);
+                    vec4 slopes=cos(phase)*bandFade*energy*vec4(.10,.14,.11,.08);
                     vec2 gradient=slopes.x*vec2(.938,.349)+slopes.y*vec2(-.452,.892)+slopes.z*vec2(.874,.486)+slopes.w*vec2(-.855,.518);
                     vec3 N=normalize(vec3(-gradient,1));
                     vec3 V=normalize(lightingCamera.xyz-meshPosition);
@@ -903,14 +905,14 @@ std::string FileResource::readAllText(const std::string& filename)
 				vec3 coord = vec3(texCoord, 1.0);
 				vec2 sampleCoord = vec2(dot(TextureRow0.xyz, coord), dot(TextureRow1.xyz, coord));
                 if(Underwater.y>0.0) {
-                    // A two-pixel world-centre shimmer. Fade completely at HUD
+                    // Visible refraction scaled to viewport height, independent of render scaling. Fade at HUD
                     // edges, and disable while menus are open. No extra pass.
                     vec2 edge=smoothstep(vec2(.08),vec2(.22),texCoord)*smoothstep(vec2(.08),vec2(.22),vec2(1)-texCoord);
                     float mask=edge.x*edge.y*Underwater.y;
                     float t=Underwater.x;
                     vec2 ripple=vec2(sin(texCoord.y*23.0+t*1.3)+.35*sin(texCoord.y*47.0-t*.7),
                                      sin(texCoord.x*19.0-t*1.1)+.3*sin(texCoord.x*41.0+t*.9));
-                    sampleCoord=clamp(sampleCoord+ripple*SourceSize.xy*1.4*mask,SourceSize.xy*.5,vec2(1)-SourceSize.xy*.5);
+                    sampleCoord=clamp(sampleCoord+ripple*SourceSize.xy*(SourceSize.w/1080.0)*6.0*mask,SourceSize.xy*.5,vec2(1)-SourceSize.xy*.5);
                 }
 				vec3 color = Upscale != 0 ? upscaleSGSR(sampleCoord) : adaptiveSharpen(sampleCoord);
 				#ifdef AMBIENT_OCCLUSION

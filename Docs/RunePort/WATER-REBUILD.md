@@ -1,3 +1,19 @@
+# Cross-platform follow-up — dev.11, November 8, 2026
+
+The surface wave phases now follow two broad non-aligned currents with varying local strength, breaking up the former evenly spaced parallel ridges from both sides. This reuses the existing two modulation oscillators without another texture sample or render pass.
+
+Enhanced water now uses the same replacement surface shader on Windows, macOS and Android. Original and Legacy reflections choices are preserved. The previous Windows-only limitation below is historical.
+
+Mac (2816×1762) and OPD2515 (2520×1680), both at native scale and actual 4× MSAA, passed rendered-pixel checks for ripple animation, depth response, opaque/transparent water and zero extra reflection scene passes. The focused modern-water probe runs independently of the Mac’s pre-existing unsupported integer hit-buffer diagnostic. Coastal old/new ABBA profiles measured about 58→81 engine FPS on Mac and 89→111 on Android; those are bounded fixed-camera results, not sustained gameplay guarantees. Initial waterwheel comparisons were approximately neutral. Evidence: `WaterCrossPlatform-20261108`, outside Git.
+
+Underwater refraction is strengthened to six pixels at 1080-high output, scaled with viewport height so it remains visible with render scaling. It uses the existing presentation pass; menus disable it and edge HUD pixels are unchanged. GPU readback confirms animation between two times on Mac and Android. It is screen-space refraction with the game’s existing underwater environment, not new volumetric fog.
+
+Sky reflections now use a cached upward BSP trace from the representative water facet, cleared on map change. They no longer depend on whether the camera currently shows a sky portal. This corrected the waterwheel view: the map has sky openings, and that basin has a direct overhead sky hit. Snow there is legitimate; its 317-column geometry check found 73 exposed columns and zero covered-column leaks. The earlier viewport-based “indoors” label was not proof of a roof. A bounded `--snow-probe=MAP --snow-point=x,y,z` diagnostic records the direct sky hit and nearby column checks.
+
+The replacement and stronger refraction were visually reviewed in coastal and waterwheel views. Final builds include the sky-exposure correction; it was additionally rendered on Mac. No all-map, long soak, new multiplayer or extra physics work is claimed. Normal saves/preferences are preserved. No Unity runtime or extra water simulation thread is involved.
+
+---
+
 # Windows enhanced water rebuild — November 8, 2026
 
 ## Scope and controls

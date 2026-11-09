@@ -652,6 +652,13 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
         if(getIntent().getBooleanExtra("lightingCompare",false)) args.add("--capture-lighting-comparison");
         if(getIntent().getBooleanExtra("textureProbe",false)) args.add("--probe-texture-pack");
         if(getIntent().getBooleanExtra("textureCompare",false)) args.add("--capture-texture-comparison");
+        if(saveTest!=null && frames>0) {
+            if(getIntent().getBooleanExtra("capturePresent",false))args.add("--capture-present-frame");
+            if(getIntent().hasExtra("waterModel")){int value=getIntent().getIntExtra("waterModel",1);if(value<0||value>1)throw new IllegalArgumentException("Invalid isolated water model");args.add("--water-model="+value);}
+            if(getIntent().hasExtra("waterUnderwater"))args.add("--water-underwater="+(getIntent().getBooleanExtra("waterUnderwater",true)?1:0));
+            if(getIntent().getBooleanExtra("waterProbe",false))args.add("--probe-modern-water-only");
+            if(getIntent().getBooleanExtra("traceWater",false))args.add("--trace-rune-water");
+        }
         if(getIntent().getBooleanExtra("vulkanProbe",false)) args.add("--probe-vulkan");
         if(getIntent().getBooleanExtra("shadowBudgetProbe",false)) args.add("--probe-shadow-budget");
         if(getIntent().getBooleanExtra("traceShadows",false)) args.add("--trace-shadows");

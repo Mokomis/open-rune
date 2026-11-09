@@ -772,6 +772,11 @@ void Engine::Run()
             OutputDevice output;
             if(!window->GetRenderDevice()->Exec("RuneTexturePackProbe",output)) Exception::Throw("Texture probe requires Vulkan");
         }
+        if(probeFrame==120 && commandline->HasArg("","--probe-modern-water-only")) {
+            if(!commandline->HasArg("","--save-directory") || !remainingFrames)Exception::Throw("Modern water probe requires bounded isolated saves");
+            OutputDevice output;
+            if(!window->GetRenderDevice()->Exec("RuneModernWaterProbe",output))Exception::Throw("Modern water probe requires Vulkan");
+        }
         if(probeFrame==120 && commandline->HasArg("","--probe-material-lighting")) {
             if(!commandline->HasArg("","--save-directory"))Exception::Throw("Material probe requires isolated saves");
             OutputDevice output;

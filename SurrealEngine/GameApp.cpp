@@ -161,6 +161,23 @@ int GameApp::main(Array<std::string> args)
             if(GameFolderSelection::Games.size()!=1 || !GameFolderSelection::Games[0].IsRune())throw std::runtime_error("Pass one Rune installation");
             Engine game(GameFolderSelection::GetLaunchInfo(0));game.NetworkAuthority=true;
             auto map=commandline->GetArg("","--snow-probe","RagnarVillage");auto url=game.GetDefaultURL(map+".run");game.LoadMap(url);RuneSnow::Reset();
+            auto pointText=commandline->GetArg("","--snow-point","");
+            if(!pointText.empty()) {
+                std::replace(pointText.begin(),pointText.end(),',',' ');std::istringstream in(pointText);vec3 p;std::string tail;
+                if(!(in>>p.x>>p.y>>p.z)||(in>>tail)||!std::isfinite(p.x)||!std::isfinite(p.y)||!std::isfinite(p.z))throw std::runtime_error("Invalid snow point");
+                auto hit=RuneSnow::Cast(p,p+vec3(0,0,32768));
+                std::cout<<"SNOW_POINT x="<<p.x<<" y="<<p.y<<" z="<<p.z<<" directSky="<<RuneSnow::Sky(hit)<<" ceiling="<<(p.z+32768*hit.Fraction)<<std::endl;
+                int band=int(std::floor(p.z/64)),cx=int(std::floor(p.x/64)),cy=int(std::floor(p.y/64)),checked=0,exposed=0,bad=0;
+                for(auto offset:RuneSnow::Offsets()) {
+                    int x=cx+offset.x,y=cy+offset.y;auto c=RuneSnow::Sample(x,y,band,0);
+                    vec3 q(x*64.f+32,y*64.f+32,p.z);++checked;
+                    if(!c.open||q.z<c.bottom||q.z>c.top)continue;
+                    ++exposed;auto roof=RuneSnow::Cast(q,q+vec3(0,0,32768));
+                    if(!RuneSnow::Sky(roof)){++bad;if(bad<=8)std::cout<<"SNOW_COVERED_COLUMN x="<<q.x<<" y="<<q.y<<" z="<<q.z<<" floor="<<c.bottom<<" top="<<c.top<<" ceiling="<<(q.z+32768*roof.Fraction)<<std::endl;}
+                }
+                std::cout<<"SNOW_POINT_COLUMNS checked="<<checked<<" exposed="<<exposed<<" covered="<<bad<<std::endl;
+                return 0;
+            }
             unsigned open=0,closed=0,authored=0,protectedCount=0,leaks=0;
             for(auto* actor:game.Level->Actors)if(actor && actor->IsA("Snow"))++authored;
             for(auto* actor:game.Level->Actors)if(actor && actor->IsA("NavigationPoint")) {

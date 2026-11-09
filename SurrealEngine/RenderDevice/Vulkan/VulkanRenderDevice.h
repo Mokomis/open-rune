@@ -164,6 +164,7 @@ private:
     PipelineState ShadowPipeline;
     void ClearTextureCache();
 	void RunValidationProbe();
+    void RunModernWaterProbe();
     void RunMaterialLightingProbe();
 	void RunShadowBudgetProbe();
 	void PrepareResolveTarget(VulkanCommandBuffer* commands, bool continuation);

@@ -220,7 +220,24 @@ void RenderSubsystem::DrawScene()
         for(const auto& translucent:MainFrame.Translucents)considerWater(translucent.Node);
         for(const auto& node:MainFrame.OpaqueNodes)considerWater(node);
         if(found && Device->UsesModernWater()) {
-            bool outdoors=false;for(const auto& portal:MainFrame.Portals)if(portal.SkyZone){outdoors=true;break;}
+            // Sky exposure belongs to the water facet, not the camera direction.
+            // Cache static BSP tests per face so ordinary rendering adds no rays.
+            bool outdoors=false;
+            if(waterReceiver && waterReceiver->Node) {
+                auto* node=waterReceiver->Node;
+                auto found=WaterSkyExposure.find(node);
+                if(found!=WaterSkyExposure.end())outdoors=found->second;
+                else {
+                    auto* model=engine->Level->Model;vec3 point(0);
+                    for(int i=0;i<node->NumVertices;++i)point+=model->Points[model->Vertices[node->VertPool+i].Vertex];
+                    point/=float(node->NumVertices);point.z=waterHeight+4;
+                    TraceFlags flags;flags.world=true;
+                    auto hit=engine->Level->Collision.TraceFirstHit(point,point+vec3(0,0,32768),nullptr,vec3(0),flags);
+                    outdoors=hit.Actor==engine->LevelInfo && hit.Node && hit.Node->Surf>=0 && size_t(hit.Node->Surf)<model->Surfaces.size() && (model->Surfaces[hit.Node->Surf].PolyFlags&PF_FakeBackdrop);
+                    WaterSkyExposure.emplace(node,outdoors);
+                    if(commandline->HasArg("","--trace-rune-water"))LogMessage("RUNE_WATER_SKY_EXPOSURE x="+std::to_string(point.x)+" y="+std::to_string(point.y)+" z="+std::to_string(point.z)+" sky="+std::to_string(outdoors));
+                }
+            }
             auto probes=engine->Level->Light.SampleEnvironment(engine->CameraLocation);
             vec3 environment(0);for(const auto& lobe:probes.Lobes)environment+=lobe.xyz()/6.f;
             if(outdoors) {

@@ -4,6 +4,7 @@
 // and screenshot paths at the current native resolution and sample count.
 bool VulkanRenderDevice::Exec(std::string Cmd, OutputDevice& Ar)
 {
+    if(Cmd=="RuneModernWaterProbe"){RunModernWaterProbe();return true;}
     if(Cmd=="RuneMaterialLightingProbe"){RunMaterialLightingProbe();return true;}
     if(Cmd=="RuneShadowBudgetProbe"){RunShadowBudgetProbe();return true;}
     if(Cmd=="RuneTexturePackProbe")
@@ -465,53 +466,7 @@ void VulkanRenderDevice::RunValidationProbe()
         require(WaterRenderCount==approximateRenders,"approximate mode renders no reflection scene");
     }
     LogMessage("RUNE_WATER_APPROXIMATE_OK pixels=1 animated=1 transparency=1 opacity=1 scene_passes=0");
-    if(commandline->HasArg("","--probe-modern-water")) {
-        const auto oldRenders=WaterRenderCount;
-        std::array<TextureColor,4> samples{};
-        float depths[4]={16,16,16,16};cachedFacet.WaterDepth=depths;
-        for(int mode=0;mode<4;++mode) {
-            WorldFeatures=2048;
-            Lock(vec4(.5f),vec4(0),vec4(0),nullptr,nullptr);
-            SetLightingCamera(vec3(3,0,1));
-            PrepareModernWater(.2f,mode==1?2.f:0.f,vec4(.15f,.18f,.2f,1),vec4(.3f,-.4f,.86f,.4f),vec4(1));
-            SetSceneNode(&frame);pushconstants.objectToProjection=mat4::identity();pushconstants.nearClip=vec4(0,0,0,1);
-            rect(-.9f,.9f,.8f,vec4(0,0,1,1),false);
-            for(float& d:depths)d=mode>=2?512.f:16.f;
-            cachedSurface.PolyFlags=mode==3?PF_Occlude:PF_Translucent;
-            DrawComplexSurface(&frame,cachedSurface,cachedFacet);Unlock(false);ReadPixels(pixels.data());
-            samples[mode]=pixels[(size_t)(h/2)*w+w/2];
-            const auto& sample=samples[mode];
-            LogMessage("RUNE_WATER_MODERN_PIXEL mode="+std::to_string(mode)+" rgb="+std::to_string(sample.R)+","+std::to_string(sample.G)+","+std::to_string(sample.B));
-            require(WaterRenderCount==oldRenders,"modern water must not render a reflection scene");
-        }
-        require(samples[0].B>samples[0].R+40,"modern shallow water reveals blue background");
-        require(samples[0].R!=samples[1].R || samples[0].G!=samples[1].G || samples[0].B!=samples[1].B,"modern water animates actual pixels");
-        require(samples[0].B>samples[2].B+10,"depth changes modern water absorption/opacity");
-        require(samples[3].B<220,"opaque authored water remains opaque");
-        cachedFacet.WaterDepth=nullptr;
-        LogMessage("RUNE_WATER_MODERN_OK native=1 samples=4 animation=1 depth=1 transparent=1 opaque=1 scene_passes=0");
-        bool savedScreenshot=GammaCorrectScreenshots;
-        bool savedSubmerged=WaterSubmerged;float savedWaterTime=WaterViewTime;
-        std::vector<TextureColor> underwaterReference;
-        for(int mode=0;mode<2;++mode) {
-            WorldFeatures=2048;SetWaterView(mode!=0,1.2f);
-            Lock(vec4(.5f),vec4(0),vec4(0),nullptr,nullptr);
-            SetSceneNode(&frame);pushconstants.objectToProjection=mat4::identity();pushconstants.nearClip=vec4(0,0,0,1);
-            for(int strip=0;strip<8;++strip)rect(-.8f+strip*.2f,-.6f+strip*.2f,.3f,strip%2?vec4(.1f,.8f,.2f,1):vec4(.8f,.1f,.6f,1),false);
-            Unlock(false);GammaCorrectScreenshots=true;ReadPixels(pixels.data());
-            if(mode==0)underwaterReference=pixels;
-        }
-        size_t changed=0,edgeChanged=0;
-        for(int y=0;y<h;++y)for(int x=0;x<w;++x) {
-            auto at=size_t(y)*w+x;const auto& a=underwaterReference[at];const auto& b=pixels[at];
-            bool different=a.R!=b.R || a.G!=b.G || a.B!=b.B;
-            if(different){++changed;if(x<w*.075f || x>w*.925f || y<h*.075f || y>h*.925f)++edgeChanged;}
-        }
-        require(changed>100,"underwater shimmer must change actual presentation pixels");
-        require(edgeChanged==0,"underwater shimmer must preserve HUD-edge pixels");
-        GammaCorrectScreenshots=savedScreenshot;SetWaterView(savedSubmerged,savedWaterTime);
-        LogMessage("RUNE_UNDERWATER_OK pixels=1 centre_changed="+std::to_string(changed)+" hud_edge_changes="+std::to_string(edgeChanged)+" extra_passes=0");
-    }
+    if(commandline->HasArg("","--probe-modern-water")) RunModernWaterProbe();
 
     WorldFeatures=0;
     require(!BeginWaterReflection(&frame,0,0),"disabled water gate");
@@ -635,4 +590,87 @@ void VulkanRenderDevice::RunMaterialLightingProbe()
     LogMessage("RUNE_PHYSICAL_MATERIAL_GPU_OK native=1 samples=4 ggx=1 roughness=1 environment=1 no_direct_lights=1 unlit_bypass=1 mesh=1 bsp=1");
 
     WorldFeatures=savedWorld;Bloom=savedBloom;GammaCorrectScreenshots=savedGamma;AdaptiveSharpness=savedSharp;ShadowLift=savedLift;
+}
+
+void VulkanRenderDevice::RunModernWaterProbe()
+{
+    if(IsLocked || GetSettingsMultisample()!=4 || ResolutionScale!=1.0f || !UsesModernWater())
+        throw std::runtime_error("Modern water probe requires enhanced water and an unlocked native 4x renderer");
+    auto require=[](bool ok,const char* message){if(!ok)throw std::runtime_error(std::string("Modern water probe: ")+message);};
+    const int savedWorld=WorldFeatures,savedLight=LightMode;
+    const bool savedEnhanced=VisualEnhanced,savedBloom=Bloom,savedGamma=GammaCorrectScreenshots;
+    const float savedSharp=AdaptiveSharpness,savedLift=ShadowLift;
+    const vec3 savedCamera=CurrentLightingCamera;
+    const int w=GetRenderWidth(),h=GetRenderHeight();
+    SceneNode frame{};frame.X=w;frame.Y=h;frame.FX=float(w);frame.FY=float(h);frame.FX2=w*.5f;frame.FY2=h*.5f;frame.FovAngle=90;
+    frame.ObjectToWorld=frame.WorldToView=mat4::identity();
+    LightMode=0;VisualEnhanced=false;Bloom=false;GammaCorrectScreenshots=false;AdaptiveSharpness=ShadowLift=0;
+    std::vector<TextureColor> pixels(size_t(w)*h);
+    auto rect=[&](float x0,float x1,float z,vec4 color,bool alpha){
+        SetPipeline(RenderPasses->GetPipeline(alpha?PF_Highlighted:PF_Occlude,false,false));
+        auto binds=GetTextureIndexes(0,nullptr);auto alloc=ReserveVertices(4,6);require(alloc.vptr!=nullptr,"vertex allocation");
+        vec3 points[]={{x0,-.8f,z},{x1,-.8f,z},{x1,.8f,z},{x0,.8f,z}};
+        for(int i=0;i<4;++i)alloc.vptr[i] = {0u, points[i], vec2(0.0f), vec2(0.0f), vec2(0.0f), vec2(0.0f), color, binds};
+        uint32_t indexes[]={0,1,2,0,2,3};for(int i=0;i<6;++i)alloc.iptr[i]=alloc.vpos+indexes[i];UseVertices(4,6);
+    };
+    UnrealMipmap whiteMip;whiteMip.Width=whiteMip.Height=1;whiteMip.Data.resize(4);for(auto& x:whiteMip.Data)x=255;
+    TextureInfo whiteInfo;whiteInfo.CacheID=0xfedcba9876549910ull;whiteInfo.Format=TextureFormat::BGRA8;whiteInfo.NumMips=1;whiteInfo.Mips=&whiteMip;
+    vec3 points[]={{-.8f,-.8f,.2f},{.8f,-.8f,.2f},{.8f,.8f,.2f},{-.8f,.8f,.2f}};
+    SurfaceInfo cachedSurface{};cachedSurface.Texture=&whiteInfo;cachedSurface.PolyFlags=PF_Occlude;
+    SurfaceFacet cachedFacet{};cachedFacet.Water=true;cachedFacet.Vertices=points;cachedFacet.VertexCount=4;
+    cachedFacet.MapCoords.Origin=vec3(0,0,.2f);cachedFacet.MapCoords.XAxis=vec3(1,0,0);cachedFacet.MapCoords.YAxis=vec3(0,1,0);
+        const auto oldRenders=WaterRenderCount;
+        std::array<TextureColor,4> samples{};
+        float depths[4]={16,16,16,16};cachedFacet.WaterDepth=depths;
+        for(int mode=0;mode<4;++mode) {
+            WorldFeatures=2048;
+            Lock(vec4(.5f),vec4(0),vec4(0),nullptr,nullptr);
+            require(Textures->Scene->SceneSamples==VK_SAMPLE_COUNT_4_BIT,"actual four-sample target");
+            SetLightingCamera(vec3(3,0,1));
+            PrepareModernWater(.2f,mode==1?2.f:0.f,vec4(.15f,.18f,.2f,1),vec4(.3f,-.4f,.86f,.4f),vec4(1));
+            SetSceneNode(&frame);pushconstants.objectToProjection=mat4::identity();pushconstants.nearClip=vec4(0,0,0,1);
+            rect(-.9f,.9f,.8f,vec4(0,0,1,1),false);
+            for(float& d:depths)d=mode>=2?512.f:16.f;
+            cachedSurface.PolyFlags=mode==3?PF_Occlude:PF_Translucent;
+            DrawComplexSurface(&frame,cachedSurface,cachedFacet);Unlock(false);ReadPixels(pixels.data());
+            samples[mode]=pixels[(size_t)(h/2)*w+w/2];
+            const auto& sample=samples[mode];
+            LogMessage("RUNE_WATER_MODERN_PIXEL mode="+std::to_string(mode)+" rgb="+std::to_string(sample.R)+","+std::to_string(sample.G)+","+std::to_string(sample.B));
+            require(WaterRenderCount==oldRenders,"modern water must not render a reflection scene");
+        }
+        require(samples[0].B>samples[0].R+40,"modern shallow water reveals blue background");
+        require(samples[0].R!=samples[1].R || samples[0].G!=samples[1].G || samples[0].B!=samples[1].B,"modern water animates actual pixels");
+        require(samples[0].B>samples[2].B+10,"depth changes modern water absorption/opacity");
+        require(samples[3].B<220,"opaque authored water remains opaque");
+        cachedFacet.WaterDepth=nullptr;
+        LogMessage("RUNE_WATER_MODERN_OK native=1 samples=4 animation=1 depth=1 transparent=1 opaque=1 scene_passes=0");
+        bool savedScreenshot=GammaCorrectScreenshots;
+        bool savedSubmerged=WaterSubmerged;float savedWaterTime=WaterViewTime;
+        std::vector<TextureColor> underwaterReference,underwaterFirst;
+        for(int mode=0;mode<3;++mode) {
+            WorldFeatures=2048;SetWaterView(mode!=0,mode==2?2.2f:1.2f);
+            Lock(vec4(.5f),vec4(0),vec4(0),nullptr,nullptr);
+            require(Textures->Scene->SceneSamples==VK_SAMPLE_COUNT_4_BIT,"actual four-sample target");
+            SetSceneNode(&frame);pushconstants.objectToProjection=mat4::identity();pushconstants.nearClip=vec4(0,0,0,1);
+            for(int strip=0;strip<8;++strip)rect(-.8f+strip*.2f,-.6f+strip*.2f,.3f,strip%2?vec4(.1f,.8f,.2f,1):vec4(.8f,.1f,.6f,1),false);
+            Unlock(false);GammaCorrectScreenshots=true;ReadPixels(pixels.data());
+            if(mode==0)underwaterReference=pixels;
+            if(mode==1)underwaterFirst=pixels;
+        }
+        size_t changed=0,edgeChanged=0,animated=0;
+        for(int y=0;y<h;++y)for(int x=0;x<w;++x) {
+            auto at=size_t(y)*w+x;const auto& a=underwaterReference[at];const auto& b=pixels[at];
+            const auto& first=underwaterFirst[at];if(first.R!=b.R || first.G!=b.G || first.B!=b.B)++animated;
+            bool different=a.R!=b.R || a.G!=b.G || a.B!=b.B;
+            if(different){++changed;if(x<w*.075f || x>w*.925f || y<h*.075f || y>h*.925f)++edgeChanged;}
+        }
+        require(changed>100,"underwater shimmer must change actual presentation pixels");
+        require(edgeChanged==0,"underwater shimmer must preserve HUD-edge pixels");
+        require(animated>100,"underwater refraction must animate actual pixels");
+        GammaCorrectScreenshots=savedScreenshot;SetWaterView(savedSubmerged,savedWaterTime);
+        LogMessage("RUNE_UNDERWATER_OK pixels=1 centre_changed="+std::to_string(changed)+" hud_edge_changes="+std::to_string(edgeChanged)+" extra_passes=0 animated_pixels="+std::to_string(animated));
+
+    WorldFeatures=savedWorld;LightMode=savedLight;VisualEnhanced=savedEnhanced;Bloom=savedBloom;GammaCorrectScreenshots=savedGamma;
+    AdaptiveSharpness=savedSharp;ShadowLift=savedLift;SetLightingCamera(savedCamera);
+    LogMessage("RUNE_MODERN_WATER_PROBE_OK width="+std::to_string(w)+" height="+std::to_string(h)+" samples=4");
 }
