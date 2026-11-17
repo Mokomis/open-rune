@@ -45,7 +45,7 @@ I wanted to keep the original maps and campaign while giving players a choice ab
 
 Captured in pre-release Open Rune builds. Select an image to open it at full size.
 
-[![Front view of Ragnar holding a Viking short sword and a Roman sword on Thorstadt](screenshots/ragnar-dual-swords.jpg)](screenshots/ragnar-dual-swords.jpg)
+[![Front view of Ragnar holding a Viking short sword and a Roman sword on Thorstadt with WIP 4× textures](screenshots/ragnar-dual-swords-wip-4x.jpg)](screenshots/ragnar-dual-swords-wip-4x.jpg)
 
 | Android gameplay and touch controls | Redesigned title screen |
 | --- | --- |
