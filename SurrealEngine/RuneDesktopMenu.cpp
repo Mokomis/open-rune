@@ -78,15 +78,18 @@ struct State {
  Engine* game=nullptr;std::unique_ptr<MenuCanvas> canvas;RuneDesktopSession session;RuneDesktopHost host;
  std::shared_ptr<Image> home,settings,mark;std::map<int,std::shared_ptr<Font>> fonts;
  std::vector<Setting> options;std::vector<Hit> hits;std::string page="home",tab="Video",section,helpKey,message,focus,pressed,edit,editTitle;
- std::function<void(std::string)> acceptText;std::string modal;std::function<void()> confirmed;
+ std::function<void(std::string)> acceptText;std::string modal,confirmLabel;std::function<void()> confirmed;
  uint32_t campaignLaws=RuneBattleLaws::DefaultCampaign;
  int scroll=0,characterStart=0,character=-1,skin=0;bool campaign=false,title=true,wasActive=false,previousDead=false,pending=false,fullscreen=false;
  struct Navigation {std::string page,tab,section,focus;int scroll;bool campaign;};
  std::vector<Navigation> history;bool comparing=false;
  double scale=1;Point offset,mouse;float yaw=0,spin=0;bool rotating=false;std::array<bool,11> saveExists{};int latestSave=-1;uint64_t saveScan=0;std::chrono::steady_clock::time_point last=std::chrono::steady_clock::now();
+ HANDLE textureProcess=nullptr;
+ int pendingTextureQuality=0;
+ bool chooseTextureQuality=false;
  fs::path config,probe;int probeId=0;std::string lastInvitation;
  HMODULE xinput=nullptr;DWORD (WINAPI *getPad)(DWORD,XINPUT_STATE*)=nullptr;DWORD (WINAPI *setPad)(DWORD,XINPUT_VIBRATION*)=nullptr;int pad=-1;WORD buttons=0;bool leftTrigger=false,rightTrigger=false;int padDirection=0;uint64_t padRepeat=0,rumbleEnd=0;int rumblePriority=-1;std::string dragging;
- ~State(){if(setPad&&pad>=0){XINPUT_VIBRATION zero{};setPad(pad,&zero);}if(xinput)FreeLibrary(xinput);GameFeedback::SetEnabled(false);RuneController::Set({});}
+ ~State(){if(textureProcess)CloseHandle(textureProcess);if(setPad&&pad>=0){XINPUT_VIBRATION zero{};setPad(pad,&zero);}if(xinput)FreeLibrary(xinput);GameFeedback::SetEnabled(false);RuneController::Set({});}
  bool laws()const{return page.ends_with("laws");}
  static constexpr int LawHeight=178,LawViewport=674,LawTop=196,LawMax=int(RuneBattleLaws::Entries.size())*LawHeight-LawViewport;
  bool lawLocked(int i)const{auto bit=RuneBattleLaws::Entries[i].bit;bool multi=page=="host-laws"||page=="match-laws";uint32_t mask=page=="match-laws"?RuneBattleLaws::Multiplayer.load():multi?host.laws:campaignLaws;return page=="match-laws"||(!multi&&bit==RuneBattleLaws::Leap)||(multi&&bit==RuneBattleLaws::Tactics)||(bit==RuneBattleLaws::Cross&&!(mask&RuneBattleLaws::Dual));}
@@ -145,18 +148,80 @@ struct State {
  void change(const std::string& key,int value){if(hostControlled(key))return;comparing=false;auto& s=get(key);s.value=std::clamp(value,s.minimum,s.maximum);if(key=="soundRemaster")message="Restart Open Rune to apply the sound effects setting.";apply();save();LogMessage("DESKTOP_SETTING "+key+"="+std::to_string(s.value));}
  void open(){RuneMenu::Open=true;RuneMenu::Covered=true;if(game->NetworkFocusLost)game->NetworkFocusLost();go("home");}
  void close(){if(title&&!RuneMultiplayer::Active)return;RuneMenu::Open=false;RuneMenu::Covered=false;game->viewport->bShowWindowsMouse()=false;game->window->LockCursor();}
- void ask(const std::string& str,std::function<void()> action){modal=str;confirmed=action;}
+ void ask(const std::string& str,std::function<void()> action,const std::string& label="Confirm"){
+  modal=str;confirmed=std::move(action);confirmLabel=label;focus.clear();pressed.clear();
+ }
+ fs::path textureGame() const { return fs::u8path(game->LaunchInfo.gameRootFolder); }
+ bool textureReady() const {
+  std::error_code error;
+  return fs::is_regular_file(textureGame()/"TexturePacks/OpenRune-release/index.tsv",error);
+ }
+ void startTextureDownload(int quality) {
+  const auto folder=fs::u8path(OS::executable_path());
+  const auto installer=folder/L"Prepare Textures.ps1";
+  std::error_code error;
+  if(!fs::is_regular_file(installer,error)){
+   message="This client is missing its texture installer.";
+   return;
+  }
+  wchar_t system[32768];
+  DWORD length=GetSystemDirectoryW(system,32768);
+  if(!length||length>=32768){message="The texture installer could not start.";return;}
+  const auto powershell=fs::path(system)/L"WindowsPowerShell/v1.0/powershell.exe";
+  auto args=L"\"" + powershell.wstring() + L"\" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \""
+      + installer.wstring() + L"\" -GameDirectory \"" + textureGame().wstring() + L"\"";
+  STARTUPINFOW startup{}; startup.cb=sizeof(startup);
+  PROCESS_INFORMATION process{};
+  if(!CreateProcessW(powershell.c_str(),args.data(),nullptr,nullptr,FALSE,CREATE_NO_WINDOW,
+                    nullptr,folder.c_str(),&startup,&process)){
+   message="The texture installer could not start.";
+   return;
+  }
+  CloseHandle(process.hThread);
+  textureProcess=process.hProcess;
+  pendingTextureQuality=quality;
+  message="Preparing WIP textures. You can keep playing.";
+ }
+ void selectTextureArtwork(int quality) {
+  chooseTextureQuality=false;focus.clear();pressed.clear();
+  if(quality==0||textureReady()){
+   pendingTextureQuality=0;
+   change("texturePack",quality);
+   return;
+  }
+  if(textureProcess){
+   pendingTextureQuality=quality;
+   return;
+  }
+  ask("Download WIP textures? About 9.1 GB on an unmetered connection. Includes both unfinished 2× and 4× tiers. Original stays active while it installs.",
+      [this,quality]{startTextureDownload(quality);},"Download");
+ }
+ void pollTextureDownload(){
+  if(!textureProcess||WaitForSingleObject(textureProcess,0)!=WAIT_OBJECT_0)return;
+  CloseHandle(textureProcess);textureProcess=nullptr;
+  int quality=pendingTextureQuality;pendingTextureQuality=0;
+  if(textureReady()){
+   if(quality)change("texturePack",quality);
+   message="WIP textures are ready.";
+  }else{
+   auto status=textureGame()/"TexturePacks/.release-download/status.txt";
+   std::ifstream in(status,std::ios::binary);
+   if(!std::getline(in,message)||message.empty())message="Texture preparation stopped. Choose a WIP tier to retry.";
+   if(message.starts_with("\xef\xbb\xbf"))message.erase(0,3);
+   if(!message.empty()&&message.back()=='\r')message.pop_back();
+  }
+ }
  void request(int action){if((action==7||action==4)&&commandline->HasArg("","--save-directory")){int slot=action==4?10:RuneMenu::Slot.load();if(!fs::is_regular_file(game->packages->GetSaveFolderPath()/("Save"+std::to_string(slot)+".mapname"))){message="This test save is missing its map metadata.";return;}}if(RuneCombat::Request(action)){pending=true;message="Please wait…";}else message="The game is not ready yet.";}
  void chooseName(std::function<void()> next={}){input("Player name · 1–24 characters",RuneMultiplayer::GetPlayerName(),[this,next](std::string name){if(!RuneMultiplayer::SetPlayerName(name))throw std::runtime_error("Use 1–24 letters/numbers, spaces, apostrophe, dot, hyphen or underscore.");save();if(next)next();});}
  void identified(std::function<void()> next){if(RuneMultiplayer::GetPlayerName().empty())chooseName(std::move(next));else next();}
  void confirmInput(){auto fn=acceptText;auto value=edit;acceptText={};try{fn(value);}catch(...){acceptText=fn;edit=value;throw;}}
  void input(const std::string& titleText,const std::string& initial,std::function<void(std::string)> fn){message.clear();editTitle=titleText;edit=initial;acceptText=fn;focus.clear();}
- void back(){if(!modal.empty()){modal.clear();return;}if(acceptText){acceptText={};return;}if(character>=0){character=-1;return;}if(!history.empty()){auto old=history.back();history.pop_back();page=old.page;tab=old.tab;section=old.section;focus=old.focus;scroll=old.scroll;campaign=old.campaign;message.clear();return;}if(page=="home"){close();return;}go("home");}
+ void back(){if(chooseTextureQuality){chooseTextureQuality=false;return;}if(!modal.empty()){modal.clear();confirmed={};return;}if(acceptText){acceptText={};return;}if(character>=0){character=-1;return;}if(!history.empty()){auto old=history.back();history.pop_back();page=old.page;tab=old.tab;section=old.section;focus=old.focus;scroll=old.scroll;campaign=old.campaign;message.clear();return;}if(page=="home"){close();return;}go("home");}
  void rowSetting(const std::string& key,double y){
   auto& s=get(key);Rect r(382,y,710,82);panel(r,.88f);text(400,y+32,s.name+(key=="ambientOcclusion"?" · Experimental":""),22,ivory,390);
   std::string hint=hostControlled(key)?"Host-controlled":dependency(key);
   auto label=hint.empty()?(s.choices.empty()?std::to_string(s.value):s.choices.at(s.value)):hostControlled(key)?"Host rules":"Unavailable";
-  button("setting:"+key,{800,y+10,274,62},label,[this,key]{helpKey=key;if(hostControlled(key)||!dependency(key).empty())return;auto& option=get(key);if(!option.choices.empty())change(key,option.value==option.maximum?option.minimum:option.value+1);else input(option.name,std::to_string(option.value),[this,key](std::string value){size_t used=0;int n=std::stoi(value,&used);if(used!=value.size())throw std::runtime_error("Enter a whole number.");change(key,n);});});
+  button("setting:"+key,{800,y+10,274,62},label,[this,key]{helpKey=key;if(hostControlled(key)||!dependency(key).empty())return;auto& option=get(key);if(key=="texturePack"){chooseTextureQuality=true;focus.clear();return;}if(!option.choices.empty())change(key,option.value==option.maximum?option.minimum:option.value+1);else input(option.name,std::to_string(option.value),[this,key](std::string value){size_t used=0;int n=std::stoi(value,&used);if(used!=value.size())throw std::runtime_error("Enter a whole number.");change(key,n);});});
   if(focus=="setting:"+key||r.contains(mouse))helpKey=key;
  }
  void drawCharacter(int c,int s,Rect box,bool expanded){std::vector<uint32_t> pixels;int result=RuneCharacterPreview::Poll(c,s,pixels,expanded,expanded?yaw:std::numeric_limits<float>::quiet_NaN());int id=c*4+s+(expanded?200:0);if(result>=0&&(result==1||canvas->previews.contains(id)))canvas->preview(id,expanded?384:192,expanded?448:224,pixels,box);else if(result<0)text(box.x+15,box.y+80,"Preview unavailable",20,muted,box.width-30);}
@@ -313,7 +378,15 @@ void State::draw(){
  if(session.Busy())text(650,115,session.Message,22,gold,760);
  if(character>=0){hits.clear();c.fillRect({0,0,1536,1024},Colorf(0,0,0,.86f));panel({330,40,876,940});auto& m=openrune::Characters[character];text(390,110,m.name,40,gold,750);drawCharacter(character,skin,{512,139,512,597},true);text(390,779,"Drag to rotate  ·  "+std::string(openrune::skinName({(uint8_t)character,(uint8_t)skin})),23,muted,740);if(m.skins>1)button("skin",{390,810,350,64},"Next skin",[this]{skin=(skin+1)%openrune::Characters[character].skins;});button("choose-skin",{760,810,380,64},"Select warrior",[this]{int packed=character|(skin<<8);if(campaign)RuneCharacters::Campaign=packed;else RuneCharacters::Multiplayer=packed;save();message="Character and skin selected.";character=-1;});button("close-preview",{390,900,350,54},"Back",[this]{character=-1;});}
  if(acceptText){hits.clear();c.fillRect({0,0,1536,1024},Colorf(0,0,0,.88f));panel({220,280,1096,440});text(260,350,editTitle,30,gold,1010);panel({260,390,1016,100});text(280,453,edit+"|",26,ivory,976);text(260,535,"Type to edit · Ctrl+A clears · Ctrl+V pastes · Enter confirms",20,muted,1010);if(!message.empty())text(260,575,message,20,gold,1010);button("input-ok",{950,600,326,68},"Confirm",[this]{confirmInput();});button("input-cancel",{260,600,300,68},"Cancel",[this]{acceptText={};});}
- if(!modal.empty()){hits.clear();c.fillRect({0,0,1536,1024},Colorf(0,0,0,.88f));panel({270,300,996,370});wrap(310,380,modal,910,29,4);button("confirm",{890,560,330,68},"Confirm",[this]{auto fn=confirmed;modal.clear();confirmed={};fn();});button("dismiss",{310,560,330,68},"Cancel",[this]{modal.clear();});}
+ if(chooseTextureQuality){
+  hits.clear();c.fillRect({0,0,1536,1024},Colorf(0,0,0,.88f));panel({320,250,896,520});
+  text(366,334,"Texture artwork",34,gold);
+  for(int i=0;i<3;++i)
+   button("texture-choice:"+std::to_string(i),{366,382+84.0*i,800,68},get("texturePack").choices.at(i),
+       [this,i]{selectTextureArtwork(i);},v("texturePack")==i);
+  button("texture-choices-back",{366,670,310,64},"Cancel",[this]{back();});
+ }
+ if(!modal.empty()){hits.clear();c.fillRect({0,0,1536,1024},Colorf(0,0,0,.88f));panel({270,300,996,370});wrap(310,380,modal,910,29,4);button("confirm",{890,560,330,68},confirmLabel,[this]{auto fn=confirmed;modal.clear();confirmed={};fn();});button("dismiss",{310,560,330,68},"Cancel",[this]{back();});}
 }
 }
 
@@ -359,7 +432,7 @@ void Tick(Engine& game){if(!Enabled(game))return;auto& s=*state;try{
   auto j=JsonValue::object();j["playerName"]=JsonValue::string(RuneMultiplayer::GetPlayerName());j["playerNamesVisible"]=JsonValue::boolean(RuneMultiplayer::ShowPlayerNames);j["inputActive"]=JsonValue::boolean(bool(s.acceptText));j["inputTitle"]=JsonValue::string(s.editTitle);j["inputValue"]=JsonValue::string(s.edit);j["id"]=JsonValue::number(s.probeId);j["page"]=JsonValue::string(s.page);j["section"]=JsonValue::string(s.section);j["tab"]=JsonValue::string(s.tab);j["focus"]=JsonValue::string(s.focus);j["comparing"]=JsonValue::boolean(s.comparing);j["campaignLaws"]=JsonValue::number(s.campaignLaws);j["hostLaws"]=JsonValue::number(s.host.laws);j["effectiveLaws"]=JsonValue::number(RuneBattleLaws::Mask());j["lawsScroll"]=JsonValue::number(s.scroll);j["hostNormalMoves"]=JsonValue::boolean(s.host.normalBloodlust);j["hostMaps"]=JsonValue::array();for(const auto& m:s.host.maps)j["hostMaps"].items().push_back(JsonValue::string(m));j["message"]=JsonValue::string(s.message);j["discovery"]=JsonValue::string(s.session.Message);j["hosting"]=JsonValue::boolean(s.session.Hosting());j["bots"]=JsonValue::number(s.session.BotCount());j["active"]=JsonValue::boolean(RuneMultiplayer::Active);j["status"]=JsonValue::string(RuneMultiplayer::GetStatus());j["hostKey"]=JsonValue::string(s.session.HostKey);j["rows"]=s.session.Rows;j["hits"]=JsonValue::array();for(auto& h:s.hits)j["hits"].items().push_back(JsonValue::string(h.id));j["open"]=JsonValue::boolean(RuneMenu::Open);j["aa"]=JsonValue::number(game.window->GetRenderDevice()->AntialiasMode);j["scale"]=JsonValue::number(game.window->GetRenderDevice()->ResolutionScale);j["shadowBudget"]=JsonValue::number(RuneShadows::Budget(game.window->GetRenderDevice()->WorldFeatures));j["worldFeatures"]=JsonValue::number(game.window->GetRenderDevice()->WorldFeatures);j["character"]=JsonValue::number(RuneCharacters::Multiplayer);j["campaignCharacter"]=JsonValue::number(RuneCharacters::Campaign);j["settings"]=JsonValue::object();for(auto& option:s.options)j["settings"][option.key]=JsonValue::number(option.value);
   std::ofstream f(s.probe/"state.tmp");f<<j.to_json();f.close();MoveFileExW((s.probe/"state.tmp").c_str(),(s.probe/"state.json").c_str(),MOVEFILE_REPLACE_EXISTING);
  }
- s.scanSaves();s.controller();s.session.Tick();auto invite=s.session.TakeInvite();if(!invite.empty())s.identified([&s,invite]{if(RuneMultiplayer::Join(invite)){s.title=false;s.lastInvitation=invite;s.save();s.close();}else s.message="Already connected to a match.";});
+ s.pollTextureDownload();s.scanSaves();s.controller();s.session.Tick();auto invite=s.session.TakeInvite();if(!invite.empty())s.identified([&s,invite]{if(RuneMultiplayer::Join(invite)){s.title=false;s.lastInvitation=invite;s.save();s.close();}else s.message="Already connected to a match.";});
  bool active=RuneMultiplayer::Active;if(active&&!s.wasActive)s.apply();if(s.wasActive&&!active){s.apply();s.title=true;s.open();s.go("multiplayer");s.message=RuneMultiplayer::GetStatus();}s.wasActive=active;
  if(s.pending){int result=RuneCombat::SessionResult.exchange(0);if(result){s.pending=false;if(result==2||result==5){s.title=false;s.close();}else s.message=result==1?"Saved.":result==3?"That save slot is empty.":"Cannot save during a cinematic, after death or in multiplayer.";}}
  bool dead=RuneMenu::PlayerDead;if(dead&&!s.previousDead&&!RuneMenu::Open)s.open();s.previousDead=dead;if(RuneMenu::Open){RuneMenu::Covered=true;game.viewport->bShowWindowsMouse()=true;game.viewport->bWindowsMouseAvailable()=true;game.window->UnlockCursor();}

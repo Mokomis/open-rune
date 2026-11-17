@@ -43,7 +43,7 @@ final class RuneMenuSections {
     case "display":return "Changes apply immediately.\n\nRendering resolution changes the 3D scene. Menus and HUD stay sharp.\n\nFrame rate target and display refresh are separate controls.";
     case "soundEffects":return "Layered gameplay sounds are WIP and require the optional sound pack.\n\nRestart Open Rune after changing this setting. Music and dialogue keep their original recordings. Missing or incompatible effects use the original sound.";
     case "lighting":return "Lighting mode sets the overall style.\n\nAmbient occlusion is Experimental.\n\nAdditional shadow lights require Remastered lighting.";
-    case "textures":return "Open Rune prepares remastered textures automatically on an unmetered connection. Original is the default. Missing textures stay original.\n\n2× and 4× describe texture size, not display scaling.\n\nMaterial maps require Remastered lighting.";
+    case "textures":return "Select WIP 2× or WIP 4× to download the shared texture pack. Open Rune asks before downloading. Missing textures stay original.\n\n2× and 4× describe texture size, not display scaling.\n\nMaterial maps require Remastered lighting.";
     case "effects":return "Visual changes only.\n\nCompare original visuals temporarily restores original presentation without overwriting your choices.\n\nFull scene water reflections cost more GPU time.";
     case "campaign":return "Difficulty applies to a new campaign. Loaded saves retain their difficulty.\n\nChoose any installed character for your next campaign session.";
     case "combat":return "Campaign preferences apply locally. Multiplayer uses the host’s combat rules.\n\nNormal-combat leap and rush belong in Match rules when hosting.";

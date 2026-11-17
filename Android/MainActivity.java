@@ -87,26 +87,63 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
     }
     private String textureInstallStatus = "";
     private boolean textureInstallActive;
+    private int pendingTextureQuality;
+
+    @Override public void selectTextureArtwork(int quality) {
+        File game = new File(getFilesDir(), "game");
+        if (quality == 0 || RuneTexturePack.ready(game)) {
+            pendingTextureQuality = 0;
+            options.set("texturePack", quality);
+            return;
+        }
+        if (textureInstallActive || pendingTextureQuality > 0) {
+            pendingTextureQuality = quality;
+            return;
+        }
+        menu.confirm("Download WIP textures?",
+            "Download about 4.25 GB on an unmetered connection. The unfinished pack includes both 2× and 4×. Original stays active while it installs.",
+            "Download", () -> {
+                pendingTextureQuality = quality;
+                mLayout.removeCallbacks(textureInstallCheck);
+                textureInstallCheck.run();
+            });
+    }
+
     private final Runnable textureInstallCheck = new Runnable() {
         @Override public void run() {
+            if (pendingTextureQuality == 0 || getIntent().hasExtra("saveTest")) return;
             File game = new File(getFilesDir(), "game");
-            if (RuneTexturePack.ready(game) || getIntent().hasExtra("saveTest")) return;
+            if (RuneTexturePack.ready(game)) {
+                int quality = pendingTextureQuality;
+                pendingTextureQuality = 0;
+                options.set("texturePack", quality);
+                if (menu != null) menu.refresh();
+                return;
+            }
             if (!textureInstallActive) {
                 textureInstallActive = true;
+                textureProgress("Preparing the WIP texture download…");
                 new Thread(() -> {
                     try {
                         RuneTexturePack.prepare(getApplicationContext(), game, MainActivity.this::textureProgress);
                     } catch (Exception e) {
                         android.util.Log.w("OpenRune", "Texture preparation will retry", e);
-                        textureProgress("Remastered textures will retry automatically.");
+                        textureProgress("The WIP texture download will retry.");
                     } finally {
-                        runOnUiThread(() -> textureInstallActive = false);
+                        runOnUiThread(() -> {
+                            textureInstallActive = false;
+                            if (RuneTexturePack.ready(game) && pendingTextureQuality != 0) {
+                                mLayout.removeCallbacks(textureInstallCheck);
+                                textureInstallCheck.run();
+                            }
+                        });
                     }
                 }, "Open Rune texture preparation").start();
             }
             mLayout.postDelayed(this, 120_000);
         }
     };
+
     private void textureProgress(String value) {
         runOnUiThread(() -> {
             textureInstallStatus = value;
@@ -115,7 +152,7 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
     }
     @Override public String textureInstallStatus() {
         if (!textureInstallStatus.isEmpty()) return textureInstallStatus;
-        return RuneTexturePack.ready(new File(getFilesDir(), "game")) ? "" : "Preparing remastered textures automatically.";
+        return RuneTexturePack.ready(new File(getFilesDir(), "game")) ? "" : "Choose WIP 2× or WIP 4× to download.";
     }
     @Override protected void onActivityResult(int request,int result,android.content.Intent data){
         super.onActivityResult(request,result,data);
@@ -604,7 +641,7 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
         mLayout.removeCallbacks(textureInstallCheck);
         controlsVisible=false;if(rumble!=null)rumble.foreground(false);if(hud!=null){hud.removeCallbacks(updateHud);hud.suspend();}if(fpsLabel!=null)fpsLabel.removeCallbacks(updateStatus);releaseKeys();nativeMenuSetting(0,1);super.onPause();
     }
-    @Override protected void onResume(){super.onResume();mLayout.removeCallbacks(textureInstallCheck);mLayout.postDelayed(textureInstallCheck, 3000);applyRefreshRate();controlsVisible=true;nativeMenuSetting(0,menuOpen?1:0);if(fpsLabel!=null){fpsLabel.removeCallbacks(updateStatus);fpsLabel.post(updateStatus);}if(hud!=null){hud.removeCallbacks(updateHud);hud.post(updateHud);}if(rumble!=null)rumble.foreground(hasWindowFocus());syncFeedback();}
+    @Override protected void onResume(){super.onResume();mLayout.removeCallbacks(textureInstallCheck);if(pendingTextureQuality>0)mLayout.postDelayed(textureInstallCheck, 1000);applyRefreshRate();controlsVisible=true;nativeMenuSetting(0,menuOpen?1:0);if(fpsLabel!=null){fpsLabel.removeCallbacks(updateStatus);fpsLabel.post(updateStatus);}if(hud!=null){hud.removeCallbacks(updateHud);hud.post(updateHud);}if(rumble!=null)rumble.foreground(hasWindowFocus());syncFeedback();}
     @Override public void onWindowFocusChanged(boolean focus){if(!focus)releaseKeys();super.onWindowFocusChanged(focus);if(rumble!=null)rumble.foreground(focus&&controlsVisible);syncFeedback();}
     @Override protected void onDestroy(){if(discovery!=null)discovery.close();if(hosting!=null)hosting.stop();if(rumble!=null)rumble.close();if(controller!=null)controller.close();super.onDestroy();android.os.Process.killProcess(android.os.Process.myPid());}
     @Override protected String[] getArguments() {

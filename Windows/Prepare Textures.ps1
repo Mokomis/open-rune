@@ -31,6 +31,7 @@ try {
 $completed=$false
 try {
     if(Test-Path (Join-Path $destination 'index.tsv') -PathType Leaf){exit 0}
+    Remove-Item -LiteralPath (Join-Path $cache 'status.txt') -ErrorAction SilentlyContinue
     $receipt=Get-Content -LiteralPath (Join-Path $PSScriptRoot 'texture-release.json') -Raw | ConvertFrom-Json
     $required=[long]$receipt.unpacked_bytes+128MB
     foreach($part in $receipt.parts) {
@@ -49,7 +50,7 @@ try {
             $url=$receipt.url+$part.file
             & "$env:SystemRoot\System32\curl.exe" --silent --show-error --fail --location --max-redirs 5 --proto '=https' --proto-redir '=https' --connect-timeout 15 --speed-limit 4096 --speed-time 60 --continue-at - --max-filesize $part.bytes --output $path $url
             if($LASTEXITCODE -eq 33){Remove-Item -LiteralPath $path -ErrorAction SilentlyContinue;throw 'Texture download will retry from the start.'}
-            if($LASTEXITCODE -ne 0){throw "Texture download ended with code $LASTEXITCODE. It will retry on the next launch."}
+            if($LASTEXITCODE -ne 0){throw "Texture download ended with code $LASTEXITCODE. Choose a WIP tier to retry."}
             if(!(Test-Part $path $part)){
                 Remove-Item -LiteralPath $path -ErrorAction SilentlyContinue
                 throw 'Texture part failed integrity checking.'

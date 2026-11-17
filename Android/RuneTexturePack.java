@@ -80,7 +80,7 @@ final class RuneTexturePack {
         }
         install(parts, game, receipt.getString("pack"), progress);
         for (File part : parts) Files.deleteIfExists(part.toPath());
-        progress.accept("Remastered textures are ready. Choose 2× or 4× when you want to use them.");
+        progress.accept("WIP textures are ready.");
     }
 
     private static boolean matches(File file, JSONObject part) throws Exception {

@@ -23,36 +23,6 @@ extern char** environ;
 
 namespace RuneSetup {
 static fs::path DataRoot(){return Directory::localAppData()/"OpenRune"/"game";}
-#ifdef WIN32
-static void PrepareTextures()
-{
-    std::error_code error;
-    if (fs::is_regular_file(DataRoot() / "TexturePacks/OpenRune-release/index.tsv", error)) return;
-
-    std::wstring module(32768, L'\0');
-    DWORD length = GetModuleFileNameW(nullptr, module.data(), DWORD(module.size()));
-    if (!length || length >= module.size()) return;
-    module.resize(length);
-    const auto folder = fs::path(module).parent_path();
-    const auto installer = folder / L"Prepare Textures.ps1";
-    if (!fs::is_regular_file(installer, error)) return;
-    wchar_t system[32768];
-    length = GetSystemDirectoryW(system, 32768);
-    if (!length || length >= 32768) return;
-    const auto powershell = fs::path(system) / L"WindowsPowerShell/v1.0/powershell.exe";
-    auto args = L"\"" + powershell.wstring() + L"\" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \""
-        + installer.wstring() + L"\" -GameDirectory \"" + DataRoot().wstring() + L"\"";
-    STARTUPINFOW startup{};
-    startup.cb = sizeof(startup);
-    PROCESS_INFORMATION process{};
-    if (CreateProcessW(powershell.c_str(), args.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
-                       nullptr, folder.c_str(), &startup, &process))
-    {
-        CloseHandle(process.hThread);
-        CloseHandle(process.hProcess);
-    }
-}
-#endif
 static bool Buy() {
 #ifdef WIN32
     return reinterpret_cast<intptr_t>(ShellExecuteW(nullptr,L"open",L"https://store.steampowered.com/app/210950/Rune_Classic/",nullptr,nullptr,SW_SHOWNORMAL))>32;
@@ -127,9 +97,6 @@ int SelectGame(){
     try {
         RuneGameFiles::Validate(DataRoot());auto game=GameFolderSelection::ExamineFolder(DataRoot().string());
         if(game.IsRune()){
-#ifdef WIN32
-            PrepareTextures();
-#endif
             GameFolderSelection::Games={game};return 0;
         }
     }catch(const std::exception&){}
@@ -137,9 +104,6 @@ int SelectGame(){
     window->SetFrameGeometry((screen.width-800)/2,(screen.height-620)/2,800,620);window->Show();
     std::cout<<"RUNE_SETUP: Waiting for original game files.\n"<<std::flush;
     DisplayWindow::RunLoop();
-#ifdef WIN32
-    if (window->result >= 0) PrepareTextures();
-#endif
     return window->result;
 }
 }

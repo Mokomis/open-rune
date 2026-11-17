@@ -51,6 +51,7 @@ final class RuneMenuView extends FrameLayout {
         String multiplayerStatus();
         void chooseInvitation();
         String textureInstallStatus();
+        void selectTextureArtwork(int quality);
         void leaveMultiplayer();
         void respawnMultiplayer();
         RuneHosting hosting();
@@ -821,7 +822,9 @@ final class RuneMenuView extends FrameLayout {
         int choice=(item.value+delta+item.choices.length)%item.choices.length;
         if(key.equals("refresh"))while(choice<item.choices.length-1&&!host.refreshSupported(new int[]{0,60,90,120,144,165}[choice]))choice=(choice+delta+item.choices.length)%item.choices.length;
         if((key.equals("fps")||key.equals("refresh"))&&choice==item.choices.length-1){customRate(key);return;}
-        settings.set(key,choice);if(key.equals("resolution")||key.equals("pixelLighting"))restorePage(screen);else refresh();
+        if(key.equals("texturePack"))host.selectTextureArtwork(choice);
+        else settings.set(key,choice);
+        if(key.equals("resolution")||key.equals("pixelLighting"))restorePage(screen);else refresh();
     }
     private void slider(FrameLayout panel,String key,int x,int y,int w) {
         RuneSettings.Item item=settings.items.get(key);
@@ -858,7 +861,10 @@ final class RuneMenuView extends FrameLayout {
             boolean available=!key.equals("refresh")||i==item.choices.length-1||host.refreshSupported(new int[]{0,60,90,120,144,165}[i]);
             Button option=button(card,item.choices[i]+(!available?" · Not supported":"")+(i==item.value?"   ✓":""),42,212+i*68,730,60,i==item.value,()->{
                 if((key.equals("fps")||key.equals("refresh"))&&choice==item.choices.length-1){customRate(key);return;}
-                settings.set(key,choice);back();if(key.equals("resolution")||key.equals("pixelLighting"))restorePage(screen);else refresh();
+                back();
+                if(key.equals("texturePack"))host.selectTextureArtwork(choice);
+                else settings.set(key,choice);
+                if(key.equals("resolution")||key.equals("pixelLighting"))restorePage(screen);else refresh();
             });
             option.setEnabled(available);if(!available)option.setTextColor(MUTED);
         }

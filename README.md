@@ -10,7 +10,7 @@ You need your own copy of *Rune Classic*. Open Rune imports the original maps, s
 
 ## Download and install
 
-1. Download the [Windows x64 client ZIP](https://github.com/Mokomis/open-rune/releases/download/v1.0.0/open-rune-1.0.0-windows-x64-client.zip) or the [Android ARM64 APK](https://github.com/Mokomis/open-rune/releases/download/v1.0.0/open-rune-1.0.0-android-arm64.apk). On Windows, extract the client ZIP before launching.
+1. Download the [Windows x64 client ZIP](https://github.com/Mokomis/open-rune/releases/download/v1.0.1/open-rune-1.0.1-windows-x64-client.zip) or the [Android ARM64 APK](https://github.com/Mokomis/open-rune/releases/download/v1.0.1/open-rune-1.0.1-android-arm64.apk). On Windows, extract the client ZIP before launching.
 2. On first launch, select the folder containing your *Rune Classic* installation. On Android, copy that folder to shared storage first. Open Rune imports the game files into its own data folder.
 3. Start the campaign or open **Multiplayer** to host or join a game. The Windows dedicated server is a separate download with its own hosting instructions.
 
