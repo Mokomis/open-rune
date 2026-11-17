@@ -14,6 +14,8 @@ You need your own copy of *Rune Classic*. Open Rune imports the original maps, s
 2. On first launch, select the folder containing your *Rune Classic* installation. On Android, copy that folder to shared storage first. Open Rune imports the game files into its own data folder.
 3. Start the campaign or open **Multiplayer** to host or join a game. The Windows dedicated server is a separate download with its own hosting instructions.
 
+**Single-player campaign.** The original Rune Classic campaign should be playable from start to finish. Release testing covered representative levels, transitions, and save/load checkpoints.
+
 Windows uses Node.js for internet hosting and discovery. Android includes its discovery runtime. Install APK updates over your existing Open Rune app to keep your saves and settings.
 
 ### Remastered textures
@@ -42,6 +44,8 @@ I wanted to keep the original maps and campaign while giving players a choice ab
 ## Screenshots
 
 Captured in pre-release Open Rune builds. Select an image to open it at full size.
+
+[![Front view of Ragnar holding a Viking short sword and a Roman sword on Thorstadt](screenshots/ragnar-dual-swords.jpg)](screenshots/ragnar-dual-swords.jpg)
 
 | Android gameplay and touch controls | Redesigned title screen |
 | --- | --- |
