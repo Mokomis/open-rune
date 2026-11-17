@@ -23,7 +23,7 @@ void VisibleActor::Process(VisibleFrame* frame, UActor* actor)
 	{
 		// Replace only authored snowfall while the new weather is enabled.
 		// Leave emitters alive so switching Off restores their normal behavior.
-		if(RuneSnow::Mode.load()>0 && RuneSnow::weather.sky && actor->IsA("Snow"))return;
+		if(RuneSnow::Mode.load()!=RuneSnow::Original && actor->IsA("Snow"))return;
 		if(actor->IsA("BloodlustStart"))return; // The quiet head halo replaces this flash.
 		auto* player = engine->viewport->Actor();
 		auto attachment = GetRuneAttachmentVisibility(actor, player);

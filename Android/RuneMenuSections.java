@@ -18,7 +18,7 @@ final class RuneMenuSections {
     case "touch":return "Touch controls";case "gamepad":return "Controller";
     case "vibration":return "Vibration";case "hud":return "HUD & FPS display";
     case "campaign":return "Campaign";case "combat":return "Laws of Battle";
-    case "physics":return "Cinematic physics";case "enemies":return "Enemy behavior";case "connection":return "Connection smoothing";
+    case "physics":return "Physics";case "enemies":return "Enemy behavior";case "connection":return "Connection smoothing";
     case "updates":return "Updates";case "diagnostics":return "Diagnostics";default:return "About & licenses";}}
     static String[] keys(String page){switch(page){
     case "display":return new String[]{"resolution","scalingMethod","aa","fps","refresh","pacing","fpsManual","refreshManual"};
@@ -32,7 +32,7 @@ final class RuneMenuSections {
     case "input":return new String[]{"sensitivity","invert"};
     case "touch":return new String[]{"touch","opacity"};
     case "vibration":return new String[]{"rumble","rumbleOutput","rumbleStrength"};
-    case "hud":return new String[]{"hud","counter"};
+    case "hud":return new String[]{"hud","counter","playerNames"};
     case "campaign":return new String[]{"difficulty"};
     case "combat":return new String[]{};
     case "physics":return new String[]{"physics"};case "enemies":return new String[]{"tactics"};
@@ -43,11 +43,11 @@ final class RuneMenuSections {
     case "display":return "Changes apply immediately.\n\nRendering resolution changes the 3D scene. Menus and HUD stay sharp.\n\nFrame rate target and display refresh are separate controls.";
     case "soundEffects":return "Layered gameplay sounds are WIP and require the optional sound pack.\n\nRestart Open Rune after changing this setting. Music and dialogue keep their original recordings. Missing or incompatible effects use the original sound.";
     case "lighting":return "Lighting mode sets the overall style.\n\nAmbient occlusion is Experimental.\n\nAdditional shadow lights require Remastered lighting.";
-    case "textures":return "WIP artwork is unfinished; missing textures stay original.\n\n2× and 4× describe texture size, not display scaling.\n\nMaterial maps require Remastered lighting.";
+    case "textures":return "Open Rune prepares remastered textures automatically on an unmetered connection. Original is the default. Missing textures stay original.\n\n2× and 4× describe texture size, not display scaling.\n\nMaterial maps require Remastered lighting.";
     case "effects":return "Visual changes only.\n\nCompare original visuals temporarily restores original presentation without overwriting your choices.\n\nFull scene water reflections cost more GPU time.";
     case "campaign":return "Difficulty applies to a new campaign. Loaded saves retain their difficulty.\n\nChoose any installed character for your next campaign session.";
     case "combat":return "Campaign preferences apply locally. Multiplayer uses the host’s combat rules.\n\nNormal-combat leap and rush belong in Match rules when hosting.";
-    case "physics":return "Use picks up nearby loose props. Attack or Throw launches a held prop. Existing corpse controls also work with articulated bodies.\n\nOriginal restores normal physics. Cinematic and Chaos affect gameplay; the host chooses online.";
+    case "physics":return "Use picks up nearby loose props. Attack or Throw launches a held prop. Existing corpse controls also work with articulated bodies.\n\nStandard is the default, with stronger knockbacks and lively articulated bodies. Cinematic uses gentler forces. Legacy uses original gameplay physics. The host chooses online.";
     case "enemies":return "Tactical humanoids use spacing, defense and combat moves.\n\nBosses, scripted scenes and other creatures retain their original behavior. Multiplayer bots use host rules.";
     case "connection":return "Adaptive varies a short visual buffer for remote movement.\n\nYour controls remain responsive. Damage and blocking remain host-controlled.\n\nDetailed counters are under About & support → Diagnostics.";
     case "touch":return "Touch controls automatically hide when a controller is connected. The Menu button stays available. Double-tap the center of the right camera stick to jump.\n\nThe layout editor has its own Save layout and Cancel actions.";

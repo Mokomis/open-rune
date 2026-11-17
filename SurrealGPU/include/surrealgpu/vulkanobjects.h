@@ -363,12 +363,12 @@ private:
 class VulkanCommandBuffer
 {
 public:
-	VulkanCommandBuffer(VulkanCommandPool *pool);
+	VulkanCommandBuffer(VulkanCommandPool *pool, VkCommandBufferLevel level = VK_COMMAND_BUFFER_LEVEL_PRIMARY);
 	~VulkanCommandBuffer();
 
 	void SetDebugName(const char *name);
 
-	void begin();
+	void begin(const VkCommandBufferInheritanceInfo* inheritance = nullptr);
 	void end();
 
 	void bindPipeline(VkPipelineBindPoint pipelineBindPoint, VulkanPipeline *pipeline);
@@ -449,7 +449,7 @@ public:
 
 	void SetDebugName(const char *name) { device->SetObjectName(name, (uint64_t)pool, VK_OBJECT_TYPE_COMMAND_POOL); }
 
-	std::unique_ptr<VulkanCommandBuffer> createBuffer();
+	std::unique_ptr<VulkanCommandBuffer> createBuffer(VkCommandBufferLevel level = VK_COMMAND_BUFFER_LEVEL_PRIMARY);
 
 	VkCommandPool pool = VK_NULL_HANDLE;
 
@@ -533,9 +533,9 @@ inline VulkanCommandPool::~VulkanCommandPool()
 	vkDestroyCommandPool(device->device, pool, nullptr);
 }
 
-inline std::unique_ptr<VulkanCommandBuffer> VulkanCommandPool::createBuffer()
+inline std::unique_ptr<VulkanCommandBuffer> VulkanCommandPool::createBuffer(VkCommandBufferLevel level)
 {
-	return std::make_unique<VulkanCommandBuffer>(this);
+	return std::make_unique<VulkanCommandBuffer>(this, level);
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -618,11 +618,11 @@ inline void RenderPassBegin::Execute(VulkanCommandBuffer* cmdbuffer, VkSubpassCo
 
 /////////////////////////////////////////////////////////////////////////////
 
-inline VulkanCommandBuffer::VulkanCommandBuffer(VulkanCommandPool *pool) : pool(pool)
+inline VulkanCommandBuffer::VulkanCommandBuffer(VulkanCommandPool *pool, VkCommandBufferLevel level) : pool(pool)
 {
 	VkCommandBufferAllocateInfo allocInfo = {};
 	allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-	allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+	allocInfo.level = level;
 	allocInfo.commandPool = pool->pool;
 	allocInfo.commandBufferCount = 1;
 
@@ -635,12 +635,13 @@ inline VulkanCommandBuffer::~VulkanCommandBuffer()
 	vkFreeCommandBuffers(pool->device->device, pool->pool, 1, &buffer);
 }
 
-inline void VulkanCommandBuffer::begin()
+inline void VulkanCommandBuffer::begin(const VkCommandBufferInheritanceInfo* inheritance)
 {
 	VkCommandBufferBeginInfo beginInfo = {};
 	beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 	beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-	beginInfo.pInheritanceInfo = nullptr;
+	if (inheritance) beginInfo.flags |= VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT;
+	beginInfo.pInheritanceInfo = inheritance;
 
 	VkResult result = vkBeginCommandBuffer(buffer, &beginInfo);
 	pool->device->CheckVulkanError(result, "Could not begin recording command buffer");

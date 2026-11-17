@@ -1,0 +1,22 @@
+{
+  "parts": [
+    {
+      "file": "open-rune-1.0.0-textures-android-01-of-03.zip",
+      "sha256": "2c343147efccc6020026755d5ba7910adc963528266b1d6ebbe55ba03d34dc08",
+      "bytes": 1835735616
+    },
+    {
+      "file": "open-rune-1.0.0-textures-android-02-of-03.zip",
+      "sha256": "d1f52ee35e3576026f6c21526e80f753361f90be4bfbb85c7369cc21f5546929",
+      "bytes": 1835995807
+    },
+    {
+      "file": "open-rune-1.0.0-textures-android-03-of-03.zip",
+      "sha256": "e3ce59cc9915984edf51f3aefe0e273d3909541def9728565e58e946d61b395e",
+      "bytes": 580199437
+    }
+  ],
+  "pack": "a866b0a4ab6e7e33d167ba748ddabf98eb25744440744d61dbbe4d22259e73ab",
+  "unpacked_bytes": 4249504368,
+  "url": "https://github.com/Mokomis/open-rune/releases/download/v1.0.0/"
+}

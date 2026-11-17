@@ -22,6 +22,8 @@
 #include "Package/Package.h"
 #include <cctype>
 #include <bit>
+#include "CrestWater.h"
+#include <fstream>
 
 VulkanRenderDevice::VulkanRenderDevice(Widget* InViewport)
 {
@@ -128,7 +130,16 @@ VulkanRenderDevice::VulkanRenderDevice(Widget* InViewport)
 		Uploads.reset(new UploadManager(this));
 		CreateShadowImage();
         CreateWaterImage();
+        if(commandline->GetArgInt("","--water-model",1)==3) {
+            Crest=std::make_unique<CrestWater>(Device.get());
+            LogMessage("RUNE_CREST_NATIVE initialized=1 version=4.23.0 fft=128 cascades=16 unity_runtime=0");
+        }
 		DescriptorSets.reset(new DescriptorSetManager(this));
+		SceneStoreOverride = clamp(commandline->GetArgInt("", "--render-scene-stores", -1), -1, 2);
+#ifdef __ANDROID__
+		QualifiedSceneStores = UsesQualifiedShaderDefaults(*Device);
+#endif
+		ProfileSceneStores = commandline->HasArg("", "--frame-benchmark");
 		RenderPasses.reset(new RenderPassManager(this));
 		Framebuffers.reset(new FramebufferManager(this));
         CreateShadowPass();
@@ -190,8 +201,15 @@ VulkanRenderDevice::~VulkanRenderDevice()
 	AlternateBuffers.reset();
 	Textures.reset();
 	Samplers.reset();
+	RecordedScene.reset();
+	if (ProfileSceneStores)
+		LogMessage("RUNE_SCENE_STORES mode=" + std::to_string(SceneStoreMode) +
+			" recorded=" + std::to_string(RecordedSceneSegments) +
+			" color_discard=" + std::to_string(DiscardedSceneColor) +
+			" depth_discard=" + std::to_string(DiscardedSceneDepth));
 	Commands.reset();
 
+    Crest.reset();
 	WaterView.reset(); WaterImage.reset();
     ShadowView.reset(); ShadowImage.reset(); ShadowSampler.reset();
 	Device.reset();
@@ -225,43 +243,14 @@ void VulkanRenderDevice::Flush(bool AllowPrecache)
 	{
         if (ScenePassDeferred && !DrawingShadow && !WaterReflectionActive) StartScenePass();
 		DrawBatch(Commands->GetDrawCommands());
-		Commands->GetDrawCommands()->endRenderPass();
+		EndSceneSegment();
 		SubmitFrame(false, 0, 0, false);
 
 		ClearTextureCache();
         if(DrawingShadow){BeginShadowPass(true);return;}
         if(WaterReflectionActive){BeginWaterPass(true);return;}
 
-		auto cmdbuffer = Commands->GetDrawCommands();
-
-		VkAccessFlags srcColorAccess = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
-		VkAccessFlags dstColorAccess = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
-		VkAccessFlags srcDepthAccess = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-		VkAccessFlags dstDepthAccess = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-		VkPipelineStageFlags srcStages = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-		VkPipelineStageFlags dstStages = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-
-		PipelineBarrier()
-			.AddImage(Textures->Scene->ColorBuffer.get(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, srcColorAccess, dstColorAccess)
-			.AddImage(Textures->Scene->HitBuffer.get(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, srcColorAccess, dstColorAccess)
-			.AddImage(Textures->Scene->DepthBuffer.get(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, srcDepthAccess, dstDepthAccess, VK_IMAGE_ASPECT_DEPTH_BIT)
-			.Execute(cmdbuffer, srcStages, dstStages);
-
-		PrepareResolveTarget(cmdbuffer, true);
-		RenderPassBegin()
-			.RenderPass(RenderPasses->GetScenePass(true, DiscardHitThisFrame, OmitHitThisFrame))
-			.Framebuffer(Framebuffers->GetSceneFramebuffer(OmitHitThisFrame))
-			.RenderArea(0, 0, Textures->Scene->Width, Textures->Scene->Height)
-			.AddClearColor(0.0f, 0.0f, 0.0f, 0.0f)
-			.AddClearColor(0.0f, 0.0f, 0.0f, 0.0f)
-			.AddClearDepthStencil(1.0f, 0)
-			.Execute(cmdbuffer);
-
-		VkBuffer vertexBuffers[] = { Buffers->SceneVertexBuffer->buffer };
-		VkDeviceSize offsets[] = { 0 };
-		cmdbuffer->bindVertexBuffers(0, 1, vertexBuffers, offsets);
-		cmdbuffer->bindIndexBuffer(Buffers->SceneIndexBuffer->buffer, 0, VK_INDEX_TYPE_UINT32);
-		cmdbuffer->setViewport(0, 1, &viewportdesc);
+		ResumeScenePass();
 	}
 	else
 	{
@@ -287,6 +276,12 @@ void VulkanRenderDevice::Lock(vec4 InFlashScale, vec4 InFlashFog, vec4 ScreenCle
         PipelineBarrier().AddImage(WaterImage.get(),VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,0,VK_ACCESS_SHADER_READ_BIT)
             .Execute(Commands->GetDrawCommands(),VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
         WaterInitialized=true;
+    }
+    if(Crest && !Crest->Initialized) {
+        Commands->SetProfilePass(CommandBufferManager::GpuPass::Water);
+        Crest->Update(Commands->GetDrawCommands(),WaterViewTime);
+        if(Crest->Frames==1 || (commandline->HasArg("","--trace-rune-water") && Crest->Frames%120==0))
+            LogMessage("RUNE_CREST_FFT frame="+std::to_string(Crest->Frames)+" time="+std::to_string(WaterViewTime));
     }
     HitData = InHitData;
 	DiscardHitThisFrame = DiscardUnusedHit && !InHitData;
@@ -319,6 +314,11 @@ void VulkanRenderDevice::Lock(vec4 InFlashScale, vec4 InFlashFog, vec4 ScreenCle
 #ifdef __ANDROID__
 		LogMessage("ANDROID_RENDER_TARGET size=" + std::to_string(renderWidth) + "x" + std::to_string(renderHeight) + " scale=" + std::to_string(ResolutionScale) + " samples=" + std::to_string(Textures->Scene->SceneSamples));
 #endif
+		// Native OPPO comparisons favor the final-store optimization at 4x.
+		// Other sample counts and drivers keep their original recording path.
+		const bool defaultDiscard = QualifiedSceneStores && UsesInPassResolve() &&
+			Textures->Scene->SceneSamples == VK_SAMPLE_COUNT_4_BIT;
+		SceneStoreMode = SceneStoreOverride >= 0 ? SceneStoreOverride : int(defaultDiscard);
 		RenderPasses->CreateRenderPass();
 		RenderPasses->CreatePipelines();
 		Framebuffers->CreateSceneFramebuffer();
@@ -326,6 +326,7 @@ void VulkanRenderDevice::Lock(vec4 InFlashScale, vec4 InFlashFog, vec4 ScreenCle
 	}
 
 	auto cmdbuffer = Commands->GetDrawCommands();
+    if(Crest)Crest->InitializeCapture(cmdbuffer);
 
 	// Special thanks to Khronos and AMD for making this absolute hell to use.
 	VkAccessFlags srcColorAccess = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
@@ -352,31 +353,87 @@ void VulkanRenderDevice::Lock(vec4 InFlashScale, vec4 InFlashFog, vec4 ScreenCle
 
 void VulkanRenderDevice::StartScenePass()
 {
-    Commands->SetProfilePass(CommandBufferManager::GpuPass::Scene);
-    auto cmdbuffer = Commands->GetDrawCommands();
-	PrepareResolveTarget(cmdbuffer, false);
+	BeginSceneSegment(false);
+}
+
+void VulkanRenderDevice::BeginSceneRenderPass(VulkanCommandBuffer* commands, VulkanRenderPass* pass, VkSubpassContents contents)
+{
+	PrepareResolveTarget(commands, SceneContinuation);
 	RenderPassBegin()
-		.RenderPass(RenderPasses->GetScenePass(false, DiscardHitThisFrame, OmitHitThisFrame))
+		.RenderPass(pass)
 		.Framebuffer(Framebuffers->GetSceneFramebuffer(OmitHitThisFrame))
 		.RenderArea(0, 0, Textures->Scene->Width, Textures->Scene->Height)
 		.AddClearColor(DeferredScreenClear.x, DeferredScreenClear.y, DeferredScreenClear.z, DeferredScreenClear.w)
 		.AddClearColor(0.0f, 0.0f, 0.0f, 0.0f)
 		.AddClearDepthStencil(1.0f, 0)
-		.Execute(cmdbuffer);
+		.Execute(commands, contents);
+}
 
+void VulkanRenderDevice::BindSceneBuffers(VulkanCommandBuffer* commands)
+{
 	VkBuffer vertexBuffers[] = { Buffers->SceneVertexBuffer->buffer };
 	VkDeviceSize offsets[] = { 0 };
-	cmdbuffer->bindVertexBuffers(0, 1, vertexBuffers, offsets);
-	cmdbuffer->bindIndexBuffer(Buffers->SceneIndexBuffer->buffer, 0, VK_INDEX_TYPE_UINT32);
+	commands->bindVertexBuffers(0, 1, vertexBuffers, offsets);
+	commands->bindIndexBuffer(Buffers->SceneIndexBuffer->buffer, 0, VK_INDEX_TYPE_UINT32);
+}
 
-    ScenePassDeferred = false;
+void VulkanRenderDevice::BeginSceneSegment(bool continuation)
+{
+	Commands->SetProfilePass(CommandBufferManager::GpuPass::Scene);
+	SceneContinuation = continuation;
+	auto* pass = RenderPasses->GetScenePass(continuation, DiscardHitThisFrame, OmitHitThisFrame);
+	if (SceneStoreMode && OmitHitThisFrame)
+	{
+		// Record a segment before deciding whether another pass will load it.
+		// A water capture or an overflow flush keeps the original store ops.
+		RecordedScene = Commands->BeginSceneCommands(pass, Framebuffers->GetSceneFramebuffer(true));
+		BindSceneBuffers(RecordedScene.get());
+		if (viewportdesc.width > 0.0f && viewportdesc.height > 0.0f)
+			RecordedScene->setViewport(0, 1, &viewportdesc);
+	}
+	else
+	{
+		auto* commands = Commands->GetDrawCommands();
+		BeginSceneRenderPass(commands, pass, VK_SUBPASS_CONTENTS_INLINE);
+		BindSceneBuffers(commands);
+		if (continuation) commands->setViewport(0, 1, &viewportdesc);
+	}
+	ScenePassDeferred = false;
+}
+
+void VulkanRenderDevice::EndSceneSegment(bool final)
+{
+	auto* commands = Commands->GetDrawCommands();
+	if (RecordedScene)
+	{
+		auto* pass = RenderPasses->GetScenePass(SceneContinuation, DiscardHitThisFrame, OmitHitThisFrame);
+		if (final && SceneStoreMode == 1)
+		{
+			const bool needsDepth = AmbientOcclusionMode() != 0;
+			auto* optimized = needsDepth ? RenderPasses->Scene.FinalNoHitKeepDepth[SceneContinuation].get() :
+				RenderPasses->Scene.FinalNoHit[SceneContinuation].get();
+			if (optimized)
+			{
+				pass = optimized;
+				DiscardedSceneColor += UsesInPassResolve();
+				DiscardedSceneDepth += !needsDepth;
+			}
+		}
+
+		RecordedScene->end();
+		BeginSceneRenderPass(commands, pass, VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS);
+		commands->executeCommands(1, &RecordedScene->buffer);
+		Commands->FrameDeleteList->sceneCommands.push_back(std::move(RecordedScene));
+		++RecordedSceneSegments;
+	}
+	commands->endRenderPass();
 }
 
 void VulkanRenderDevice::FlushDrawBatchAndWait()
 {
     if (ScenePassDeferred && !DrawingShadow && !WaterReflectionActive) StartScenePass();
 	DrawBatch(Commands->GetDrawCommands());
-	Commands->GetDrawCommands()->endRenderPass();
+	EndSceneSegment();
 	SubmitFrame(false, 0, 0, false);
 
 	if (DrawingShadow) { BeginShadowPass(true); return; }
@@ -386,7 +443,6 @@ void VulkanRenderDevice::FlushDrawBatchAndWait()
 
 void VulkanRenderDevice::ResumeScenePass()
 {
-    Commands->SetProfilePass(CommandBufferManager::GpuPass::Scene);
     auto drawcommands = Commands->GetDrawCommands();
 
     VkAccessFlags srcColorAccess = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
@@ -402,26 +458,15 @@ void VulkanRenderDevice::ResumeScenePass()
 		.AddImage(Textures->Scene->DepthBuffer.get(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, srcDepthAccess, dstDepthAccess, VK_IMAGE_ASPECT_DEPTH_BIT)
 		.Execute(drawcommands, srcStages, dstStages);
 
-	PrepareResolveTarget(drawcommands, true);
-	RenderPassBegin()
-		.RenderPass(RenderPasses->GetScenePass(true, DiscardHitThisFrame, OmitHitThisFrame))
-		.Framebuffer(Framebuffers->GetSceneFramebuffer(OmitHitThisFrame))
-		.RenderArea(0, 0, Textures->Scene->Width, Textures->Scene->Height)
-		.Execute(drawcommands);
-
-	VkBuffer vertexBuffers[] = { Buffers->SceneVertexBuffer->buffer };
-	VkDeviceSize offsets[] = { 0 };
-	drawcommands->bindVertexBuffers(0, 1, vertexBuffers, offsets);
-	drawcommands->bindIndexBuffer(Buffers->SceneIndexBuffer->buffer, 0, VK_INDEX_TYPE_UINT32);
-	drawcommands->setViewport(0, 1, &viewportdesc);
+	BeginSceneSegment(true);
 }
 
 void VulkanRenderDevice::Unlock(bool Blit)
 {
     if (ScenePassDeferred) StartScenePass();
 	DrawBatch(Commands->GetDrawCommands());
-	Commands->GetDrawCommands()->endRenderPass();
-	if ((WorldFeatures & 49152) && !IsOrtho)
+	EndSceneSegment(true);
+	if (AmbientOcclusionMode() != 0)
 	{
 		PipelineBarrier().AddImage(Textures->Scene->DepthBuffer.get(),
 			VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -519,6 +564,7 @@ void VulkanRenderDevice::DrawBatch(VulkanCommandBuffer* cmdbuffer)
 	if (icount > 0)
 	{
         if (ScenePassDeferred && !DrawingShadow && !WaterReflectionActive) StartScenePass();
+		if (RecordedScene) cmdbuffer = RecordedScene.get();
 		if (viewportdesc.minDepth != Batch.Pipeline->MinDepth || viewportdesc.maxDepth != Batch.Pipeline->MaxDepth)
 		{
 			viewportdesc.minDepth = Batch.Pipeline->MinDepth;
@@ -530,7 +576,11 @@ void VulkanRenderDevice::DrawBatch(VulkanCommandBuffer* cmdbuffer)
 		cmdbuffer->bindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, Batch.Pipeline->Pipeline.get());
 		cmdbuffer->bindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, DescriptorSets->GetBindlessSet());
 		cmdbuffer->bindDescriptorSet(VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 1, WaterReflectionActive?Buffers->ReflectionLightSet.get():Buffers->MeshLightSet.get());
-		cmdbuffer->pushConstants(layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(ScenePushConstants), &pushconstants);
+		const vec3 waveCamera=Buffers->ShadowLighting->CameraPosition.xyz();
+        pushconstants.padding1=std::bit_cast<uint32_t>(waveCamera.x);
+        pushconstants.padding2=std::bit_cast<uint32_t>(waveCamera.y);
+        pushconstants.padding3=std::bit_cast<uint32_t>(UsesCrestWater()?1.f:0.f);
+        cmdbuffer->pushConstants(layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(ScenePushConstants), &pushconstants);
 		cmdbuffer->setBlendConstants(Batch.BlendConstants);
 		cmdbuffer->drawIndexed((uint32_t)icount, 1, (uint32_t)Batch.SceneIndexStart, 0, 0);
 		Batch.SceneIndexStart = SceneIndexPos;
@@ -562,7 +612,8 @@ void VulkanRenderDevice::DrawComplexSurface(SceneNode* Frame, SurfaceInfo& Surfa
     bool water=Facet.Water && (WorldFeatures&2048) && Buffers->ShadowLighting->WaterParameters.z>0.5f &&
         Facet.VertexCount>0 && (UsesModernWater() || std::abs(Facet.Vertices[0].z-Buffers->ShadowLighting->WaterParameters.y)<1.0f);
     bool opaqueWater=water && !(Surface.PolyFlags&(PF_Translucent|PF_Modulated));
-    if(water && !opaqueWater) PolyFlags=(PolyFlags & ~(PF_Translucent|PF_Modulated|PF_Masked|PF_Occlude))|PF_Highlighted;
+    if(water && UsesCrestWater())PolyFlags=(PolyFlags&~(PF_Translucent|PF_Modulated|PF_Masked|PF_Highlighted))|PF_Occlude;
+    else if(water && !opaqueWater) PolyFlags=(PolyFlags & ~(PF_Translucent|PF_Modulated|PF_Masked|PF_Occlude))|PF_Highlighted;
     CachedTexture* tex = Textures->GetTexture(Surface.Texture, !!(PolyFlags & PF_Masked));
 	CachedTexture* lightmap = Textures->GetTexture(Surface.LightMap, false);
 	CachedTexture* macrotex = Textures->GetTexture(Surface.MacroTexture, false);
@@ -660,10 +711,33 @@ void VulkanRenderDevice::DrawComplexSurface(SceneNode* Frame, SurfaceInfo& Surfa
         color=vec4(dot(light,tangent),dot(light,bitangent),dot(light,normal),1.0f);
     }
 
-	auto pts = Facet.Vertices;
-	uint32_t vcount = Facet.VertexCount;
-
-	uint32_t icount = (vcount - 2) * 3;
+    if(water && Crest && Crest->Frames==120 && commandline->HasArg("","--trace-rune-water")) {
+        std::string line="RUNE_CREST_SURFACE texture="+(Surface.Texture && Surface.Texture->Texture?Surface.Texture->Texture->Name.ToString():std::string("none"));
+        for(int i=0;i<Facet.VertexCount;++i)line+=" p="+std::to_string(Facet.Vertices[i].x)+","+std::to_string(Facet.Vertices[i].y)+","+std::to_string(Facet.Vertices[i].z)+","+std::to_string(Facet.WaterDepth?Facet.WaterDepth[i]:-1.f);
+        LogMessage(line);
+    }
+        const bool crestSurface=water && UsesCrestWater();
+        const vec3 crestViewCamera=CurrentLightingCamera;
+        float crestMainView=0;
+        if(crestSurface) {
+            // The shadow UBO is GPU-mapped memory: read it once per surface,
+            // never inside the streamed vertex loop.
+            vec3 delta=crestViewCamera-Buffers->ShadowLighting->CameraPosition.xyz();
+            crestMainView=dot(delta,delta)<.01f?1.f:0.f;
+        }
+    const bool displaceCrest = crestSurface && crestMainView > .5f && !StableCrestSurface &&
+        crestViewCamera.z > Facet.Vertices[0].z - 24.f;
+    if(crestSurface && Crest->Frames==120 && commandline->HasArg("","--trace-rune-water"))
+        LogMessage("RUNE_CREST_CARRIER main="+std::to_string(crestMainView)+" plane="+std::to_string(Facet.Vertices[0].z)+" camera_z="+std::to_string(crestViewCamera.z)+" displacement="+std::to_string(displaceCrest));
+    // Rotate the miniature skybox ray into the main world's frame. Shading
+    // projects that ray onto the real water height; horizon geometry stays flat.
+    const mat3 skyWaterToMain=crestSurface && crestMainView<.5f ? WaterViewToWorld*mat3(Frame->WorldToView) : mat3(mat4::identity());
+    const vec3 mainWaterCamera=crestSurface?Buffers->ShadowLighting->CameraPosition.xyz():vec3(0);
+    const CrestWater::Mesh* crestMesh = displaceCrest ? &Crest->Tessellate(Facet, CurrentLightingCamera) : nullptr;
+    auto pts=crestMesh?crestMesh->Points.data():Facet.Vertices;
+    uint32_t vcount=crestMesh?uint32_t(crestMesh->Points.size()):Facet.VertexCount;
+    if(vcount<3)return;
+    uint32_t icount=crestMesh?vcount:(vcount-2)*3;
 	auto alloc = ReserveVertices(vcount, icount);
 	if (alloc.vptr)
 	{
@@ -759,6 +833,7 @@ void VulkanRenderDevice::DrawComplexSurface(SceneNode* Frame, SurfaceInfo& Surfa
 		uint32_t* iptr = alloc.iptr;
 		uint32_t vpos = alloc.vpos;
 
+
 		for (uint32_t i = 0; i < vcount; i++)
 		{
 			vec3 point = pts[i];
@@ -777,13 +852,19 @@ void VulkanRenderDevice::DrawComplexSurface(SceneNode* Frame, SurfaceInfo& Surfa
 			vptr->TexCoord3.t = (v - MacroVPan) * MacroVMult;
 			vptr->TexCoord4.s = (u - DetailUPan) * DetailUMult;
 			vptr->TexCoord4.t = (v - DetailVPan) * DetailVMult;
+            if(crestSurface) {
+                vptr->Normal=crestMainView>.5f?crestViewCamera:skyWaterToMain*(point-crestViewCamera);
+                vptr->TexCoord3.x=crestMainView;
+                vptr->TexCoord3.y = crestMainView > .5f ? float(displaceCrest) : mainWaterCamera.z;
+            }
 			vptr->Color = color;
-            if(water && UsesModernWater()) vptr->Color.w=Facet.WaterDepth ? Facet.WaterDepth[i] : 512.0f;
+            if(water && UsesModernWater()) vptr->Color.w=crestMesh ? crestMesh->Depth[i] : Facet.WaterDepth ? Facet.WaterDepth[i] : 512.0f;
 			vptr->TextureBinds = textureBinds;
 			vptr++;
 		}
 
-		for (uint32_t i = vpos + 2; i < vpos + vcount; i++)
+        if(crestMesh) { for(uint32_t i=0;i<vcount;++i)*(iptr++)=vpos+i; }
+        else for (uint32_t i = vpos + 2; i < vpos + vcount; i++)
 		{
 			*(iptr++) = vpos;
 			*(iptr++) = i - 1;
@@ -1146,7 +1227,7 @@ void VulkanRenderDevice::ClearZ()
 	rect.layerCount = 1;
 	rect.rect.extent.width = WaterReflectionActive?WaterSize:Textures->Scene->Width;
 	rect.rect.extent.height = WaterReflectionActive?WaterSize:Textures->Scene->Height;
-	Commands->GetDrawCommands()->clearAttachments(1, &attachment, 1, &rect);
+	(RecordedScene ? RecordedScene.get() : Commands->GetDrawCommands())->clearAttachments(1, &attachment, 1, &rect);
 }
 
 void VulkanRenderDevice::PushHit(const uint8_t* Data, int Count)
@@ -1314,6 +1395,30 @@ void VulkanRenderDevice::ReadPixels(TextureColor* Pixels)
 	uint8_t* pixels = (uint8_t*)staging->Map(0, w * h * 4);
 	memcpy(data, pixels, w * h * 4);
 	staging->Unmap();
+    if(Crest && commandline->HasArg("","--crest-dump")) {
+        if(!commandline->HasArg("","--save-directory") || !commandline->HasArg("","--maxframes"))throw std::runtime_error("Crest readback requires an isolated bounded run");
+        const size_t bytes=CrestWater::Size*CrestWater::Size*CrestWater::Cascades*4*sizeof(float);
+        const size_t foamBytes=bytes/4;
+        auto readback=BufferBuilder().Size(bytes*2+foamBytes).Usage(VK_BUFFER_USAGE_TRANSFER_DST_BIT,VMA_MEMORY_USAGE_GPU_TO_CPU).Create(Device.get());
+        auto cmd=Commands->GetDrawCommands();
+        PipelineBarrier barrier;
+        for(int i:{0,7})barrier.AddImage(Crest->Images[i].get(),VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_ACCESS_SHADER_WRITE_BIT|VK_ACCESS_SHADER_READ_BIT,VK_ACCESS_TRANSFER_READ_BIT,VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,CrestWater::Cascades);
+        barrier.AddImage(Crest->FoamImages[0].get(),VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_ACCESS_SHADER_WRITE_BIT|VK_ACCESS_SHADER_READ_BIT,VK_ACCESS_TRANSFER_READ_BIT,VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,CrestWater::Cascades);
+        barrier.Execute(cmd,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT|VK_PIPELINE_STAGE_VERTEX_SHADER_BIT|VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT);
+        VkBufferImageCopy copy{};copy.imageExtent={CrestWater::Size,CrestWater::Size,1};copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,CrestWater::Cascades};
+        cmd->copyImageToBuffer(Crest->Images[0]->image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,readback->buffer,1,&copy);
+        copy.bufferOffset=bytes;cmd->copyImageToBuffer(Crest->Images[7]->image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,readback->buffer,1,&copy);
+        copy.bufferOffset=bytes*2;cmd->copyImageToBuffer(Crest->FoamImages[0]->image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,readback->buffer,1,&copy);
+        PipelineBarrier restore;
+        restore.AddImage(Crest->FoamImages[0].get(),VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,VK_ACCESS_TRANSFER_READ_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,CrestWater::Cascades);
+        for(int i:{0,7})restore.AddImage(Crest->Images[i].get(),VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,VK_ACCESS_TRANSFER_READ_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,CrestWater::Cascades);
+        restore.Execute(cmd,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT|VK_PIPELINE_STAGE_VERTEX_SHADER_BIT|VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+        SubmitFrame(false,0,0,false);
+        auto values=static_cast<const char*>(readback->Map(0,bytes*2+foamBytes));
+        std::ofstream file(commandline->GetArg("","--crest-dump"),std::ios::binary);file.write(values,bytes*2);if(!file)throw std::runtime_error("Crest readback write failed");
+        std::ofstream foamFile(commandline->GetArg("","--crest-dump")+".foam",std::ios::binary);foamFile.write(values+bytes*2,foamBytes);if(!foamFile)throw std::runtime_error("Crest foam readback write failed");readback->Unmap();
+        LogMessage("RUNE_CREST_READBACK bytes="+std::to_string(bytes*2)+" time="+std::to_string(Crest->LastTime)+" surfaces="+std::to_string(Crest->Meshes.size()));
+    }
 }
 
 void VulkanRenderDevice::EndFlash()
@@ -1379,7 +1484,7 @@ void VulkanRenderDevice::SetSceneNode(SceneNode* Frame)
 	if(WaterReflectionActive) { viewportdesc.x=viewportdesc.y=0;viewportdesc.width=viewportdesc.height=WaterSize; }
 	viewportdesc.minDepth = DrawingShadow ? 0.0f : 0.1f;
 	viewportdesc.maxDepth = 1.0f;
-	commands->setViewport(0, 1, &viewportdesc);
+	(RecordedScene ? RecordedScene.get() : commands)->setViewport(0, 1, &viewportdesc);
 
 	pushconstants.objectToProjection = mat4::frustum(-RProjZ, RProjZ, -Aspect * RProjZ, Aspect * RProjZ, 1.0f, 32768.0f, handedness::left, clipzrange::zero_positive_w);
 
@@ -1755,7 +1860,7 @@ PresentPushConstants VulkanRenderDevice::GetPresentPushConstants()
 	pushconstants.Upscale = UpscaleSGSR && ResolutionScale < 1.0f ? 1 : 0;
 	pushconstants.AdaptiveSharpness = IsOrtho || pushconstants.Upscale ? 0.0f : clamp(AdaptiveSharpness, 0.0f, 1.0f);
 	pushconstants.ShadowLift = IsOrtho ? 0.0f : clamp(ShadowLift, 0.0f, 0.65f);
-	pushconstants.AmbientOcclusion = IsOrtho ? 0.0f : ((WorldFeatures >> 14) & 3) * 0.20f;
+	pushconstants.AmbientOcclusion = AmbientOcclusionMode() * 0.20f;
 	pushconstants.AmbientSamples = 4;
     bool underwater=UsesModernWater() && WaterSubmerged && !RuneMenu::Open.load() && commandline->GetArgInt("","--water-underwater",1)!=0;
     pushconstants.Underwater=vec4(WaterViewTime,underwater?1.0f:0.0f,0,0);

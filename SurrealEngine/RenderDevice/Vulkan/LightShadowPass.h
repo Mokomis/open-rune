@@ -64,7 +64,7 @@ bool VulkanRenderDevice::BeginLightShadow(SceneNode* frame, const vec3& light, c
 {
     if (!(WorldFeatures & 512) || DrawingShadow || radius < 2.0f || slot < 0 || slot >= RuneShadows::Capacity) return false;
     DrawBatch(Commands->GetDrawCommands());
-    if (!ScenePassDeferred && !BetweenShadows) Commands->GetDrawCommands()->endRenderPass();
+    if (!ScenePassDeferred && !BetweenShadows) EndSceneSegment();
     const bool reusePass=BetweenShadows && GroupShadowPasses;
     DrawingShadow = true; BetweenShadows = false; ShadowSlot = slot;
     Buffers->ShadowLighting->Shadows[slot].WorldToShadow = frame->Projection * frame->WorldToView;

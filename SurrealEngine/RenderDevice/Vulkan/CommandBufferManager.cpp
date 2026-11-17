@@ -303,6 +303,16 @@ VulkanCommandBuffer* CommandBufferManager::GetDrawCommands()
 	return DrawCommands.get();
 }
 
+std::unique_ptr<VulkanCommandBuffer> CommandBufferManager::BeginSceneCommands(VulkanRenderPass* pass, VulkanFramebuffer* framebuffer)
+{
+	auto commands = CommandPool->createBuffer(VK_COMMAND_BUFFER_LEVEL_SECONDARY);
+	VkCommandBufferInheritanceInfo inheritance = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO };
+	inheritance.renderPass = pass->renderPass;
+	inheritance.framebuffer = framebuffer->framebuffer;
+	commands->begin(&inheritance);
+	return commands;
+}
+
 void CommandBufferManager::SetProfilePass(GpuPass pass)
 {
 	if (!ProfilePasses || !ProfileTimestamps) return;

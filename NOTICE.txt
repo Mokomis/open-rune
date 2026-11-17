@@ -59,3 +59,8 @@ Rune game maps, models, textures, sounds, music and compiled game scripts are
 separately owned proprietary content. They are not licensed by these notices
 and must not be bundled with this engine distribution without permission.
 Users must supply their own lawfully obtained game files.
+
+Experimental native Crest water uses adapted spectrum/FFT and foam logic from
+Crest Ocean System 4.23.0, Copyright (c) 2019 Wave Harmonic and contributors,
+under the MIT license. See Crest-MIT.txt and Crest-provenance.txt. This is a
+native Open Rune adaptation, not the Unity renderer or commercial Crest 5.

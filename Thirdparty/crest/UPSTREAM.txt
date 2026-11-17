@@ -1,0 +1,8 @@
+Crest Ocean System 4.23.0
+https://github.com/wave-harmonic/crest
+Commit db0658ff0b2e93e4a9e28cc2867509658b0ecc00
+MIT, Copyright 2019 Wave Harmonic and contributors.
+Native Vulkan adaptations: explicit descriptors/push constants; computed butterfly weights in place of the identical Unity lookup; spectrum controls evaluated from the upstream default curve; native scheduling and bounded Rune surface rendering. Original sources and reproducible compile helper included. This is not Crest 5 or its Unity renderer.
+
+Foam: UpdateFoam.compute from the same pinned release. Native version retains time-scaled decay, flow advection and Jacobian compression. Rune-specific depth composition supplies shoreline coverage. The Unity camera-following LOD migration/prewarming and Unity material/texture APIs are not used.
+FFT output is mip filtered for screen-space normals; a near-view bounded mesh fades geometric displacement into the coarse far surface. Refraction resolves/copies the existing scene once rather than rendering a mirrored scene.

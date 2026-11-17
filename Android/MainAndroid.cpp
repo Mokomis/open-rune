@@ -143,6 +143,10 @@ extern "C" JNIEXPORT jlong JNICALL Java_org_runeclassic_port_MainActivity_native
     return static_cast<jlong>(VisualComparison::ScalingSnapshot.load());
 }
 
+extern "C" JNIEXPORT jboolean JNICALL Java_org_runeclassic_port_MainActivity_nativeSetPlayerName(JNIEnv* env,jclass,jstring value){
+    if(!value)return false;const char* text=env->GetStringUTFChars(value,nullptr);if(!text)return false;bool ok=RuneMultiplayer::SetPlayerName(text);env->ReleaseStringUTFChars(value,text);return ok;
+}
+
 // Setting IDs are shared with RuneSettings.java. Only atomics cross JNI.
 extern "C" JNIEXPORT void JNICALL Java_org_runeclassic_port_MainActivity_nativeMenuSetting(JNIEnv*, jclass, jint id, jint value)
 {
@@ -162,13 +166,14 @@ extern "C" JNIEXPORT void JNICALL Java_org_runeclassic_port_MainActivity_nativeM
     case 13: RuneTactics::Enabled.store(value != 0); break;
     case 21: RuneBloodlust::AllowNormal.store(value != 0); break;
     case 22: RuneMultiplayer::Diagnostics.store(value != 0); break;
+    case 27: RuneMultiplayer::ShowPlayerNames.store(value != 0); break;
     case 23: RuneMultiplayer::AdaptiveSmoothing.store(value != 0); break;
     case 15: RuneBloodlust::Enabled.store(value != 0); break;
     case 16: RuneVisualEffects::Enabled.store(value != 0); break;
     case 24: RuneGore::Enabled.store(value != 0); break;
     case 26: RuneBattleLaws::Campaign=uint32_t(value)&RuneBattleLaws::All&~RuneBattleLaws::Leap;break;
     case 25: RunePhysics::RequestedMode=std::clamp((int)value,0,2); break;
-    case 18: RuneSnow::Mode.store(std::clamp((int)value,0,2)); break;
+    case 18: RuneSnow::Mode.store(RuneSnow::ClampMode((int)value)); break;
     case 19: case 20: {
         openrune::CharacterChoice choice{uint8_t(value&255),uint8_t((value>>8)&255)};
         if((id==20 && value==-1) || (value>=0 && value<=65535 && openrune::validCharacter(choice)))
@@ -177,7 +182,7 @@ extern "C" JNIEXPORT void JNICALL Java_org_runeclassic_port_MainActivity_nativeM
     }
     case 17: RuneMenu::Covered.store(value != 0); break;
     case 14: RuneDualWield::Enabled.store(value != 0); break;
-    case 7: RuneMenu::Difficulty.store(std::clamp((int)value,0,3)); break;
+    case 7: RuneMenu::Difficulty.store(std::clamp((int)value,-2,3)); break;
     }
 }
 extern "C" JNIEXPORT jint JNICALL Java_org_runeclassic_port_MainActivity_nativeBloodlustMoves(JNIEnv*,jclass) {return RuneCombat::Ready.load()?RuneBloodlust::ReadyMask.load():0;}

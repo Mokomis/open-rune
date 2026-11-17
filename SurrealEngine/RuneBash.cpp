@@ -1,5 +1,6 @@
 #include "RuneBattleLaws.h"
 #include "Precomp.h"
+#include "RuneSpider.h"
 #include "RunePhysics.h"
 #include "RuneBash.h"
 #include "RuneDualWield.h"
@@ -113,6 +114,38 @@ void CommitImpact(UPawn* attacker,UPawn* target,bool blocked)
     attacker->RuneBashHits++;if(blocked)attacker->RuneBashBlocks++;
     LogMessage("RUNE_BASH_HIT attacker="+attacker->Class->Name.ToString()+" target="+target->Class->Name.ToString()+" blocked="+std::to_string(blocked)+" stagger="+std::to_string(stagger)+" resistant="+std::to_string(resistant)+" health_before="+std::to_string(before)+" health_after="+std::to_string(target->Health()));
 }
+bool DamageReaction(UPawn* target,UPawn* instigator,int healthLost) {
+    // Original damage can mark a grounded pawn Falling before the next landing
+    // tick. Recognize that contact without turning a genuinely airborne hit
+    // into a frozen standing animation.
+    bool grounded=target && target->Physics()==PHYS_Walking;
+    if(target && target->Physics()==PHYS_Falling && std::abs(target->Velocity().z)<160.f) {
+        vec3 hit,normal;auto at=target->Location();
+        grounded=target->Trace(hit,normal,at-vec3(0,0,target->CollisionHeight()+6.f),at,false,vec3(target->CollisionRadius()*.5f,target->CollisionRadius()*.5f,0)) && normal.z>.7f;
+    }
+    // Committed health loss only: shield contacts, zero-damage hits and lethal
+    // hits never start a stagger. Share bash's immunity to prevent stun chains.
+    if(!engine || !engine->LaunchInfo.IsRune() || RunePhysics::RequestedMode.load()==0 ||
+       !Alive(target) || !Alive(instigator) || target==instigator || target->NetworkReplica ||
+       healthLost<18 || target->RuneBashImmunity>0 || target->RuneBashPhase ||
+       !grounded || (!CombatState(target) && target->GetStateName()!="Pain") ||
+       RunePhysics::Controls(target) || RunePhysics::Carrying(target) || RuneCorpse::Busy(target) ||
+       RuneBloodlust::Busy(target) || target->RuneKickActive ||
+       (target->HasProperty("bIsBoss") && target->GetBool("bIsBoss")) || target->Mass()>200 ||
+       !Sequence(target,Stagger))return false;
+    target->RuneBashImmunity=2.f;
+    target->Dual.guard=false;
+    // Keep the original directional pain clip when the damage script chose one.
+    auto animation=target->AnimSequence();
+    if(animation.ToString().find("pain")==std::string::npos || !Sequence(target,animation))animation=Stagger;
+    Commit(target,3,animation);
+    // Damage's Pain state can leave NextState unset. The new short stagger
+    // must always return to live locomotion rather than strand a pawn in None.
+    target->NextState()=target->IsA("RunePlayer")?"PlayerWalking":"Fighting";
+    PresentImpact(target,true);
+    LogMessage("RUNE_DAMAGE_STAGGER actor="+target->Name.ToString()+" damage="+std::to_string(healthLost));
+    return true;
+}
 void PresentImpact(UPawn* target,bool staggered) {
     if(!Alive(target) || !engine || !engine->LevelInfo)return;
     target->RuneBashImpactAt=engine->LevelInfo->TimeSeconds();
@@ -145,6 +178,7 @@ void ApplyPose(const USkelModel& model,UActor* actor,Array<RuneJointPose>& pose)
     }
 }
 bool Compatible(UPawn* p) {
+    if(RuneSpider::Busy(p))return false;
     if(!RuneBattleLaws::Enabled(RuneBattleLaws::Bash,Enabled.load()))return false;
     return engine->LaunchInfo.IsRune() && Alive(p) && (p->IsA("RunePlayer") || p->IsA("ScriptPawn")) && Sequence(p,Strike);
 }
@@ -173,8 +207,17 @@ void Tick(UPawn* p,float elapsed) {
     bool pending=p->RuneBashPending;
     p->RuneBashCooldown=std::max(0.0f,p->RuneBashCooldown-elapsed);
     p->RuneBashImmunity=std::max(0.0f,p->RuneBashImmunity-elapsed);
+    if(RuneSpider::Busy(p))return;
+    // A subsequent full knockdown supersedes the cosmetic/short stagger. Its
+    // physics recovery must keep ownership of the actor state.
+    if(p->RuneBashPhase==3 && RunePhysics::Controls(p))p->RuneBashPhase=0;
     if(p->RuneBashPhase) {
         p->RuneBashAge+=elapsed;
+        if(p->RuneBashPhase==3 && Alive(p) && p->RuneBashAge>=.4f &&
+           (p->GetStateName()=="Uninterrupted" || p->GetStateName().IsNone() || p->GetStateName()=="Pain")) {
+            p->GotoState(p->IsA("RunePlayer")?"PlayerWalking":"Fighting","Begin");
+            if(auto* proxy=p->GetUObject("AnimProxy"))proxy->GotoState("Idle","Begin");
+        }
         if(!Alive(p) || p->GetStateName()!="Uninterrupted") {
             if(p->RuneBashPhase==2)LogMessage("RUNE_BASH_STUN_END actor="+p->Class->Name.ToString()+" seconds="+std::to_string(p->RuneBashAge)+" state="+p->GetStateName().ToString());
             p->RuneBashPhase=0;p->RuneBashPending=false;
@@ -198,16 +241,18 @@ bool Threat(UObject* observer) {
 bool PrepareAnimation(UActor* actor,const NameString& sequence,float& rate,float& tween) {
     if(!engine->LaunchInfo.IsRune())return false;
     auto* p=Owner(actor);
-    if(!p || !p->RuneBashPhase || sequence!=(p->RuneBashPhase==1?Strike:Stagger))return false;
+    if(!p || !p->RuneBashPhase)return false;
+    if(p->RuneBashPhase==3 ? sequence.ToString().find("pain")==std::string::npos : sequence!=(p->RuneBashPhase==1?Strike:Stagger))return false;
     auto* seq=Sequence(p,sequence);if(!seq)return false;
     // Original Uninterrupted state owns recovery; only these two moves are retimed.
-    tween=p->RuneBashPhase==1?.22f:.1f;
-    rate=(seq->NumFrames-1)/(seq->Rate*(p->RuneBashPhase==1?.43f:.25f));
+    tween=p->RuneBashPhase==1?.22f:p->RuneBashPhase==3?.06f:.1f;
+    rate=(seq->NumFrames-1)/(seq->Rate*(p->RuneBashPhase==1?.43f:p->RuneBashPhase==3?.32f:.25f));
     return true;
 }
 bool AnimationFrames(UActor* actor,float from,float to) {
     if(!engine->LaunchInfo.IsRune())return false;
     auto* p=Owner(actor);if(!p || !p->RuneBashPhase)return false;
+    if(p->RuneBashPhase==3)return actor->AnimSequence().ToString().find("pain")!=std::string::npos;
     auto expected=p->RuneBashPhase==1?Strike:Stagger;
     if(actor->AnimSequence()!=expected)return false;
     // Authored shield reaches furthest forward at frame 1 of 8, after the wind-up.

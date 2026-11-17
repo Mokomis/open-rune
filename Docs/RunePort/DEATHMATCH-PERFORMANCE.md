@@ -76,7 +76,6 @@ Worst sampled view, not a sustained match average. GPU scene/shadow columns refe
 
 ## Reproduction and evidence
 
-Mac receipts, exact launch arguments, logs, immutable benchmark app, captures, rejected attempts and source backups: `/Users/rwillmore/OpenRuneArtifacts/DeathmatchSweep-20261108`.
 
 Windows counterparts: `C:/OpenRune/outputs/deathmatch-performance-20261108`. The retained candidate is in the Windows primary checkout, and its Mac mirror is built and functionally tested. No Git commit or push was made. Public match remains stopped.
 

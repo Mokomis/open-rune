@@ -19,7 +19,7 @@ int main(int argc,char** argv){
         size_t count=0;RuneGameFiles::Import(source/"System",dest,[&](size_t n,size_t total){count=n;require(n<=total,"Bad progress");});
         require(count==12,"Unexpected import file set");RuneGameFiles::Validate(dest);
         require(!fs::exists(dest/"System/User.ini")&&!fs::exists(dest/"Save/Save1.usa")&&!fs::exists(dest/"System/Engine.dll"),"Personal/native files copied");
-        std::ifstream in(dest/"System/Default.ini");std::string config((std::istreambuf_iterator<char>(in)),{});
+        std::ifstream in(dest/"System/Default.ini");std::string config((std::istreambuf_iterator<char>(in)),{});in.close();
         require(config.find("C:\\original")==std::string::npos&&config.find("SavePath=..\\Save")!=std::string::npos,"Source paths retained");
         write(dest/"Save/Save1.usa","existing save");bad=false;try{RuneGameFiles::Import(source,dest);}catch(...){bad=true;}
         require(bad&&fs::exists(dest/"Save/Save1.usa"),"Existing install overwritten");

@@ -3,6 +3,7 @@
 #include "DescriptorSetManager.h"
 #include "VulkanRenderDevice.h"
 #include "CachedTexture.h"
+#include "CrestWater.h"
 #include "Utils/Logger.h"
 #include "Packages/Engine/Resources/Level/UModel.h"
 
@@ -105,8 +106,12 @@ void DescriptorSetManager::CreateMeshLightSets()
 		.AddBinding(1, shadowType, 1, VK_SHADER_STAGE_FRAGMENT_BIT)
         .AddBinding(2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT)
         .AddBinding(3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT)
+        .AddBinding(4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT)
+        .AddBinding(5,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,1,VK_SHADER_STAGE_FRAGMENT_BIT)
+        .AddBinding(6,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,1,VK_SHADER_STAGE_FRAGMENT_BIT)
+        .AddBinding(7,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,1,VK_SHADER_STAGE_FRAGMENT_BIT)
         .DebugName("MeshLightLayout").Create(renderer->Device.get());
-	MeshLightPool = DescriptorPoolBuilder().AddPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 8).AddPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4).AddPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8)
+	MeshLightPool = DescriptorPoolBuilder().AddPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 8).AddPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4).AddPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 24)
 		.MaxSets(4).DebugName("MeshLightPool").Create(renderer->Device.get());
 	for (auto* buffers : { renderer->Buffers.get(), renderer->AlternateBuffers.get() })
 	{
@@ -118,7 +123,9 @@ void DescriptorSetManager::CreateMeshLightSets()
 			buffers->MeshLightBuffer.get())
             .AddBuffer(set, 1, shadowType, buffers->ShadowLightingBuffer.get())
             .AddCombinedImageSampler(set, 2, renderer->ShadowView.get(), renderer->ShadowSampler.get(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-            .AddCombinedImageSampler(set, 3, set==buffers->MeshLightSet.get()?renderer->WaterView.get():renderer->Textures->NullTextureView.get(), renderer->Samplers->PPLinearClamp.get(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL).Execute(renderer->Device.get());
+            .AddCombinedImageSampler(set, 3, set==buffers->MeshLightSet.get()?renderer->WaterView.get():renderer->Textures->NullTextureView.get(), renderer->Samplers->PPLinearClamp.get(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+            .AddCombinedImageSampler(set,4,renderer->Crest?renderer->Crest->Views[7].get():renderer->Textures->NullTextureView.get(),renderer->Crest?renderer->Crest->Sampler.get():renderer->Samplers->PPLinearClamp.get(),renderer->Crest?VK_IMAGE_LAYOUT_GENERAL:VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+            .AddCombinedImageSampler(set,5,renderer->Crest?renderer->Crest->FoamViews[0].get():renderer->Textures->NullTextureView.get(),renderer->Crest?renderer->Crest->Sampler.get():renderer->Samplers->PPLinearClamp.get(),renderer->Crest?VK_IMAGE_LAYOUT_GENERAL:VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL).Execute(renderer->Device.get());
 	}
 }
 
@@ -173,6 +180,14 @@ void DescriptorSetManager::UpdateFrameDescriptors()
 	auto textures = renderer->Textures.get();
 	auto samplers = renderer->Samplers.get();
 
+    if(renderer->Crest) {
+        auto* c=renderer->Crest.get();auto* scene=textures->Scene.get();
+        c->CreateCapture(renderer->Device.get(),scene->DepthBufferView.get(),scene->Width,scene->Height,renderer->SceneColorFormat,scene->SceneSamples);
+        for(auto* buffers:{renderer->Buffers.get(),renderer->AlternateBuffers.get()})if(buffers)
+            for(auto* set:{buffers->MeshLightSet.get(),buffers->ReflectionLightSet.get()})
+                WriteDescriptors().AddCombinedImageSampler(set,6,c->BackgroundView.get(),renderer->Samplers->PPLinearClamp.get(),VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                    .AddCombinedImageSampler(set,7,c->SceneDepthView.get(),renderer->Samplers->PPNearestRepeat.get(),VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL).Execute(renderer->Device.get());
+    }
 	WriteDescriptors write;
 	write.AddCombinedImageSampler(Present.Set.get(), 0, textures->Scene->PPImageView[0].get(), samplers->PPLinearClamp.get(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 	write.AddCombinedImageSampler(Present.Set.get(), 1, textures->DitherImageView.get(), samplers->PPNearestRepeat.get(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);

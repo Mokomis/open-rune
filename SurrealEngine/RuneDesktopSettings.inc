@@ -7,9 +7,9 @@ add("pacing","Frame pacing","Synchronizes presentation with the display.",{"Off"
 add("fov","Field of view","Base horizontal view at 4:3. Wider screens expand the sides automatically.",{},90,70,120);
 add("wideView","Widescreen framing","Automatic preserves vertical visibility as the screen gets wider.",{"Original","Automatic"},1,0,1);
 add("bloom","Bloom & color","Subtle highlight glow and warmer color tuning.",{"Original","Enhanced"},0,0,1);
-add("fireEffects","Fire & combat effects","Fuller flames, rising embers and motion-aligned sparks, debris and blood droplets. Cosmetic only, with a shared particle budget.",{"Original","Enhanced"},1,0,1);
+add("fireEffects","Fire & combat effects","Fuller flames, rising embers and motion-aligned sparks, debris and blood droplets. Includes outdoor breath for living characters. Cosmetic only, with a shared particle budget.",{"Original","Enhanced"},1,0,1);
 add("gore","Gore presentation","Enhanced adds cosmetic tumbling fragments, wound shading, impact blood and corpse settling. Pickupable limbs and match rules stay unchanged.",{"Original","Enhanced"},1,0,1);
-add("snow","Snow","Off keeps original map weather. Light and Heavy add drifting snow beneath open sky, with roof shelter. Cosmetic only.",{"Off","Light","Heavy"},0,0,2);
+add("snow","Snowfall override","Automatic follows changing outdoor weather; multiplayer follows the host. Always Off disables snowfall. Other choices force a local snow level without changing anyone else. Roofs provide shelter.",{"Automatic","Always Off","Always Light","Always Heavy"},0,0,3);
 add("sharp","Adaptive sharpening","Restores fine contrast while limiting bright edge halos.",{"Off","Low","Medium","High"},1,0,3);
 add("filter","Texture filtering","Keeps angled textures clear; limited by GPU support.",{"8×","16×"},1,0,1);
 add("shadow","Shadow / midtone lift","Reveals dark detail while preserving deep blacks.",{"Off","Low","Medium","High"},1,0,3);
@@ -39,6 +39,7 @@ add("rumble","Rumble","Impact feedback on connected Windows XInput controllers."
 add("rumbleStrength","Rumble intensity","Scales both controller motors.",{},65,0,100);
 add("counter","Show FPS","Displays engine FPS; actual display timing is measured separately.",{"Off","On"},1,0,1);
 add("networkDiagnostics","Network diagnostics","Multiplayer frame times, acknowledged round-trip time, snapshot gaps and transport timeouts. Timeouts are not a packet-loss measurement.",{"Off","On"},0,0,1);
+add("playerNames","Player names","Show names above players and bots. Team markers stay visible when names are hidden. The scoreboard always shows names and bot labels.",{"Off","On"},1,0,1);
 add("networkSmoothing","Network smoothing","Adaptive smooths remote movement against packet jitter with a bounded buffer. Local controls stay responsive; gameplay remains server controlled.",{"Original","Adaptive"},1,0,1);
 add("kick","Combat kicks","F / right-stick click. Raised shields absorb damage and most knockback.",{"Off","On"},1,0,1);
 add("bash","Shield bash","Double-tap Block. Brief stagger and small shove; raised shields counter it.",{"Off","On"},1,0,1);
@@ -50,4 +51,4 @@ add("fullscreen","Window mode","Switch between a normal window and fullscreen.",
 
 add("normalBloodlust","Leap & rush availability","Normal combat is the default: neither move needs or spends bloodlust. The shared 4-second cooldown and shield requirement remain. Choose Bloodlust only to restore the old requirement. Multiplayer follows the host.",{"Bloodlust only","Normal combat"},1,0,1);
 
-add("physics","Cinematic physics","Articulated bodies, recoverable knockdowns and throwable props. Chaos increases force and bounce. Bosses and scripted scenes are protected. Multiplayer follows host rules.",{"Original","Cinematic","Chaos"},0,0,2);
+add("physics","Physics mode","Standard uses energetic articulated bodies, recoverable knockdowns, hit reactions and throwable props. Cinematic softens forces. Legacy uses original gameplay physics. Bosses and scripted scenes stay protected. Multiplayer follows host rules.",{"Legacy","Cinematic","Standard"},2,0,2);

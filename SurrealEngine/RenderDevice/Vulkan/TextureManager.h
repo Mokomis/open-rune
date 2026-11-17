@@ -49,6 +49,7 @@ private:
 
 	VulkanRenderDevice* renderer = nullptr;
 	std::unordered_map<uint64_t, std::unique_ptr<CachedTexture>> TextureCache[2];
+    const bool CacheOriginalReliefMisses;
 	std::unordered_map<uint64_t, std::unique_ptr<CachedTexture>> ReliefCache;
     std::unordered_map<uint64_t, std::unique_ptr<CachedTexture>> MaterialCache;
 };

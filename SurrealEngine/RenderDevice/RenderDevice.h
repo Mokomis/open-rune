@@ -126,9 +126,12 @@ public:
     virtual bool ReuseWaterReflection(float, float, const vec3&) { return false; }
     virtual void InvalidateWaterReflection() {}
     virtual void PrepareApproximateWater(float height, float time) {}
+    virtual bool UsesCrestWater() const {return false;}
+    virtual void CaptureCrestBackground() {}
     virtual bool UsesModernWater() const { return false; }
     virtual void PrepareModernWater(float height, float time, const vec4& environment, const vec4& lightDirection, const vec4& lightColor) {}
     virtual void SetWaterView(bool submerged, float time) {}
+    virtual void SetWaterMainView(const mat4&) {}
     virtual void PrepareWaterSky(TextureInfo*) {}
     virtual bool BeginWaterReflection(SceneNode*, float, float) { return false; }
     virtual void EndWaterReflection() {}

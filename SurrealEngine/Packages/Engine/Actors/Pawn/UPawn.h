@@ -2,9 +2,11 @@
 
 #include "Packages/Engine/Actors/UActor.h"
 #include "RuneTactics.h"
+#include "RuneShieldTaunt.h"
 #include "RuneDualWield.h"
 #include "RuneBloodlust.h"
 #include "RuneSlam.h"
+#include "RuneSpider.h"
 
 class USound;
 class UNavigationPoint;
@@ -20,9 +22,11 @@ public:
 	using UActor::UActor;
 
 	RuneTactics::State Tactics;
+    RuneShieldTaunt::State ShieldTaunt;
     RuneDualWield::State Dual;
     RuneBloodlust::State Bloodlust;
     RuneSlam::State Slam;
+    RuneSpider::State Spider;
     RuneCorpse::CarryState CorpseCarry;
 
 	// Transient combat-kick state. Save/load safely cancels a pending hit.

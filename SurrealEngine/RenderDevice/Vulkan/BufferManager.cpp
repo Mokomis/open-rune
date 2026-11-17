@@ -2,26 +2,44 @@
 #include "Precomp.h"
 #include "BufferManager.h"
 #include "VulkanRenderDevice.h"
+#include "Utils/CommandLine.h"
+#include "Utils/Logger.h"
 
 BufferManager::BufferManager(VulkanRenderDevice* renderer) : renderer(renderer)
 {
 	CreateSceneVertexBuffer();
 	CreateSceneIndexBuffer();
 	CreateUploadBuffer();
+#ifdef _WIN32
+    constexpr int defaultCachedLighting=1;
+#else
+    constexpr int defaultCachedLighting=0;
+#endif
+    // The CPU compares lighting packets while streaming triangles. Uncached
+    // mapped memory makes those small CPU reads expensive. Prefer coherent
+    // host-cached memory on the qualified Windows path; the GPU still receives
+    // exactly the same packets, descriptors and shader inputs.
+    const bool cachedLighting=commandline->GetArgInt("","--render-cached-lighting",defaultCachedLighting)!=0;
+    const VkMemoryPropertyFlags preferred=VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT|
+        (cachedLighting?VK_MEMORY_PROPERTY_HOST_CACHED_BIT:0);
 	const size_t size = sizeof(MeshLightPacket) * MaxMeshLights;
 	MeshLightBuffer = BufferBuilder()
 		.Usage(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_UNKNOWN, VMA_ALLOCATION_CREATE_MAPPED_BIT)
 		.MemoryType(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
+			preferred)
 		.Size(size).DebugName("MeshLightBuffer").Create(renderer->Device.get());
 	MeshLights = (MeshLightPacket*)MeshLightBuffer->Map(0, size);
     ShadowLightingBuffer = BufferBuilder()
         .Usage(renderer->UniformShadowData?VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT:VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_UNKNOWN, VMA_ALLOCATION_CREATE_MAPPED_BIT)
         .MemoryType(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
+            preferred)
         .Size(sizeof(ShadowLightingPacket)).DebugName("ShadowLightingBuffer").Create(renderer->Device.get());
     ShadowLighting = (ShadowLightingPacket*)ShadowLightingBuffer->Map(0, sizeof(ShadowLightingPacket));
     *ShadowLighting = {};
+    VkMemoryPropertyFlags meshFlags=0,shadowFlags=0;
+    vmaGetAllocationMemoryProperties(renderer->Device->allocator,MeshLightBuffer->allocation,&meshFlags);
+    vmaGetAllocationMemoryProperties(renderer->Device->allocator,ShadowLightingBuffer->allocation,&shadowFlags);
+    LogMessage("RUNE_LIGHTING_MEMORY cached_requested="+std::to_string(cachedLighting)+" mesh_flags="+std::to_string(meshFlags)+" shadow_flags="+std::to_string(shadowFlags));
 }
 
 BufferManager::~BufferManager()

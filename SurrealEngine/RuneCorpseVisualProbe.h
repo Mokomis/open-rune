@@ -31,8 +31,8 @@ public:
         auto* p=game.viewport->Actor();
         if(frame==90) {
             p->Health()=1000;UPawn* enemy=nullptr;
-            for(auto* a:game.Level->Actors)if(a && !a->bDeleteMe() && a->IsA("GoblinWarrior")){enemy=UObject::TryCast<UPawn>(a);break;}
-            if(!enemy)Exception::Throw("Corpse visual fixture needs --probe-enemy=GoblinWarrior");
+            for(auto* a:game.Level->Actors)if(a && !a->bDeleteMe() && a->IsA(commandline->GetArg("","--probe-enemy","GoblinWarrior"))){enemy=UObject::TryCast<UPawn>(a);break;}
+            if(!enemy)Exception::Throw("Corpse visual fixture needs its --probe-enemy actor");
             enemy->Health()=0;CallEvent(enemy,"Died",{ExpressionValue::ObjectValue(p),ExpressionValue::NameValue("blunt"),ExpressionValue::VectorValue(enemy->Location())});
         }
         if(frame==PickupFrame()) {
@@ -48,6 +48,14 @@ public:
                 auto* m=UObject::TryCast<USkelModel>(GetRuneDisplayMesh(body));auto pose=m->ActorPose(body);
                 for(size_t j=0;j<pose.size();++j){auto q=pose[j];LogMessage("CORPSE_POSE_AUDIT joint="+m->Joints[j].Name.ToString()+" parent="+std::to_string(m->Joints[j].Parent)+" position="+std::to_string(q.Position.x)+","+std::to_string(q.Position.y)+","+std::to_string(q.Position.z)+" scale="+std::to_string(q.Scale.x)+","+std::to_string(q.Scale.y)+","+std::to_string(q.Scale.z));}
             }
+            if(commandline->HasArg("","--corpse-hand-audit")){
+                p->bBehindView()=true;
+                for(auto* a:game.Level->Actors)if(a && a->IsA("NavigationPoint")){
+                    auto center=a->Location()+vec3(0,0,48);bool clear=true;
+                    for(int i=0;i<8;++i){float angle=i*.785398163f;clear=clear&&p->FastTrace(center+vec3(std::cos(angle)*170,std::sin(angle)*170,22),center);}
+                    if(clear && p->SetLocation(a->Location()))break;
+                }
+            }
             p->Velocity()=p->Acceleration()=vec3(0);p->GotoState("PlayerWalking","Begin");p->GetUObject("AnimProxy")->GotoState("Idle","Begin");p->SetPhysics(PHYS_Walking);
             auto forward=vec3(std::cos(p->Rotation().YawRadians()),std::sin(p->Rotation().YawRadians()),0);
             body->SetBase(nullptr,true);body->SetPhysics(PHYS_None);body->Velocity()=vec3(0);body->SetLocation(p->Location()+forward*65.f-vec3(0,0,24));
@@ -58,6 +66,20 @@ public:
                 for(auto* a:loot)a->Destroy();
                 game.InputEvent(EInputKey::IK_Ctrl,IST_Press);
             }else if(!RuneCorpse::Pickup(p,body))Exception::Throw("Visual corpse pickup failed");
+        }
+        if(commandline->HasArg("","--corpse-hand-audit") && frame>=PickupFrame()+10 && frame<ThrowFrame()) {
+            p->bBehindView()=true;p->DisableEvent("PlayerTick");p->Velocity()=p->Acceleration()=vec3(0);
+            int view=std::clamp((frame-PickupFrame()-10)/30,0,3);float angle=p->Rotation().YawRadians()+view*1.570796327f;
+            auto* carryModel=UObject::TryCast<USkelModel>(GetRuneDisplayMesh(p));auto carryBones=carryModel->ActorJointMatrices(p);auto world=GetRuneMeshToWorld(p);vec3 target(0);int grips=0;
+            for(size_t j=0;j<carryModel->Joints.size();++j)if(carryModel->Joints[j].Name=="lwrist"||carryModel->Joints[j].Name=="rwrist"){target+=(world*carryBones[j]*vec4(0,0,0,1)).xyz();++grips;}target/=float(std::max(grips,1));
+            game.CameraLocation=target+vec3(std::cos(angle)*150,std::sin(angle)*150,0);game.CameraRotation=Rotator::FromVector(target-game.CameraLocation);game.CameraFovAngle=60;
+            if(frame==PickupFrame()+10){
+                auto* mesh=UObject::TryCast<USkelModel>(GetRuneDisplayMesh(p));auto* geom=GetRuneGeometry(p);int variant=p->GetByte("SkelMesh");if(variant>=int(geom->Meshes.size()))variant=0;
+                const auto& verts=geom->Meshes[variant].Vertices;auto bones=mesh->ActorJointMatrices(p);
+                for(size_t j=0;j<mesh->Joints.size();++j){int count=0;vec3 low(1e10f),high(-1e10f);for(const auto& v:verts)for(int k=0;k<2;++k)if(v.Joint[k]==int(j)&&(k==0?v.Weight>0:v.Weight<1)){++count;for(int axis=0;axis<3;++axis){low[axis]=std::min(low[axis],v.Point[k][axis]);high[axis]=std::max(high[axis],v.Point[k][axis]);}}
+                    LogMessage("CARRY_HAND_RIG joint="+mesh->Joints[j].Name.ToString()+" parent="+std::to_string(mesh->Joints[j].Parent)+" vertices="+std::to_string(count)+" min="+std::to_string(low.x)+","+std::to_string(low.y)+","+std::to_string(low.z)+" max="+std::to_string(high.x)+","+std::to_string(high.y)+","+std::to_string(high.z));
+                }
+            }
         }
         if(Demo()) {
             if(frame==PickupFrame()+1)game.InputEvent(EInputKey::IK_Ctrl,IST_Release);
@@ -86,6 +108,7 @@ public:
             for(int c=0;c<3;++c)scales+=std::to_string(length(vec3(transform[c*4],transform[c*4+1],transform[c*4+2])))+",";
             LogMessage("CORPSE_POSE_AUDIT world_scales="+scales+" draw_scale="+std::to_string(body->DrawScale()));
         }
+        if(commandline->HasArg("","--corpse-hand-audit") && frame>=PickupFrame()+30 && frame<=PickupFrame()+120 && (frame-PickupFrame())%30==0)Capture(game,("hands-"+std::to_string((frame-PickupFrame())/30)).c_str());
         if(Demo() && frame==PickupFrame()+120)Capture(game,"carrying");
         if(Demo() && frame==ThrowFrame()+15)Capture(game,"throw-windup");
         if(Demo() && frame==ThrowFrame()+45)Capture(game,"released");

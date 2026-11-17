@@ -36,6 +36,8 @@ struct Description {
   uint32_t group = 0;
   Motion motion = Motion::Dynamic;
   bool capsule = false, sphere = false, cylinder = false;
+  // Cosmetic puppets collide with scenery, never push gameplay bodies.
+  bool cosmetic = false;
 };
 class World {
 public:
@@ -61,6 +63,11 @@ public:
   void sleep(Handle);
   void constrain(Handle parent, Handle child, vec3 anchor, vec3 twistAxis,
                  float swing, float twist);
+  // Motor target is the child body's orientation relative to its parent (not
+  // the joint's constraint frame). Units are Hz, damping ratio, and N m.
+  bool drive(Handle child, Rotation relative, float frequency, float damping,
+             float maxTorque, bool relaxLimits = false);
+  bool releaseDrive(Handle child);
   void ignore(uint64_t ownerA, uint64_t ownerB, float seconds);
   void gravity(vec3);
   void step(float dt);

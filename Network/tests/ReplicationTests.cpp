@@ -107,6 +107,9 @@ void codecs()
     invalidPhysical=physical;invalidPhysical.world[1].physical=physical.world[0].physical;CHECK(!validWorld(invalidPhysical.world));
     auto rigid=s;rigid.world[0].physical.kind=2;rigid.world[0].physical.rotation={0,0,0,32767};CHECK(encodeSnapshot(rigid,nullptr,b));CHECK(decodeSnapshot(b,nullptr,decoded)&&decoded==rigid);
     rigid.world[0].physical.rotation={};CHECK(!validWorld(rigid.world));
+    auto spider=s;spider.world[0].flags=1;spider.world[0].combat.flags=16;CHECK(encodeSnapshot(spider,nullptr,b));CHECK(decodeSnapshot(b,nullptr,decoded)&&decoded==spider);
+    spider.world[0].flags=3;CHECK(!validWorld(spider.world)); // A wall climber is not grounded.
+    spider.world[0].flags=0;CHECK(!validWorld(spider.world)); // A dead/unknown life cannot climb.
     auto bad=w; bad.push_back(w.back()); CHECK(!validWorld(bad));
     bad=w; bad[1].ref=bad[0].ref; CHECK(!validWorld(bad));
     bad=w; bad[0].shield.generation=2; CHECK(!validWorld(bad));
@@ -439,7 +442,7 @@ void integration(unsigned seed)
     SecureSession server(true,key,"replication",{1,2},7),client(false,key,"replication",{1,3},7);
     ReplicationPeer host(server,testMatch()),player(client,testMatch(),{11,1}); std::vector<Datagram> link;
     auto target=makeWorld(512); CHECK(host.snapshots.capture(target,1));
-    std::set<uint64_t> applied; size_t submitted=0, outcomes=0, unconfirmed=0; bool loaded=false, changed=false; uint64_t lastCapture=0, lastAction=0;
+    std::set<uint64_t> applied,accounted; size_t submitted=0, outcomes=0, unconfirmed=0; bool loaded=false, changed=false; uint64_t lastCapture=0, lastAction=0;
     std::vector<CombatOutcome> committed; bool sentKick=false,sentBash=false,sentSound=false;std::set<uint64_t> soundIds;
     CombatOutcome kick{1,420,1,{1,1},{2,1},1,1,CombatMove::Kick,CombatContact::Blocked,100,false};
     CombatOutcome bash{2,426,2,{1,1},{2,1},1,1,CombatMove::Bash,CombatContact::Hit,98,true};
@@ -490,8 +493,8 @@ void integration(unsigned seed)
         for(const auto& sound:player.drainSounds())CHECK(soundIds.insert(sound.id).second && sound.package=="RuneSFX");
         auto received=player.drainCombat(); committed.insert(committed.end(),received.begin(),received.end());
         for (auto a:host.commands.drainActions(t+10000)) { CHECK(applied.insert(a.action.id).second); CHECK(a.localTime<=t+10000 && t+10000-a.localTime<=250); }
-        outcomes+=player.inputs.drainResults().size();
-        unconfirmed+=player.inputs.drainUnconfirmed().size();
+        for(auto result:player.inputs.drainResults()){++outcomes;accounted.insert(result.id);}
+        for(auto id:player.inputs.drainUnconfirmed()){++unconfirmed;accounted.insert(id);}
         send(server,false,t); send(client,true,t);
         CHECK(link.size()<512 && server.snapshotPartsPending()<=4);
     }
@@ -499,7 +502,11 @@ void integration(unsigned seed)
     CHECK(host.characterChoice()==openrune::CharacterChoice{11,1});
     CHECK(player.world.installed() && player.world.installed()->world==target);
     CHECK(host.snapshots.baselineId()==player.world.installed()->id); CHECK(!applied.empty() && submitted>10);
-    CHECK(outcomes+unconfirmed==submitted); CHECK(player.inputs.pending()==0); CHECK(host.commands.held(28000).held==0);
+    std::cout<<"RESULT_COUNTS seed="<<seed<<" submitted="<<submitted<<" outcomes="<<outcomes<<" unconfirmed="<<unconfirmed<<" pending="<<player.inputs.pending()<<std::endl;
+    // Unconfirmed is provisional: a late authenticated admission can update
+    // that same action (explicitly covered in inputActions). Count IDs, not
+    // the sum of provisional and confirmed notifications.
+    CHECK(accounted.size()==submitted);for(uint64_t id=1;id<=submitted;++id)CHECK(accounted.contains(id)); CHECK(player.inputs.pending()==0); CHECK(host.commands.held(28000).held==0);
     CHECK(sentSound && soundIds.size()<=1);
     CHECK(committed==std::vector<CombatOutcome>({kick,bash}) && !player.combatOverflowed());
     std::cout<<"seed="<<seed<<" submitted="<<submitted<<" admitted="<<applied.size()<<" confirmed="<<outcomes<<" unconfirmed="<<unconfirmed<<" snapshot="<<player.world.installed()->id<<'\n';
@@ -638,9 +645,13 @@ void closeSession()
 }
 void matchTravel() {
     MatchStatus state{MatchPhase::Intermission,8,20,2,{{1,-1,2},{2,20,1},{3,4,4},{4,4,0}}},decoded;
+    state.weatherSeed=0x8e71a91d;state.weatherStartMs=123456789;
     Bytes b;CHECK(encodeMatchStatus(7,state,b) && decodeMatchStatus(7,b,decoded) && state==decoded);
     for(size_t n=0;n<b.size();++n)CHECK(!decodeMatchStatus(7,std::span(b).first(n),decoded) && decoded==state);
     CHECK(!decodeMatchStatus(8,b,decoded));auto extra=b;extra.push_back(0);CHECK(!decodeMatchStatus(7,extra,decoded));
+    auto weatherBad=state;weatherBad.weatherSeed=0;CHECK(!encodeMatchStatus(7,weatherBad,b));
+    weatherBad=state;weatherBad.weatherStartMs=0;CHECK(!encodeMatchStatus(7,weatherBad,b));
+    weatherBad=state;weatherBad.weatherStartMs=uint64_t(INT64_MAX);CHECK(!encodeMatchStatus(7,weatherBad,b));
     auto bad=state;bad.scores[1].player=1;CHECK(!encodeMatchStatus(7,bad,b));
     bad=state;bad.phase=MatchPhase::Playing;CHECK(!encodeMatchStatus(7,bad,b));
     auto arena=state;arena.mode=GameMode::Arena;arena.arenaPhase=2;arena.arenaRound=3;arena.arenaCountdown=10;
@@ -716,6 +727,23 @@ void matchTravel() {
     }
     CHECK(host.remoteClosed()==CloseReason::Leave);
 }
+void playerIdentity(){
+ CHECK(validPlayerName("Eirik Ashwolf")&&validPlayerName("Øystein"));
+ for(auto bad:{"", " [BOT] Fake", "[BOT] Fake", "A\nB", "A\x1b" "B", "A\xe2\x80\xae" "B"})CHECK(!validPlayerName(bad));
+ CHECK(!validPlayerName(std::string(25,'x'))&&!validPlayerName(std::string("A\xc0\x80",3)));
+ for(uint32_t seed=1;seed<=100;++seed){std::set<std::string> pool;for(uint32_t slot=1;slot<=64;++slot){auto name=botName(slot,seed);CHECK(validPlayerName(name)&&pool.insert(name).second&&name==botName(slot,seed));}}
+ CHECK(botName(1,1)!=botName(1,2));
+ std::set<std::string> names;
+ for(uint32_t i=1;i<=16;++i){auto name=botName(i);CHECK(validPlayerName(name)&&names.insert(name).second);PlayerLabel l{i,name,true},decoded;Bytes b;CHECK(encodePlayerLabel(7,l,b)&&b.size()<=MaxPayloadBytes&&decodePlayerLabel(7,b,decoded)&&l==decoded);CHECK(labelText(l,false)==name&&labelText(l,true)=="[BOT] "+name);for(size_t n=0;n<b.size();++n)CHECK(!decodePlayerLabel(7,std::span(b).first(n),decoded));}
+ PlayerProfile profile{"Sigrun",false},decoded;Bytes b;CHECK(encodePlayerProfile(7,profile,b)&&decodePlayerProfile(7,b,decoded)&&profile==decoded);for(size_t n=0;n<b.size();++n)CHECK(!decodePlayerProfile(7,std::span(b).first(n),decoded));
+ auto extra=b;extra.push_back(0);CHECK(!decodePlayerProfile(7,extra,decoded));CHECK(!decodePlayerProfile(8,b,decoded));
+ auto key=generateInvitationKey();Bytes address={2,3};SecureSession server(true,key,"names",address),client(false,key,"names",address);ReplicationPeer host(server,testMatch()),guest(client,testMatch(),{},profile);
+ bool renamed=false;for(uint64_t now=1;now<=4500;now+=10){server.step(now);client.step(now);host.step();guest.step();for(auto v:server.takeDatagrams())client.receiveDatagram(v);for(auto v:client.takeDatagrams())server.receiveDatagram(v);
+  if(host.matchAgreed()&&host.playerProfile()){host.publishPlayerLabel({1,host.playerProfile()->name,false});}
+  if(!renamed&&now>2500){CHECK(guest.playerLabel(1)&&guest.playerLabel(1)->name=="Sigrun");CHECK(guest.setPlayerProfile({"Brynja",false}));renamed=true;}
+ }
+ CHECK(host.playerProfile()&&host.playerProfile()->name=="Brynja"&&guest.playerLabel(1)&&guest.playerLabel(1)->name=="Brynja");
+}
 Bytes unhex(const std::string& s)
 {
     if (s.size()%2) return {}; Bytes b;
@@ -732,8 +760,8 @@ int main(int argc,char** argv)
             std::string line;
             while (std::getline(std::cin,line))
             {
-                auto b=unhex(line); Bytes out; InputBatch i; InputFeedback f; SnapshotPart p; Snapshot s; CombatOutcome c; MatchContract m; ActorEvent a; ActionResult d; CloseReason close; MatchStatus status;MapTravel travel;std::vector<SoundCue> sounds;
-                if ((decodeSoundFeedback(7,b,f,sounds) && encodeSoundFeedback(7,f,sounds,out)) || (decodeInputs(7,b,i) && encodeInputs(7,i,out)) || (decodeFeedback(7,b,f) && encodeFeedback(7,f,out)) ||
+                auto b=unhex(line); Bytes out; InputBatch i; InputFeedback f; SnapshotPart p; Snapshot s; CombatOutcome c; MatchContract m; ActorEvent a; ActionResult d; CloseReason close; MatchStatus status;MapTravel travel;PlayerProfile profile;PlayerLabel label;std::vector<SoundCue> sounds;
+                if ((decodePlayerProfile(7,b,profile)&&encodePlayerProfile(7,profile,out)) || (decodePlayerLabel(7,b,label)&&encodePlayerLabel(7,label,out)) || (decodeSoundFeedback(7,b,f,sounds) && encodeSoundFeedback(7,f,sounds,out)) || (decodeInputs(7,b,i) && encodeInputs(7,i,out)) || (decodeFeedback(7,b,f) && encodeFeedback(7,f,out)) ||
                     (decodePart(7,b,p) && encodePart(7,p,out)) || (decodeCombatOutcome(7,b,c) && encodeCombatOutcome(7,c,out)) ||
                     (decodeMatchContract(7,b,m) && encodeMatchContract(7,m,out)) ||
                     (decodeActorEvent(7,b,a) && encodeActorEvent(7,a,out)) ||
@@ -747,7 +775,7 @@ int main(int argc,char** argv)
             return 0;
         }
         if(argc>1 && std::string(argv[1])=="sound-profile") {soundDelivery(false);return 0;}
-        codecs(); inputActions(); snapshots();
+        codecs(); inputActions(); snapshots();playerIdentity();
         if (argc==1) { for (unsigned seed=1;seed<=10;++seed) integration(seed); sameFrameActions(true); sameFrameActions(); soundDelivery(); combatBackpressure(); incompatibleMatch(); incompatibleMatch(1); incompatibleMatch(2); incompatibleMatch(3); closeSession(); matchTravel(); }
         std::cout<<"PASS replication "<<checks<<" checks\n";
     }

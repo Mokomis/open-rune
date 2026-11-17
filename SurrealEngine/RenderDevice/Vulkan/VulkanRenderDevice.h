@@ -17,6 +17,8 @@
 
 class CachedTexture;
 
+class CrestWater;
+
 class VulkanRenderDevice : public RenderDevice
 {
     friend class DescriptorSetManager;
@@ -47,7 +49,12 @@ public:
     bool UsesModernWater() const override;
     void PrepareModernWater(float, float, const vec4&, const vec4&, const vec4&) override;
     void SetWaterView(bool submerged, float time) override { WaterSubmerged=submerged; WaterViewTime=time; }
+    void SetWaterMainView(const mat4& view) override { WaterViewToWorld=mat3::inverse(mat3(view)); }
+    mat3 WaterViewToWorld=mat3(mat4::identity());
     void PrepareWaterSky(TextureInfo*) override;
+    bool UsesCrestWater() const override {return Crest!=nullptr && UsesModernWater();}
+    void CaptureCrestBackground() override;
+    std::unique_ptr<CrestWater> Crest;
     bool WaterSubmerged=false;
     float WaterViewTime=0;
     bool ReuseWaterReflection(float, float, const vec3&) override;
@@ -98,6 +105,7 @@ public:
 	int VkDeviceIndex = 0;
 	bool PreferMailbox = false;
 	bool OmitsHitOutput() const { return OmitHitThisFrame || WaterReflectionActive; }
+	int SceneStoreMode = 0;
 	bool UsesInPassResolve() const { return InPassResolve && Textures->Scene && Textures->Scene->SceneSamples != VK_SAMPLE_COUNT_1_BIT; }
 
 	void RunBloomPass();
@@ -137,6 +145,7 @@ private:
     void CreateWaterTargets();
     void BeginWaterPass(bool continuation);
     bool WaterReflectionActive=false, WaterInitialized=false;
+    bool StableCrestSurface = false;
     bool CachedWaterValid=false;
     int CachedWaterFeatures=0;
     float CachedWaterTime=0, CachedWaterHeight=0;
@@ -150,6 +159,19 @@ private:
     void CreateShadowImage();
     void CreateShadowPass();
     void StartScenePass();
+	void BeginSceneSegment(bool continuation);
+	void BeginSceneRenderPass(VulkanCommandBuffer* commands, VulkanRenderPass* pass, VkSubpassContents contents);
+	void EndSceneSegment(bool final = false);
+	void BindSceneBuffers(VulkanCommandBuffer* commands);
+	std::unique_ptr<VulkanCommandBuffer> RecordedScene;
+	int AmbientOcclusionMode() const { return IsOrtho ? 0 : (WorldFeatures >> 14) & 3; }
+	int SceneStoreOverride = -1;
+	bool QualifiedSceneStores = false;
+	bool SceneContinuation = false;
+	bool ProfileSceneStores = false;
+	uint64_t RecordedSceneSegments = 0;
+	uint64_t DiscardedSceneColor = 0;
+	uint64_t DiscardedSceneDepth = 0;
     bool ScenePassDeferred = false;
     vec4 DeferredScreenClear;
     void ResumeScenePass();

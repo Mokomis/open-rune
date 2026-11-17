@@ -151,7 +151,7 @@ bool MayCommit(UPawn* p) {
     return attackers<temperament.attackers;
 }
 void Tick(UPawn* p,float elapsed) {
-    if(!engine->LaunchInfo.IsRune() || RuneBloodlust::Busy(p))return;
+    if(!engine->LaunchInfo.IsRune() || RuneBloodlust::Busy(p) || RuneShieldTaunt::Controls(p))return;
     if(!p->IsA("RunePlayer") && RuneCorpse::Busy(p)){p->Acceleration()=vec3(0);p->Velocity().x=p->Velocity().y=0;return;}
     auto& s=p->Tactics;
     const float dt=std::clamp(elapsed,0.0f,.1f);

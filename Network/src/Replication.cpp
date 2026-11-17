@@ -77,7 +77,8 @@ bool validEntity(const Entity& e)
     if (!e.ref.id || !e.ref.generation || e.kind < EntityKind::Pawn || e.kind > EntityKind::Effect ||
         (e.flags & ~191) || ((e.flags&128) && e.kind!=EntityKind::Weapon) || !e.life || e.animationPhase==INT16_MIN || e.torsoPhase==INT16_MIN ||
         !validRef(e.owner) || !validRef(e.weapon) || !validRef(e.shield) ||
-        !validRef(e.combat.offhand) || (e.combat.flags&~15) || e.combat.meter>100 ||
+        ((e.combat.flags&16) && (e.kind!=EntityKind::Pawn || !(e.flags&1) || (e.flags&2) || e.combat.phase || e.combat.offhand.id || e.combat.guard)) ||
+        !validRef(e.combat.offhand) || (e.combat.flags&~31) || e.combat.meter>100 ||
         e.combat.phase>7 || e.combat.age>10000 || e.combat.cooldown>4000 || e.combat.ready>3 ||
         (e.combat.phase>=6 && (e.combat.offhand.id || (e.combat.flags&11) || e.combat.guard)) ||
         e.combat.runeCapacity>200 || e.combat.runePower>e.combat.runeCapacity ||
@@ -515,6 +516,7 @@ bool decodeMatchContract(uint32_t epoch,std::span<const uint8_t> bytes,MatchCont
 }
 namespace {
 bool validStatus(const MatchStatus& s) {
+    if((s.weatherSeed==0)!=(s.weatherStartMs==0) || s.weatherStartMs>uint64_t(INT64_MAX)/4)return false;
     if(s.phase<MatchPhase::Waiting || s.phase>MatchPhase::Intermission || s.secondsLeft>86400 ||
        s.fragLimit>10000 || s.teams<2 || s.teams>4 || s.scores.size()>32 || s.winner>32 ||
        (s.phase!=MatchPhase::Intermission && s.winner))return false;
@@ -545,10 +547,11 @@ bool encodeMatchStatus(uint32_t epoch,const MatchStatus& s,Bytes& out) {
     w.put(uint8_t(s.mode));w.put(s.winningTeam);for(auto score:s.teamScores)w.put(score);w.put(s.teams);
     w.put(s.arenaPhase);w.put(s.arenaCountdown);w.put(s.arenaRound);
     w.put(uint8_t(s.headBallStarted));w.put(s.headBallCountdown);for(auto ready:s.readyTeams)w.put(ready);
+    w.put(s.weatherSeed);w.put(s.weatherStartMs);
     out=std::move(w.b);return true;
 }
 bool decodeMatchStatus(uint32_t epoch,std::span<const uint8_t> bytes,MatchStatus& out) {
-    if(bytes.size()>694)return false;
+    if(bytes.size()>706)return false;
     Reader r{bytes};if(!r.header(9,epoch))return false;
     MatchStatus s;s.phase=MatchPhase(r.get<uint8_t>());s.secondsLeft=r.get<uint32_t>();
     s.fragLimit=r.get<uint32_t>();s.winner=r.get<uint32_t>();auto count=r.get<uint8_t>();
@@ -558,6 +561,7 @@ bool decodeMatchStatus(uint32_t epoch,std::span<const uint8_t> bytes,MatchStatus
     s.arenaPhase=r.get<uint8_t>();s.arenaCountdown=r.get<uint8_t>();s.arenaRound=r.get<uint32_t>();
     auto started=r.get<uint8_t>();if(started>1)return false;s.headBallStarted=started!=0;
     s.headBallCountdown=r.get<uint8_t>();for(auto& ready:s.readyTeams)ready=r.get<uint8_t>();
+    s.weatherSeed=r.get<uint32_t>();s.weatherStartMs=r.get<uint64_t>();
     if(!r.done() || !validStatus(s))return false;
     out=std::move(s);return true;
 }
@@ -968,12 +972,30 @@ bool decodeCharacterChoice(uint32_t epoch,std::span<const uint8_t> bytes,Charact
     if(!r.ok || !validCharacter(c))return false;
     out=c;return true;
 }
-ReplicationPeer::ReplicationPeer(SecureSession& s,MatchContract contract,CharacterChoice choice):session(s),match(std::move(contract)),replicationEpoch(s.worldEpoch()),localCharacter(choice)
+bool encodePlayerProfile(uint32_t epoch,const PlayerProfile& p,Bytes& out){
+ if(!epoch||!validPlayerName(p.name))return false;Writer w;w.header(14,epoch);w.put(uint8_t(p.bot));w.put(uint8_t(p.name.size()));w.b.insert(w.b.end(),p.name.begin(),p.name.end());out=std::move(w.b);return true;
+}
+bool decodePlayerProfile(uint32_t epoch,std::span<const uint8_t> bytes,PlayerProfile& out){
+ if(bytes.size()>11+MaxPlayerNameBytes)return false;Reader r{bytes};if(!r.header(14,epoch))return false;auto bot=r.get<uint8_t>(),size=r.get<uint8_t>();if(!r.ok||bot>1||size>MaxPlayerNameBytes||bytes.size()-r.at!=size)return false;
+ PlayerProfile p{std::string((const char*)bytes.data()+r.at,size),bool(bot)};r.at+=size;if(!r.done()||!validPlayerName(p.name))return false;out=std::move(p);return true;
+}
+bool encodePlayerLabel(uint32_t epoch,const PlayerLabel& p,Bytes& out){
+ if(!epoch||p.player<1||p.player>32||!validPlayerName(p.name))return false;Writer w;w.header(13,epoch);w.put(p.player);w.put(uint8_t(p.bot));w.put(uint8_t(p.name.size()));w.b.insert(w.b.end(),p.name.begin(),p.name.end());out=std::move(w.b);return true;
+}
+bool decodePlayerLabel(uint32_t epoch,std::span<const uint8_t> bytes,PlayerLabel& out){
+ if(bytes.size()>15+MaxPlayerNameBytes)return false;Reader r{bytes};if(!r.header(13,epoch))return false;auto id=r.get<uint32_t>();auto bot=r.get<uint8_t>(),size=r.get<uint8_t>();if(!r.ok||bot>1||size>MaxPlayerNameBytes||bytes.size()-r.at!=size)return false;
+ PlayerLabel p{id,std::string((const char*)bytes.data()+r.at,size),bool(bot)};r.at+=size;if(!r.done()||id<1||id>32||!validPlayerName(p.name))return false;out=std::move(p);return true;
+}
+bool ReplicationPeer::publishPlayerLabel(const PlayerLabel& p){
+ if(!session.isServer()||matchState!=MatchState::Agreed)return false;auto i=sentLabels.find(p.player);if(i!=sentLabels.end()&&i->second==p)return true;
+ Bytes b;if(!encodePlayerLabel(replicationEpoch,p,b)||!session.enqueue(Lane::Control,std::move(b),0))return false;sentLabels[p.player]=p;return true;
+}
+ReplicationPeer::ReplicationPeer(SecureSession& s,MatchContract contract,CharacterChoice choice,PlayerProfile profile):session(s),match(std::move(contract)),replicationEpoch(s.worldEpoch()),localCharacter(choice),localProfile(std::move(profile))
 {
-    if(!validCharacter(choice) || !validMatch(match))throw std::invalid_argument("invalid match contract");
+    if(!validCharacter(choice) || !validMatch(match) || !validPlayerName(localProfile.name))throw std::invalid_argument("invalid match contract");
 }
 void ReplicationPeer::resetMap(MatchContract contract,uint32_t epoch) {
-    match=std::move(contract);replicationEpoch=epoch;matchState=MatchState::Awaiting;matchSent=false;characterSent=false;receivedCharacter.reset();
+    match=std::move(contract);replicationEpoch=epoch;matchState=MatchState::Awaiting;matchSent=false;characterSent=false;receivedCharacter.reset();receivedProfile.reset();profileSent=false;labels.clear();sentLabels.clear();
     inputs={};commands=InputReceiver{};snapshots=SnapshotSender{};world={};
     lastActionOffered=nextFeedback=lastActive=lastCombatSent=lastCombatReceived=lastCombatTick=lastActorSent=lastActorReceived=0;
     combatResults.clear();actorEvents.clear();pendingDecisions.clear();
@@ -1034,6 +1056,7 @@ void ReplicationPeer::step(bool sendInputs)
     const auto now=session.localTime();
     const auto epoch=replicationEpoch;
     if(matchState==MatchState::Mismatch && !closing)return;
+    if(!session.isServer() && !profileSent && !travelRequest){Bytes p;if(encodePlayerProfile(epoch,localProfile,p)&&session.enqueue(Lane::Control,std::move(p),0))profileSent=true;else return;}
     // Ordered and authenticated; the server never accepts arbitrary class paths.
     if(!session.isServer() && !characterSent && !travelRequest) {
         Bytes choice;
@@ -1063,7 +1086,8 @@ void ReplicationPeer::step(bool sendInputs)
         // Cross-lane delayed records from the previous map must not poison the
         // new contract, actor sequence, snapshot baseline or action stream.
         if(travelRequest || m.payload.size()<9 || Reader{std::span<const uint8_t>(m.payload).subspan(5)}.get<uint32_t>()!=epoch) {++rejected;continue;}
-        if(session.isServer() && m.lane==Lane::Control && m.payload[4]==12) {
+        if(session.isServer() && m.lane==Lane::Control && m.payload[4]==14){PlayerProfile p;ok=decodePlayerProfile(epoch,m.payload,p);if(ok)receivedProfile=std::move(p);}
+        else if(session.isServer() && m.lane==Lane::Control && m.payload[4]==12) {
             CharacterChoice choice;
             ok=!receivedCharacter && decodeCharacterChoice(epoch,m.payload,choice);
             if(ok)receivedCharacter=choice;
@@ -1072,11 +1096,12 @@ void ReplicationPeer::step(bool sendInputs)
         {
             MatchContract remote;
             ok=decodeMatchContract(epoch,m.payload,remote);
-            if(!ok || remote!=match || (session.isServer() && !receivedCharacter))matchState=MatchState::Mismatch;
+            if(!ok || remote!=match || (session.isServer() && (!receivedCharacter || !receivedProfile)))matchState=MatchState::Mismatch;
             else matchState=MatchState::Agreed;
         }
         else if(matchState!=MatchState::Agreed) { ++rejected;continue; }
         else if(closing || receivedClose)continue;
+        else if(!session.isServer() && m.lane==Lane::Control && m.payload[4]==13){PlayerLabel p;ok=decodePlayerLabel(epoch,m.payload,p);if(ok)labels[p.player]=std::move(p);}
         else if (session.isServer() && m.lane==Lane::Gameplay)
         {
             InputBatch b;

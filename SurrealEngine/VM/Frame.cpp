@@ -8,6 +8,8 @@
 #include "Frame.h"
 #include "RuneHud.h"
 #include "RuneKick.h"
+#include "RuneLeg.h"
+#include "RuneSpider.h"
 #include "RuneBash.h"
 #include "RuneBloodlust.h"
 #include "RuneSlam.h"
@@ -338,6 +340,7 @@ ExpressionValue Frame::Call(UFunction* func, UObject* instance, const ArrayView<
     // whose original script ignores Fire. Other state restrictions are checked
     // by the move itself before this early hook accepts anything.
     ExpressionValue slamResult;
+    if(RuneSpider::ScriptCall(func,instance,args,slamResult))return slamResult;
     if(RunePhysics::ScriptCall(func,instance,args,slamResult))return slamResult;
     if(RuneSlam::ScriptCall(func,instance,args,slamResult))return slamResult;
 
@@ -357,6 +360,7 @@ ExpressionValue Frame::Call(UFunction* func, UObject* instance, const ArrayView<
     if(engine->NetworkCombatAuthority && engine->NetworkCombatAuthority->deferWeaponCall(instance,func->Name,args))
         return func->Name=="DoWeaponSwipe"?ExpressionValue::BoolValue(true):ExpressionValue::NothingValue();
 #endif
+    RuneLeg::WeaponScope legContact(func,instance,args);
 	if (AllFlags(func->FuncFlags, FunctionFlags::Native))
 	{
 		return CallNative(func, instance, args);
@@ -414,6 +418,7 @@ ExpressionValue Frame::Call(UFunction* func, UObject* instance, const ArrayView<
 		}
 
         RunePhysics::AfterScriptCall(func,instance,args);
+        RuneLeg::AfterScriptCall(func,instance,args);
 		return result;
 	}
 }

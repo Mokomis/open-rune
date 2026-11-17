@@ -1,5 +1,9 @@
 #include "Precomp.h"
 #include "RuneFeedback.h"
+#include "RunePhysics.h"
+#include "RuneLeg.h"
+#include "RuneSpider.h"
+#include "RuneBash.h"
 #include "Engine.h"
 #include "Packages/Engine/UViewport.h"
 #include "Packages/Engine/Actors/Pawn/UPlayerPawn.h"
@@ -39,7 +43,7 @@ ScriptScope::ScriptScope(UFunction* fn,UObject* obj,const ArrayView<ExpressionVa
 #ifdef OPENRUNE_ENABLE_NETWORK
     observeNetwork=engine && engine->NetworkCombatAuthority;
 #endif
-    if(!observeNetwork && (!GameFeedback::Enabled.load()||!Local()))return;
+    if(!observeNetwork && !RuneLeg::Observing() && !RuneSpider::Busy(UObject::TryCast<UActor>(obj)) && RunePhysics::RequestedMode.load()==0 && (!GameFeedback::Enabled.load()||!Local()))return;
     static const NameString joint="JointDamaged",acquire="AcquireInventory",add="AddInventory";
     if(fn->Name!=joint&&fn->Name!=acquire&&fn->Name!=add)return;
     actor=UObject::TryCast<UActor>(obj);if(!actor)return;
@@ -47,6 +51,7 @@ ScriptScope::ScriptScope(UFunction* fn,UObject* obj,const ArrayView<ExpressionVa
     if(fn->Name==joint&&args.size()>=2) {
         kind=1;outer=damageDepth++==0;
         if(!outer)return;
+        if(args.size()>=6){hit=args[2].ToVector();momentum=args[3].ToVector();hitJoint=args[5].ToInt();}
         damage=args[0].ToInt();instigator=UObject::TryCast<UPawn>(args[1].ToObject());
         if(auto* pawn=UObject::TryCast<UPawn>(actor))health=pawn->Health();
 #ifdef OPENRUNE_ENABLE_NETWORK
@@ -73,6 +78,13 @@ ScriptScope::~ScriptScope() {
         return;
     }
     if(!outer||damage<=0)return;
+    if(auto* pawn=UObject::TryCast<UPawn>(actor);pawn && pawn->Health()>0 && pawn->Health()<health)
+    {
+        RuneSpider::Damaged(pawn);
+        RuneLeg::AfterDamage(pawn,instigator,damage,health,hitJoint);
+        RunePhysics::React(pawn,hit,momentum,hitJoint);
+        RuneBash::DamageReaction(pawn,instigator,health-pawn->Health());
+    }
 #ifdef OPENRUNE_ENABLE_NETWORK
     if(engine && engine->NetworkCombatAuthority && instigator && !instigator->RuneKickActive && instigator->RuneBashPhase!=1) {
         auto* target=UObject::TryCast<UPawn>(actor->IsA("Shield")?actor->Owner():actor);

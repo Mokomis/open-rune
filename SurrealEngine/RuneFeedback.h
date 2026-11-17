@@ -1,5 +1,6 @@
 #pragma once
 #include "GameFeedback.h"
+#include "Math/vec.h"
 class UObject;
 class UActor;
 class UPawn;
@@ -20,5 +21,6 @@ struct ScriptScope {
     UPawn* instigator=nullptr;
     int kind=0,health=0,damage=0,exceptions=0;
     bool outer=false;
+    vec3 hit{0},momentum{0};int hitJoint=-1;
 };
 }

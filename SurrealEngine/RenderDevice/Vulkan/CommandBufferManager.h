@@ -15,6 +15,7 @@ public:
 	void SubmitCommands(bool present, int presentWidth, int presentHeight, bool presentFullscreen, bool wait);
 	VulkanCommandBuffer* GetTransferCommands();
 	VulkanCommandBuffer* GetDrawCommands();
+	std::unique_ptr<VulkanCommandBuffer> BeginSceneCommands(VulkanRenderPass* pass, VulkanFramebuffer* framebuffer);
 	void DeleteFrameObjects();
 	// Optional timestamps at existing pass boundaries; never split a render pass.
 	enum class GpuPass { Other, Scene, Shadow, Water, Resolve, Bloom, Present, Count };
@@ -22,6 +23,8 @@ public:
 
 	struct DeleteList
 	{
+		// Secondary recordings must live as long as the submission that uses them.
+		std::vector<std::unique_ptr<VulkanCommandBuffer>> sceneCommands;
 		std::vector<std::unique_ptr<VulkanImage>> images;
 		std::vector<std::unique_ptr<VulkanImageView>> imageViews;
 		std::vector<std::unique_ptr<VulkanBuffer>> buffers;

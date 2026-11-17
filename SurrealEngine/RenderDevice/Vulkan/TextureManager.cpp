@@ -19,11 +19,24 @@ namespace
 std::filesystem::path ReplacementRoot()
 {
     auto overridePath=commandline->GetArg("", "--texture-pack-root", "");
-    return overridePath.empty()?std::filesystem::path(engine->LaunchInfo.gameRootFolder)/"TexturePacks"/"OpenRune":std::filesystem::path(overridePath);
+    if(!overridePath.empty()) return std::filesystem::path(overridePath);
+    auto root=std::filesystem::path(engine->LaunchInfo.gameRootFolder)/"TexturePacks";
+    std::error_code error;
+    if(std::filesystem::is_regular_file(root/"OpenRune-release"/"index.tsv",error))
+        return root/"OpenRune-release";
+    return root/"OpenRune";
 }
 }
 
-TextureManager::TextureManager(VulkanRenderDevice* renderer) : renderer(renderer)
+#if defined(_WIN32) || defined(__ANDROID__)
+static constexpr int DefaultCacheOriginalReliefMisses = 1;
+#else
+static constexpr int DefaultCacheOriginalReliefMisses = 0;
+#endif
+
+TextureManager::TextureManager(VulkanRenderDevice* renderer)
+    : renderer(renderer),
+      CacheOriginalReliefMisses(commandline->GetArgInt("", "--cache-relief-misses", DefaultCacheOriginalReliefMisses)!=0)
 {
 	CreateNullTexture();
 	CreateDitherTexture();
@@ -263,7 +276,14 @@ CachedTexture* TextureManager::GetRelief(TextureInfo* info)
         auto* result=authored.get();ReliefCache[info->CacheID]=std::move(authored);return result;
     }
     auto package = info->Texture->package->GetPackageName();
-    if (package != "Wood" && package != "Rock" && package != "Brckston") return nullptr;
+    if (package != "Wood" && package != "Rock" && package != "Brckston")
+    {
+        // Static source art has a fixed 1x lookup until the texture cache is
+        // cleared. Pack tiers can depend on which replacement color was uploaded.
+        if (CacheOriginalReliefMisses && renderer->TexturePackQuality == 0 && !info->bRealtimeChanged)
+            ReliefCache.try_emplace(info->CacheID);
+        return nullptr;
+    }
     auto& cached = ReliefCache[info->CacheID];
     if (cached) return cached.get();
     if (info->Mips[0].Data.size() < (size_t)info->USize * info->VSize) return nullptr;
@@ -313,7 +333,7 @@ void TextureManager::ClearCache()
 void TextureManager::ClearAllBindlessIndexes()
 {
     for (auto& it : ResponseCache) if(it.second) for (int& index : it.second->BindlessIndex) index = -1;
-	for (auto& it : ReliefCache) for (int& index : it.second->BindlessIndex) index = -1;
+	for (auto& it : ReliefCache) if (it.second) for (int& index : it.second->BindlessIndex) index = -1;
     for (auto& it : MaterialCache) for (int& index : it.second->BindlessIndex) index = -1;
 	for (auto& cache : TextureCache)
 	{

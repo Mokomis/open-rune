@@ -33,6 +33,7 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
     private boolean networkWasWaiting;
     private File lastMultiplayerInvite;
     private static native boolean nativeMultiplayerJoin(String file);
+    private static native boolean nativeSetPlayerName(String name);
     private static native String nativeMultiplayerStatus();
     private static native void nativeMultiplayerAction(int action);
     private boolean wasMultiplayer, respawning, networkWasDead, bloodlustTouchScheduled,slamTouchScheduled;
@@ -49,7 +50,7 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
         }catch(Exception|LinkageError e){if(menu!=null)menu.setNotice("Game discovery could not start: "+e.getMessage());}
         return discovery;
     }
-    public void joinDiscovered(String key){RuneDiscovery d=discovery();if(d!=null)d.command("join",key);}
+    public void joinDiscovered(String key){if(options.playerName().isEmpty()){menu.playerProfile(()->joinDiscovered(key));return;}nativeSetPlayerName(options.playerName());RuneDiscovery d=discovery();if(d!=null)d.command("join",key);}
 
     private File exportInvitation;
     public RuneHosting hosting(){
@@ -84,6 +85,38 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
         picker.addCategory(android.content.Intent.CATEGORY_OPENABLE);picker.setType("*/*");
         try{startActivityForResult(picker,702);}catch(android.content.ActivityNotFoundException e){menu.setNotice("No document picker is available on this device.");}
     }
+    private String textureInstallStatus = "";
+    private boolean textureInstallActive;
+    private final Runnable textureInstallCheck = new Runnable() {
+        @Override public void run() {
+            File game = new File(getFilesDir(), "game");
+            if (RuneTexturePack.ready(game) || getIntent().hasExtra("saveTest")) return;
+            if (!textureInstallActive) {
+                textureInstallActive = true;
+                new Thread(() -> {
+                    try {
+                        RuneTexturePack.prepare(getApplicationContext(), game, MainActivity.this::textureProgress);
+                    } catch (Exception e) {
+                        android.util.Log.w("OpenRune", "Texture preparation will retry", e);
+                        textureProgress("Remastered textures will retry automatically.");
+                    } finally {
+                        runOnUiThread(() -> textureInstallActive = false);
+                    }
+                }, "Open Rune texture preparation").start();
+            }
+            mLayout.postDelayed(this, 120_000);
+        }
+    };
+    private void textureProgress(String value) {
+        runOnUiThread(() -> {
+            textureInstallStatus = value;
+            if (menu != null) menu.updateTextureInstallStatus();
+        });
+    }
+    @Override public String textureInstallStatus() {
+        if (!textureInstallStatus.isEmpty()) return textureInstallStatus;
+        return RuneTexturePack.ready(new File(getFilesDir(), "game")) ? "" : "Preparing remastered textures automatically.";
+    }
     @Override protected void onActivityResult(int request,int result,android.content.Intent data){
         super.onActivityResult(request,result,data);
         if(request==703){
@@ -111,6 +144,8 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
         }catch(java.io.IOException e){menu.setNotice(e.getMessage());}
     }
     private void joinInvitation(File invite){
+        if(options.playerName().isEmpty()){menu.playerProfile(()->joinInvitation(invite));return;}
+        nativeSetPlayerName(options.playerName());
         releaseKeys();
         if(nativeMultiplayerJoin(invite.getAbsolutePath())){lastMultiplayerInvite=invite;lastResultTime=0;networkWasWaiting=false;menu.setNotice("");wasMultiplayer=true;respawning=false;busySession=false;menu.hasSession=false;updateTouchVisibility();resumeNetwork();}
         else menu.setNotice(multiplayerStatus());
@@ -221,9 +256,17 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
         menuOpen=true;nativeMenuSetting(0,1);nativeMenuSetting(8,options.get("hud"));hud.setVisibility(View.GONE);
         menuLayer.setVisibility(View.VISIBLE);menu.requestFocus();
     }
+    private boolean frameBenchmark() {
+        return getIntent().hasExtra("saveTest") && getIntent().getIntExtra("frames", 0) > 0
+                && getIntent().getBooleanExtra("frameBenchmark", false);
+    }
+
     public void resume() {
         if(!busySession&&dead()){openMenu();return;}
-        releaseKeys();menuOpen=false;menuLayer.setVisibility(View.GONE);controls.setVisibility(View.VISIBLE);hud.setVisibility(View.VISIBLE);
+        releaseKeys();menuOpen=false;menuLayer.setVisibility(View.GONE);
+        int overlayVisibility = frameBenchmark() ? View.GONE : View.VISIBLE;
+        controls.setVisibility(overlayVisibility);
+        hud.setVisibility(overlayVisibility);
         nativeMenuSetting(0,0);mSurface.requestFocus();syncFeedback();
     }
     private void openMenu() {
@@ -252,6 +295,7 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
     }
     private void applySettings(String changed) {
         if(changed.equals("soundRemaster")&&menu!=null)menu.setNotice("Restart Open Rune to apply the sound effects setting.");
+        if(changed.equals("water")&&menu!=null)menu.setNotice("Restart Open Rune after switching to or from Crest water.");
         // Comparison is temporary. Never overwrite saved effect selections.
         boolean original=options.comparing;
         nativeSetEnhanced(!original&&options.get("bloom")!=0);
@@ -274,6 +318,7 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
         if(changed.equals("music")||(changed.equals("initial")&&getPreferences(MODE_PRIVATE).contains("menu.music")))nativeMenuSetting(5,options.get("music"));
         if(changed.equals("effects")||(changed.equals("initial")&&getPreferences(MODE_PRIVATE).contains("menu.effects")))nativeMenuSetting(6,options.get("effects"));
         nativeMenuSetting(7,options.get("difficulty"));
+        nativeSetPlayerName(options.playerName());nativeMenuSetting(27,options.get("playerNames"));
         nativeMenuSetting(22,options.get("networkDiagnostics"));
         nativeMenuSetting(23,options.get("networkSmoothing"));
         nativeMenuSetting(19,options.characterChoice(false));
@@ -290,9 +335,9 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
         nativeMenuSetting(14,1);
         nativeMenuSetting(15,1);nativeMenuSetting(21,1);
         nativeMenuSetting(16,original?0:options.get("fireEffects"));
-        nativeMenuSetting(18,original?0:options.get("snow"));
+        nativeMenuSetting(18,original?-2:options.get("snow")-1);
         nativeMenuSetting(24,original?0:options.get("gore"));
-        nativeMenuSetting(25,getIntent().hasExtra("physicsMode")?getIntent().getIntExtra("physicsMode",0):options.get("physics"));
+        nativeMenuSetting(25,getIntent().hasExtra("physicsMode")?getIntent().getIntExtra("physicsMode",RuneSettings.PHYSICS_DEFAULT):options.get("physics"));
         if(hud!=null){hud.modern=options.get("hud")!=0;hud.canvas.invalidate();}
         if(rumble!=null&&(changed.equals("initial")||changed.startsWith("rumble")))rumble.configure(options.get("rumble")!=0,options.get("rumbleStrength"),options.get("rumbleOutput"));
         syncFeedback();
@@ -305,7 +350,7 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
         return String.format(java.util.Locale.ROOT,"Current camera: %.1f° horizontal · %.1f° vertical",h,v);
     }
     private final Runnable updateStatus=new Runnable(){public void run(){
-        if(!controlsVisible||fpsLabel==null)return;
+        if(!controlsVisible||fpsLabel==null||frameBenchmark())return;
         hosting().poll();
         String networkInvite=getIntent().getStringExtra("networkInvite");
         if(networkInvite!=null&&nativeCombatReady()){
@@ -357,7 +402,7 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
         fpsLabel.postDelayed(this,500);
     }};
     private final Runnable updateHud=new Runnable(){public void run(){
-        if(!controlsVisible||hud==null)return;
+        if(!controlsVisible||hud==null||frameBenchmark())return;
         nativeMenuSetting(17,menuOpen&&((menuLayer!=null&&menuLayer.getVisibility()==View.VISIBLE)||(hud.editing&&hud.previewBackdrop))&&getIntent().getBooleanExtra("menuIdle",true)?1:0);
         if(!menuOpen||hud.editing)hud.update(hudValues,nativeHudSnapshot(hudValues),hudFps,options.get("counter")!=0);
         if(controls!=null){
@@ -556,22 +601,38 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
         addTouchControls();
     }
     @Override protected void onPause(){
+        mLayout.removeCallbacks(textureInstallCheck);
         controlsVisible=false;if(rumble!=null)rumble.foreground(false);if(hud!=null){hud.removeCallbacks(updateHud);hud.suspend();}if(fpsLabel!=null)fpsLabel.removeCallbacks(updateStatus);releaseKeys();nativeMenuSetting(0,1);super.onPause();
     }
-    @Override protected void onResume(){super.onResume();applyRefreshRate();controlsVisible=true;nativeMenuSetting(0,menuOpen?1:0);if(fpsLabel!=null){fpsLabel.removeCallbacks(updateStatus);fpsLabel.post(updateStatus);}if(hud!=null){hud.removeCallbacks(updateHud);hud.post(updateHud);}if(rumble!=null)rumble.foreground(hasWindowFocus());syncFeedback();}
+    @Override protected void onResume(){super.onResume();mLayout.removeCallbacks(textureInstallCheck);mLayout.postDelayed(textureInstallCheck, 3000);applyRefreshRate();controlsVisible=true;nativeMenuSetting(0,menuOpen?1:0);if(fpsLabel!=null){fpsLabel.removeCallbacks(updateStatus);fpsLabel.post(updateStatus);}if(hud!=null){hud.removeCallbacks(updateHud);hud.post(updateHud);}if(rumble!=null)rumble.foreground(hasWindowFocus());syncFeedback();}
     @Override public void onWindowFocusChanged(boolean focus){if(!focus)releaseKeys();super.onWindowFocusChanged(focus);if(rumble!=null)rumble.foreground(focus&&controlsVisible);syncFeedback();}
     @Override protected void onDestroy(){if(discovery!=null)discovery.close();if(hosting!=null)hosting.stop();if(rumble!=null)rumble.close();if(controller!=null)controller.close();super.onDestroy();android.os.Process.killProcess(android.os.Process.myPid());}
     @Override protected String[] getArguments() {
         ArrayList<String> args=new ArrayList<>();
         args.add("--direct");
-        args.add("--rune-physics="+getIntent().getIntExtra("physicsMode",options==null?0:options.get("physics")));
+        if(!getIntent().hasExtra("waterModel"))args.add("--water-model="+(options!=null&&options.get("water")==3?3:1));
+        args.add("--rune-physics="+getIntent().getIntExtra("physicsMode",options==null?RuneSettings.PHYSICS_DEFAULT:options.get("physics")));
+        if(getIntent().hasExtra("saveTest") && (getIntent().getIntExtra("frames",0)>0 || (getIntent().getIntExtra("networkSeconds",0)>0 && getIntent().getIntExtra("networkSeconds",0)<=300))) {
+            if(getIntent().getBooleanExtra("physicsTrace",false))args.add("--rune-puppet-trace");
+            if(getIntent().hasExtra("breathDemo"))args.add("--breath-demo="+getIntent().getStringExtra("breathDemo"));
+            if(getIntent().hasExtra("breathEffects"))args.add("--rune-breath="+(getIntent().getBooleanExtra("breathEffects",true)?1:0));
+            if(getIntent().getBooleanExtra("breathTrace",false))args.add("--trace-rune-breath");
+            if(getIntent().getBooleanExtra("physicsMuscles",false))args.add("--physics-muscles");
+            if(getIntent().hasExtra("puppetMode"))args.add("--rune-puppet="+(getIntent().getBooleanExtra("puppetMode",true)?1:0));
+            if(getIntent().hasExtra("footIK"))args.add("--rune-ik="+(getIntent().getBooleanExtra("footIK",true)?1:0));
+            if(getIntent().getBooleanExtra("nativePuppetProbe",false) || getIntent().getBooleanExtra("nativeIKProbe",false)) {
+                args.add("--rune-probe");args.add("--rune-physics-probe");
+                args.add(getIntent().getBooleanExtra("nativePuppetProbe",false)?"--rune-puppet-probe":"--rune-ik-probe");
+            }
+        }
+
         if(getIntent().hasExtra("physicsImpacts")&&getIntent().hasExtra("saveTest")&&getIntent().getIntExtra("frames",0)>0){int value=getIntent().getIntExtra("physicsImpacts",1);if(value!=0&&value!=1)throw new IllegalArgumentException("Invalid isolated impact comparison");args.add("--physics-impacts="+value);}
         if(getIntent().getBooleanExtra("physicsEnvironment",false)&&getIntent().hasExtra("saveTest")&&getIntent().getIntExtra("frames",0)>0)args.add("--physics-environment");
         if(getIntent().getBooleanExtra("physicsTouch",false)&&getIntent().hasExtra("saveTest")&&getIntent().getIntExtra("frames",0)>0)args.add("--physics-touch");
         if(getIntent().getBooleanExtra("physicsRepeat",false)&&getIntent().hasExtra("saveTest")&&getIntent().getIntExtra("frames",0)>0)args.add("--physics-repeat");
         if(getIntent().getBooleanExtra("physicsPlayground",false)&&getIntent().hasExtra("saveTest")){args.add("--physics-playground");args.add("--physics-captures="+new File(getFilesDir(),"physics-stage").getAbsolutePath());}
         args.add("--sound-remaster="+getIntent().getIntExtra("soundRemaster",options==null?0:options.get("soundRemaster")));
-        args.add("--snow="+(options!=null&&!options.comparing?options.get("snow"):0));
+        args.add("--snow="+(options!=null?(options.comparing?-2:options.get("snow")-1):-1));
         args.add("--rune-effects="+(options!=null?options.get("fireEffects"):1));
         if(getIntent().getBooleanExtra("effectsProbe",false)&&getIntent().hasExtra("saveTest"))args.add("--probe-effects");
         String driver=getIntent().getStringExtra("vulkanDriver");
@@ -582,6 +643,18 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
         args.add("--rune-animation-interpolation="+getIntent().getIntExtra("animationSmooth",1));
         if(!getIntent().hasExtra("map")&&!getIntent().hasExtra("resumeSlot")&&getIntent().getIntExtra("frames",0)==0)args.add("--menu-title");
         args.add("--close-menu");
+        if (frameBenchmark()) {
+            args.add("--frame-benchmark");
+            if (getIntent().hasExtra("probeWorkers"))
+                args.add("--environment-probe-workers=" + (getIntent().getBooleanExtra("probeWorkers", false) ? 1 : 0));
+
+            if (getIntent().hasExtra("pipelineCache"))
+                args.add("--render-pipeline-cache=" + (getIntent().getBooleanExtra("pipelineCache", false) ? 1 : 0));
+            if (getIntent().hasExtra("sceneStores"))
+                args.add("--render-scene-stores=" + getIntent().getIntExtra("sceneStores", 0));
+            if (getIntent().hasExtra("reliefMissCache"))
+                args.add("--cache-relief-misses=" + (getIntent().getBooleanExtra("reliefMissCache", false) ? 1 : 0));
+        }
         String launchMap=getIntent().getStringExtra("map");
         args.add("--url="+(launchMap==null?"DM-Hildir.run":launchMap));
         args.add("--maxfps="+getIntent().getIntExtra("fps",0));
@@ -612,9 +685,16 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
         if(getIntent().hasExtra("resumeSlot")) args.add("--probe-resume-slot="+getIntent().getIntExtra("resumeSlot",-1));
         if(getIntent().hasExtra("mailbox")) args.add("--render-mailbox="+getIntent().getIntExtra("mailbox",1));
         int frames=getIntent().getIntExtra("frames",0);
+        if(getIntent().getBooleanExtra("goreMaterialProbe",false)) {
+            if(saveTest==null || frames<540 || frames>1000)
+                throw new IllegalArgumentException("Material comparison requires bounded isolated saves");
+            args.add("--probe-gore");args.add("--probe-enemy=GoblinWarrior");
+            args.add("--capture-gore-material-comparison");args.add("--capture-present-frame");
+        }
         if(frames>0) {
             args.add("--maxframes="+frames);
-            args.add("--capture-frame="+new File(getFilesDir(),"frame.ppm").getAbsolutePath());
+            if (!frameBenchmark() || getIntent().getBooleanExtra("benchmarkCapture", false))
+                args.add("--capture-frame="+new File(getFilesDir(),"frame.ppm").getAbsolutePath());
         }
         if(getIntent().hasExtra("saveTest")) {
             String nativeFixture=getIntent().getStringExtra("networkNativeFixture");
@@ -654,9 +734,13 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
         if(getIntent().getBooleanExtra("textureCompare",false)) args.add("--capture-texture-comparison");
         if(saveTest!=null && frames>0) {
             if(getIntent().getBooleanExtra("capturePresent",false))args.add("--capture-present-frame");
-            if(getIntent().hasExtra("waterModel")){int value=getIntent().getIntExtra("waterModel",1);if(value<0||value>1)throw new IllegalArgumentException("Invalid isolated water model");args.add("--water-model="+value);}
+            if(getIntent().hasExtra("waterModel")){int value=getIntent().getIntExtra("waterModel",1);if(value<0||value>3)throw new IllegalArgumentException("Invalid isolated water model");args.add("--water-model="+value);}
             if(getIntent().hasExtra("waterUnderwater"))args.add("--water-underwater="+(getIntent().getBooleanExtra("waterUnderwater",true)?1:0));
             if(getIntent().getBooleanExtra("waterProbe",false))args.add("--probe-modern-water-only");
+            if(getIntent().hasExtra("crestSpecialized"))args.add("--crest-specialized="+(getIntent().getBooleanExtra("crestSpecialized",true)?1:0));
+            if(getIntent().hasExtra("crestInpassCapture"))args.add("--crest-inpass-capture="+(getIntent().getBooleanExtra("crestInpassCapture",true)?1:0));
+            if(getIntent().getBooleanExtra("crestDebug",false))args.add("--crest-debug-water");
+            if(getIntent().getBooleanExtra("crestDump",false))args.add("--crest-dump="+new java.io.File(getFilesDir(),"crest-float.bin").getAbsolutePath());
             if(getIntent().getBooleanExtra("traceWater",false))args.add("--trace-rune-water");
         }
         if(getIntent().getBooleanExtra("vulkanProbe",false)) args.add("--probe-vulkan");
@@ -697,6 +781,10 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
         if(getIntent().getBooleanExtra("weaponTouch",false)) args.add("--probe-weapon-touch");
         if(getIntent().hasExtra("limbJoint")) args.add("--probe-limb-joint="+getIntent().getIntExtra("limbJoint",-1));
         if(enemy!=null) args.add("--probe-enemy="+enemy);
+        if(getIntent().getBooleanExtra("corpseHandProbe",false)&&saveTest!=null&&frames>0){
+            args.add("--probe-corpse");args.add("--corpse-hand-audit");
+            args.add("--corpse-demo-capture="+new File(getFilesDir(),"corpse-hands").getAbsolutePath());
+        }
         if(getIntent().hasExtra("probeStart")) args.add("--probe-start="+getIntent().getStringExtra("probeStart"));
         if(getIntent().hasExtra("probeView")) args.add("--probe-view="+getIntent().getStringExtra("probeView"));
         if(getIntent().getBooleanExtra("checkReach",false)) args.add("--probe-check-reach");

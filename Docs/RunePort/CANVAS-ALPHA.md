@@ -26,6 +26,5 @@ Rune uses render style5 for alpha-blended canvas tiles. Native DrawTile/DrawTile
 - Additional ChAoS player starts and an upper platform were captured and visually reviewed. A final ten-view map pass completed with 300 profiled frames each at native scene size and four samples; all captures were reviewed. Some headings face close walls or void, as recorded in the sampled-view evidence.
 - All temporary lighting, fog, transparency, post-render and tracing bypasses were removed before the final build.
 
-Evidence: `/Users/rwillmore/OpenRuneArtifacts/ChaosRendering-20261108`, including exact arguments, original source snapshots, failed diagnostic compile and correction, reference/changed captures, logs and final source/binary hashes. Windows counterpart: `C:/OpenRune/outputs/chaos-rendering-20261108`.
 
 The previous overnight receipts remain historical evidence. Their black ChAoS images are startup snapshots, not evidence of a permanently missing world. Native-scene timing is separate from presentation FPS; no all-map120FPS or Android performance claim is made.

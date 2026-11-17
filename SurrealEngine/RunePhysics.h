@@ -21,14 +21,18 @@ struct PresentationScope {
   ~PresentationScope();
   PresentationScope(const PresentationScope &) = delete;
 };
-enum Mode { Original = 0, Cinematic = 1, Chaos = 2 };
-inline std::atomic<int> RequestedMode{Original};
+// Keep persisted/command-line IDs stable; old C++ names remain source aliases.
+enum Mode { Legacy = 0, Cinematic = 1, Standard = 2, Original = Legacy, Chaos = Standard };
+inline constexpr Mode DefaultMode = Standard;
+inline const char* ModeLabel(int value) { return value==Standard?"Standard":value==Cinematic?"Cinematic":"Legacy"; }
+inline std::atomic<int> RequestedMode{DefaultMode};
 struct Counters {
   unsigned ragdolls = 0, props = 0, awake = 0, bodies = 0;
   double stepMs = 0;
   unsigned wallSlams = 0, brokenProps = 0;
 };
 int mode();
+bool InPresentation();
 void Reset();
 void Tick(ULevel *, float elapsed, bool paused);
 bool Controls(UActor *);
@@ -54,6 +58,9 @@ bool Knockdown(UPawn *, UPawn *instigator, vec3 velocity, float strength = 1);
 // Shield-rush knockdowns also run in Original mode without enabling ambient props/corpses.
 bool ShieldRushKnockdown(UPawn *, UPawn *instigator, vec3 velocity);
 bool Prop(UActor *, vec3 velocity, UPawn *instigator = nullptr);
+// Cosmetic muscle reaction to an already committed hit, shared by players/bots
+// and remote replicas. It never owns movement, collision or damage.
+bool React(UPawn*, vec3 hit, vec3 momentum, int joint = -1);
 void Impact(UPawn *attacker, UPawn *target, vec3 velocity, bool blocked);
 void Release(UActor *);
 void OnDestroy(UActor *);

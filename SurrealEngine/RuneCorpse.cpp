@@ -87,7 +87,8 @@ vec3 CarryPoint(UPawn* p,UActor* body) {
     auto half=(body->CorpseBody.upper-body->CorpseBody.lower)*.5f;
     float depth=body->CorpseBody.supportDepth>0?body->CorpseBody.supportDepth:
         std::abs(r[2])*half.x+std::abs(r[6])*half.y+std::abs(r[10])*half.z;
-    return hands+vec3(0,0,depth-1.f);
+    // Rest on the upper palm surface instead of burying the hands inside the torso.
+    return hands+vec3(0,0,depth+1.f);
 }
 bool Clear(UPawn* p,vec3 point,float radius=18.f) {
     TraceFlags flags;flags.world=true;flags.movers=true;

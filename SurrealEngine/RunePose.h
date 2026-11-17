@@ -7,6 +7,14 @@
 namespace RuneAnimation {
 // Engine-thread option, set once at launch. Off retains the old sampler for A/B checks.
 inline bool Interpolate = true;
+// Sample the animated IK target without feeding a previous physical result back
+// into the muscles. Nested sampling/attachment evaluation preserves this scope.
+inline thread_local unsigned TargetDepth=0;
+struct TargetPoseScope {
+    TargetPoseScope(){++TargetDepth;}
+    ~TargetPoseScope(){--TargetDepth;}
+    TargetPoseScope(const TargetPoseScope&)=delete;
+};
 }
 
 struct RuneJointPose

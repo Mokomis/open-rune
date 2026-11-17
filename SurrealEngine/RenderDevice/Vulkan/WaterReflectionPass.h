@@ -14,7 +14,24 @@ void VulkanRenderDevice::PrepareModernWater(float height,float time,const vec4& 
     data[4]=lightDirection.x;data[5]=lightDirection.y;data[6]=lightDirection.z;data[7]=lightDirection.w;
     data[8]=lightColor.x;data[9]=lightColor.y;data[10]=lightColor.z;data[11]=lightColor.w;
     Buffers->ShadowLighting->WaterWorldToClip=data;
-    Buffers->ShadowLighting->WaterParameters=vec4(time,height,1,2);
+    Buffers->ShadowLighting->WaterParameters=vec4(time,height,1,Crest?3:2);
+    // Seaside's shallow BSP and the displaced carrier intersect at wave
+    // troughs. Preserve the authored coverage for this map's playable bay.
+    // Wave sampling, optical thickness and underwater refraction stay active.
+    static const NameString seaside("DM-Seaside");
+    StableCrestSurface = Crest && engine && engine->Level && engine->Level->package &&
+        engine->Level->package->GetPackageName() == seaside;
+    // No water preparation means no recurring FFT/foam/mip work. Normally
+    // the scene pass is deferred here, so this adds no render-pass boundary.
+    if(Crest && (!Crest->Initialized || Crest->LastTime!=time)) {
+        auto cmd=Commands->GetDrawCommands();bool resume=!ScenePassDeferred;
+        if (resume) { DrawBatch(cmd); EndSceneSegment(); }
+        Commands->SetProfilePass(CommandBufferManager::GpuPass::Water);
+        Crest->Update(cmd,time);
+        if(Crest->Frames==1 || (commandline->HasArg("","--trace-rune-water") && Crest->Frames%120==0))
+            LogMessage("RUNE_CREST_FFT frame="+std::to_string(Crest->Frames)+" time="+std::to_string(time));
+        if(resume)ResumeScenePass();else Commands->SetProfilePass(CommandBufferManager::GpuPass::Other);
+    }
 }
 void VulkanRenderDevice::PrepareWaterSky(TextureInfo* info)
 {
@@ -89,7 +106,7 @@ bool VulkanRenderDevice::BeginWaterReflection(SceneNode* frame,float height,floa
 {
     if((WorldFeatures&10240)!=10240||DrawingShadow||WaterReflectionActive)return false;
     DrawBatch(Commands->GetDrawCommands());
-    if(!ScenePassDeferred)Commands->GetDrawCommands()->endRenderPass();
+    if (!ScenePassDeferred) EndSceneSegment();
     CreateWaterTargets();WaterReflectionActive=true;
     Buffers->ShadowLighting->WaterWorldToClip=frame->Projection*frame->WorldToView;
     Buffers->ShadowLighting->WaterParameters=vec4(time,height,1,0);
@@ -124,4 +141,19 @@ void VulkanRenderDevice::EndWaterReflection()
         LogMessage("RUNE_WATER_BUDGET rendered="+std::to_string(WaterRenderCount)+" reused="+std::to_string(WaterReuseCount)+" size="+std::to_string(WaterSize)+" time="+std::to_string(CachedWaterTime));
     WaterReflectionActive=false;
     if(ScenePassDeferred)StartScenePass();else ResumeScenePass();
+}
+
+void VulkanRenderDevice::CaptureCrestBackground()
+{
+    if(!UsesCrestWater() || DrawingShadow || WaterReflectionActive)return;
+    auto cmd=Commands->GetDrawCommands();
+    if(ScenePassDeferred)StartScenePass();
+    DrawBatch(cmd);
+    EndSceneSegment();
+    Commands->SetProfilePass(CommandBufferManager::GpuPass::Water);
+    // Reuse the exact MSAA resolve already produced by the scene pass.
+    // Resolving the four-sample color a second time wastes mobile bandwidth.
+    const bool resolved=UsesInPassResolve() && commandline->GetArgInt("","--crest-inpass-capture",1)!=0;
+    Crest->Capture(cmd,resolved?Textures->Scene->PPImage[0].get():Textures->Scene->ColorBuffer.get(),Textures->Scene->DepthBuffer.get(),resolved?VK_SAMPLE_COUNT_1_BIT:Textures->Scene->SceneSamples);
+    ResumeScenePass();
 }

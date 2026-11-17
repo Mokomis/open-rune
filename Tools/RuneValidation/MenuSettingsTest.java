@@ -11,7 +11,7 @@ public final class MenuSettingsTest {
     static SharedPreferences memory(Map<String,Object> values) {
         return (SharedPreferences)Proxy.newProxyInstance(MenuSettingsTest.class.getClassLoader(),new Class[]{SharedPreferences.class},(p,m,a)-> {
             switch(m.getName()) {
-            case "getInt": case "getBoolean": return values.getOrDefault((String)a[0],a[1]);
+            case "getInt": case "getBoolean": case "getString": return values.getOrDefault((String)a[0],a[1]);
             case "contains":return values.containsKey(a[0]);
             case "edit":return Proxy.newProxyInstance(MenuSettingsTest.class.getClassLoader(),new Class[]{SharedPreferences.Editor.class},(e,em,ea)-> {
                 if(em.getName().startsWith("put")){values.put((String)ea[0],ea[1]);return e;}
@@ -23,6 +23,17 @@ public final class MenuSettingsTest {
         });
     }
     public static void main(String[] args) {
+        Map<String,Object> namesDisk=new HashMap<>();RuneSettings profile=new RuneSettings(memory(namesDisk),0,0,false,false);
+        check(profile.playerName().isEmpty(),"First multiplayer use needs a name");
+        profile.playerName("  Eirik  Ashwolf  ");check(profile.playerName().equals("Eirik Ashwolf"),"Trim player name");
+        profile=new RuneSettings(memory(namesDisk),0,0,false,false);check(profile.playerName().equals("Eirik Ashwolf"),"Name persists between matches");
+        profile.set("playerNames",0);profile.playerName("Sigrun");check(profile.get("playerNames")==0,"Rename retains visibility choice");
+        check(!RuneSettings.validPlayerName("[BOT] Fake")&&!RuneSettings.validPlayerName("Bad\nName")&&!RuneSettings.validPlayerName("A\u202eB"),"Reject fake markers and invisible controls");
+        check(RuneSettings.validPlayerName("Øystein")&&!RuneSettings.validPlayerName("x".repeat(25)),"Nordic names and length bound");
+        Map<String,Object> oldSnow=new HashMap<>();oldSnow.put("menu.snow",3);
+        RuneSettings newWeather=new RuneSettings(memory(oldSnow),0,0,false,false);
+        check(newWeather.get("snow")==0,"Old weather setting is not a client override");
+        newWeather.set("snow",1);check(new RuneSettings(memory(oldSnow),0,0,false,false).get("snow")==1,"Always Off persists independently");
         Map<String,Object> goreDisk=new HashMap<>();
         RuneSettings gore=new RuneSettings(memory(goreDisk),0,0,false,false);
         check(gore.get("gore")==1,"Enhanced gore default");
@@ -72,7 +83,7 @@ public final class MenuSettingsTest {
         check(new RuneSettings(memory(effectsDisk),0,0,false,false).get("soundRemaster")==1,"Sound effects choice persists");
         effects.compare();check(effects.get("soundRemaster")==1,"Visual comparison retains sound effects");effects.compare();
         check(effects.get("ambientOcclusion")==0,"Ambient occlusion defaults off");
-        check(effects.get("snow")==0,"Snow defaults off");
+        check(effects.get("snow")==0,"Snow defaults automatic");
         check(effects.get("networkDiagnostics")==0,"Diagnostics default off");
         check(effects.get("networkSmoothing")==1,"Adaptive smoothing default");
         effects.set("networkSmoothing",0);
@@ -83,9 +94,13 @@ public final class MenuSettingsTest {
         effects.set("snow",2);effects.compare();effects.set("snow",1);
         check(!effects.comparing&&effects.get("snow")==1,"Changing snow leaves original comparison");
         effects=new RuneSettings(memory(effectsDisk),0,0,false,false);
-        check(effects.get("snow")==1&&effects.label("snow").equals("Light"),"Snow reloads through shared menu model");
-        effects.set("snow",99);check(effects.get("snow")==2,"Snow choice clamps");
-        effects.reset(new String[]{"snow"});check(effects.get("snow")==0,"Snow reset");
+        check(effects.get("snow")==1&&effects.label("snow").equals("Always Off"),"Snow reloads through shared menu model");
+        effects.set("snow",99);check(effects.get("snow")==3&&effects.label("snow").equals("Always Heavy"),"Snow choice clamps");
+        effectsDisk.put("menu.snowOverride",4); // Legacy Blizzard saved by an older client.
+        RuneSettings blizzardReload=new RuneSettings(memory(effectsDisk),0,0,false,false);
+        check(blizzardReload.get("snow")==3&&blizzardReload.label("snow").equals("Always Heavy"),"Legacy Blizzard falls back to Heavy");
+        for(int choice=0;choice<=3;++choice){effects.set("snow",choice);check(new RuneSettings(memory(effectsDisk),0,0,false,false).get("snow")==choice,"Supported snow choices persist");}
+        effects.reset(new String[]{"snow"});check(effects.get("snow")==0,"Snow reset to Automatic");
         effects.set("ambientOcclusion",3);
         check((effects.world()&49152)==49152,"High AO survives world feature packing");
         effects=new RuneSettings(memory(effectsDisk),0,(Integer)effectsDisk.get("worldFeatures"),false,false);

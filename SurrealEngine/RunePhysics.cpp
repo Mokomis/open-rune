@@ -1,6 +1,7 @@
 #include "RuneBattleLaws.h"
 #include "Precomp.h"
 #include "RunePhysics.h"
+#include "RuneIK.h"
 #include "Engine.h"
 #include "Package/PackageManager.h"
 #include "Packages/Core/UClass.h"
@@ -39,6 +40,7 @@
 #include "RuneNetwork.h"
 #endif
 
+void RunRuneCeilingProbe(Engine&,UPlayerPawn*);
 namespace RunePhysics {
 namespace {
 using namespace RuneRigid;
@@ -79,11 +81,16 @@ struct State {
   std::vector<Part> parts;
   Array<RuneJointPose> rest, pose, previousPose;
   vec3 previousLocation{0};
-  RuneRigid::Transform previousBody, currentBody;
+  RuneRigid::Transform previousBody, currentBody, recoveryBody;
   mat4 bindWorld = mat4::identity();
   vec3 bindLocation{0}, actorOrigin{0};
   Rotation bindActor;
-  bool living = false, prop = false, replica = false, recovering = false;
+  bool living = false, prop = false, replica = false, recovering = false, driven = false;
+  std::set<int> activeJoints;
+  Array<RuneJointPose> targetPose;
+  vec3 puppetOrigin{0};
+  Rotator puppetRotation{0,0,0};
+  bool puppetPresented=false;
 #ifdef OPENRUNE_ENABLE_NETWORK
   std::vector<openrune::net::PhysicalBasis> basis;
 #endif
@@ -104,6 +111,11 @@ int applied = 0;
 float accumulator = 0, scan = 0;
 double simulationTime = 0;
 std::map<UActor *, State> states;
+std::map<UActor *, State> puppets;
+void StepPuppets(float dt,bool before);
+void DriveRecovery(State&,float);
+void clearPuppet(UActor* a){auto it=puppets.find(a);if(it==puppets.end())return;if(world)for(auto& p:it->second.parts)world->remove(p.body);puppets.erase(it);}
+bool puppetEnabled(){return commandline->GetArgInt("","--rune-puppet",1)!=0;}
 std::map<UPawn *, double> resistantUntil;
 std::set<UActor *> retiredBodies;
 std::map<UActor *, Handle> proxies, movers;
@@ -264,7 +276,8 @@ std::vector<Triangle> geometry(UModel *m) {
 void ensure(ULevel *level) {
   if (currentLevel == level && world)
     return;
-  states.clear();
+  for(auto it=states.begin();it!=states.end();)if(!it->second.replica || !it->first || it->first->XLevel()!=level)it=states.erase(it);else ++it;
+  puppets.clear();
   proxies.clear();
   movers.clear();
   hazards.clear();
@@ -380,6 +393,8 @@ bool restoreMotion(State& s) {
 }
 bool validateMotion(State& s) {
   for(const auto& part:s.parts)if(!world->contains(part.body)||!finiteMotion(part.current)) {
+    // A failed cosmetic solve is discarded, never repaired by writing gameplay velocity.
+    if(s.driven)return false;
     const auto& t=part.current;
     LogMessage("RUNE_PHYSICS_INVALID_MOTION actor="+s.actor->Name.ToString()+" joint="+std::to_string(part.joint)+" age="+std::to_string(s.age)+" velocity="+std::to_string(t.velocity.x)+","+std::to_string(t.velocity.y)+","+std::to_string(t.velocity.z)+" rotation="+std::to_string(t.rotation.x)+","+std::to_string(t.rotation.y)+","+std::to_string(t.rotation.z)+","+std::to_string(t.rotation.w));
     return restoreMotion(s);
@@ -406,7 +421,7 @@ void pose(State &s,bool prepared=false) {
   auto origin =
       root.position + rotate(delta, s.bindLocation - s.parts[0].bindCenter);
   if (s.recovering) {
-    float t = std::clamp(s.recovery / .45f, 0.f, 1.f);
+    float t = std::clamp(s.recovery / (puppetEnabled()?.6f:.45f), 0.f, 1.f);
     origin = mix(s.recoveryStart, s.recoveryLocation, t * t * (3 - 2 * t));
   }
   position(a, origin);
@@ -444,10 +459,10 @@ void pose(State &s,bool prepared=false) {
     globals[i] = i ? globals[parent] * local : local;
   }
   if (s.recovering) {
-    float t = std::clamp(s.recovery / .45f, 0.f, 1.f);
+    float t = std::clamp(s.recovery / (puppetEnabled()?.6f:.45f), 0.f, 1.f);
     t = t * t * (3 - 2 * t);
     for (size_t i = 0; i < s.pose.size(); ++i)
-      s.pose[i] = BlendRunePose(s.pose[i], s.rest[i], t);
+      s.pose[i] = BlendRunePose(s.pose[i], s.targetPose.size()==s.pose.size()?s.targetPose[i]:s.rest[i], t);
   }
   UpdateRuneAttachments(a);
 }
@@ -576,6 +591,7 @@ void contacts() {
       commandline->GetArgInt("", "--physics-impacts", 1) != 0;
   std::map<UActor *, Contact> strongest, wallContacts;
   for (auto &c : world->contacts()) {
+    if(puppets.contains(reinterpret_cast<UActor*>(uintptr_t(c.a))) || puppets.contains(reinterpret_cast<UActor*>(uintptr_t(c.b))))continue;
     if(!std::isfinite(c.speed)||!finiteVector(c.point)||!finiteVector(c.normal)||!finiteVector(c.velocityA)||!finiteVector(c.velocityB))continue;
     if (enableImpacts)
       for (auto token : {c.a, c.b}) {
@@ -712,6 +728,8 @@ bool RepairInvalidMotion(UActor* actor) {
 }
 
 void Reset() {
+  RuneIK::Reset();
+  puppets.clear();
   pendingDeaths.clear();
   deathObservations.clear();
   states.clear();
@@ -727,6 +745,7 @@ void Reset() {
   wallSlams = brokenProps = 0;
   nextImpactEffect = 0;
 }
+bool InPresentation(){return presentationDepth>0 && currentEvaluation==0;}
 bool Controls(UActor *a) { return states.contains(a); }
 bool SafeProp(UActor *a) {
   if (!a || a->bDeleteMe() || a->bStatic() || a->bHidden() ||
@@ -751,6 +770,23 @@ bool Carrying(UPawn *p) {
   return false;
 }
 bool ApplyPose(UActor *a, Array<RuneJointPose> &p) {
+  if(RuneAnimation::TargetDepth)return false;
+  if(InPresentation())if(auto it=puppets.find(a);it!=puppets.end()) {
+    auto& s=it->second;
+    if(p.size()!=s.pose.size() || !live(a) || model(a)!=s.model)return false;
+    if(!s.puppetPresented && commandline->HasArg("","--rune-puppet-trace") && commandline->HasArg("","--save-directory")) {
+      s.puppetPresented=true;LogMessage("RUNE_PUPPET_VISIBLE actor="+a->Name.ToString()+" replica="+std::to_string(a->NetworkReplica));
+    }
+    float t=std::clamp((s.age-.12f)/.58f,0.f,1.f),weight=.7f*(1-t*t*(3-2*t));
+    for(int j:s.activeJoints)if(j>0 && size_t(j)<p.size()) {
+      auto physical=s.pose[j];
+      if(s.previousPose.size()==p.size())physical=BlendRunePose(s.previousPose[j],physical,renderAlpha());
+      // Presentation rotation only. Authored bone lengths, world movement,
+      // collision, attack sweeps and the block window retain their own state.
+      auto blended=BlendRunePose(p[j],physical,weight);p[j].Rotation=blended.Rotation;
+    }
+    return true;
+  }
   auto it = states.find(a);
   if (it == states.end() || it->second.prop ||
       p.size() != it->second.pose.size())
@@ -799,14 +835,15 @@ mat4 MeshToWorld(UActor *a) {
          mat4::translate(-s.bindLocation) * s.bindWorld;
 }
 static bool makeRagdoll(UActor *a, vec3 velocity, UPawn *instigator,
-                        bool living, const DeathSeed *seed, bool combatOnly = false) {
-  if ((living&&!RuneBattleLaws::Allowed(RuneBattleLaws::Knockdown)) || (!applied && !combatOnly) || !authority(a) || !a->XLevel() || Controls(a) ||
+                        bool living, const DeathSeed *seed, bool combatOnly = false, bool puppet = false) {
+  if ((!puppet && ((living&&!RuneBattleLaws::Allowed(RuneBattleLaws::Knockdown)) || (!applied && !combatOnly) || !authority(a))) || !a->XLevel() || Controls(a) ||
       !humanoid(model(a)) || a->bCarriedItem())
     return false;
   if(!finiteVector(velocity)){LogMessage("RUNE_PHYSICS_INVALID_SEED_VELOCITY actor="+a->Name.ToString());velocity=vec3(0);}
   ensure(a->XLevel());
-  if (!reserveBody(living))
+  if (!puppet && !reserveBody(living))
     return false;
+  clearPuppet(a);
   retiredBodies.erase(a);
   auto *m = model(a);
   State s;
@@ -814,13 +851,14 @@ static bool makeRagdoll(UActor *a, vec3 velocity, UPawn *instigator,
   s.model = m;
   s.saved = save(a);
   s.living = living;
+  s.driven = puppet;
   s.instigator = instigator;
   s.impactArmed = instigator && length(velocity) > 150;
   s.bindLocation = a->Location();
   s.actorOrigin = a->Location();
   s.bindWorld = GetRuneMeshToWorld(a);
   s.bindActor = rotationOf(s.bindWorld);
-  s.rest = seed ? seed->pose : m->ActorPose(a);
+  {RuneAnimation::TargetPoseScope target;s.rest = seed ? seed->pose : m->ActorPose(a);}
   if (!seed) {
     auto reference = RuneCorpse::ReferencePose(*m);
     for (size_t j = 1; j < s.rest.size(); ++j) {
@@ -878,6 +916,7 @@ static bool makeRagdoll(UActor *a, vec3 velocity, UPawn *instigator,
       radius = 5 * a->DrawScale();
     Description d;
     d.position = (start + end) * .5f;
+    if(puppet){d.motion=Motion::Kinematic;d.cosmetic=true;}
     d.capsule = true;
     d.radius = radius;
     d.halfHeight = std::max(.8f, distance * .5f - radius);
@@ -934,6 +973,10 @@ static bool makeRagdoll(UActor *a, vec3 velocity, UPawn *instigator,
       world->remove(p.body);
     return false;
   }
+  if(puppet) {
+    s.previousPose=s.pose;s.puppetOrigin=a->Location();s.puppetRotation=a->Rotation();
+    puppets.emplace(a,std::move(s));return true;
+  }
   // A shove above the centre of mass should tumble the whole articulated
   // body, rather than translating an upright pose until it meets a wall.
   if (!seed && length(velocity) > 150) {
@@ -980,6 +1023,121 @@ static bool makeRagdoll(UActor *a, vec3 velocity, UPawn *instigator,
              " living=" + std::to_string(living)+" model="+m->Name.ToString()+" mesh="+std::to_string(a->GetByte("SkelMesh")));
   return true;
 }
+namespace {
+struct MuscleTarget {vec3 center;Rotation rotation;};
+std::vector<MuscleTarget> muscleTargets(State& s,const Array<RuneJointPose>& target,const mat4& meshWorld) {
+  auto bones=s.model->JointMatrices(target);std::vector<MuscleTarget> out;out.reserve(s.parts.size());
+  for(auto& part:s.parts) {
+    auto delta=multiply(rotationOf(meshWorld*bones[part.joint]),inverse(part.bindJoint));
+    out.push_back({point(meshWorld*bones[part.joint])+rotate(delta,part.bindCenter-part.bindPoint),multiply(delta,part.bindBody)});
+  }
+  return out;
+}
+void mapPuppet(State& s) {
+  auto meshWorld=GetRuneMeshToWorld(s.actor);s.pose=s.targetPose;
+  Array<mat4> globals;globals.resize(s.pose.size());std::map<int,Part*> indexed;
+  for(auto& part:s.parts)if(s.activeJoints.contains(part.joint))indexed[part.joint]=&part;
+  for(size_t i=0;i<s.pose.size();++i) {
+    int parent=s.model->Joints[i].Parent;
+    if(auto it=indexed.find(int(i));it!=indexed.end() && i) {
+      auto& part=*it->second;auto desired=multiply(multiply(part.current.rotation,inverse(part.bindBody)),part.bindJoint);
+      auto local=multiply(inverse(rotationOf(meshWorld*globals[parent])),desired);
+      s.pose[i].Rotation=RunePoseEuler(matrix(local));
+    }
+    auto local=mat4::translate(s.pose[i].Position)*(i?RunePoseRotation(s.pose[i].Rotation):mat4::transpose(RunePoseRotation(s.pose[i].Rotation)))*mat4::scale(s.pose[i].Scale);
+    globals[i]=i?globals[parent]*local:local;
+  }
+}
+bool DrivePuppet(State& s,float dt) {
+  auto* a=s.actor;
+  s.previousPose=s.pose;
+      {RuneAnimation::TargetPoseScope target;s.targetPose=s.model->ActorPose(a);}
+      if(s.targetPose.size()!=s.rest.size())return false;
+      auto target=muscleTargets(s,s.targetPose,GetRuneMeshToWorld(a));
+      for(size_t i=0;i<s.parts.size();++i) {
+        auto& part=s.parts[i];
+        if(!s.activeJoints.contains(part.joint))world->kinematic(part.body,target[i].center,target[i].rotation,dt);
+        else if(part.parent>=0) {
+          auto relative=multiply(inverse(target[part.parent].rotation),target[i].rotation);
+          // Soft at contact, firmer during recovery. Limited torque keeps
+          // muscles responsive to an impact instead of freezing the animation.
+          float strength=std::clamp(s.age/.2f,0.f,1.f);
+          world->drive(part.body,relative,5.f+5.f*strength,1.f,35.f+105.f*strength,true);
+        }
+      }
+  return true;
+}
+void StepPuppets(float dt,bool before) {
+  std::vector<UActor*> finish;
+  for(auto& [a,s]:puppets) {
+    if(!a || a->bDeleteMe() || !live(a) || model(a)!=s.model || Controls(a) || a->bHidden() ||
+       a->XLevel()!=currentLevel || RuneCorpse::Busy(UObject::TryCast<UPawn>(a)) ||
+       length(a->Location()-s.puppetOrigin)>100 || std::abs(int16_t(a->Rotation().Yaw-s.puppetRotation.Yaw))>16384 || s.age>=.7f || !puppetEnabled()) {finish.push_back(a);continue;}
+    if(before) {
+      if(!DrivePuppet(s,dt))finish.push_back(a);
+    } else {
+      if(!readMotion(s)){finish.push_back(a);continue;}
+      mapPuppet(s);s.age+=dt;s.puppetOrigin=a->Location();s.puppetRotation=a->Rotation();
+    }
+  }
+  for(auto* a:finish)clearPuppet(a);
+}
+void DriveRecovery(State& s,float dt) {
+  RuneAnimation::TargetPoseScope targetScope;
+  // Recover to an actual standing animation, with feet fitted to the validated
+  // floor. Never sample the previous simulated result as a new muscle target.
+  s.targetPose=RuneCorpse::ReferencePose(*s.model);
+  auto meshWorld=mat4::translate(s.recoveryLocation-s.actor->Location())*GetRuneMeshToWorld(s.actor);
+  RuneIK::ApplyAtWorld(*s.model,s.actor,s.targetPose,meshWorld);
+  auto target=muscleTargets(s,s.targetPose,meshWorld);
+  float t=std::clamp((s.recovery+dt)/.6f,0.f,1.f);t=t*t*(3-2*t);
+  auto& root=s.parts[0];auto from=s.recoveryBody.rotation,to=target[0].rotation;
+  auto rotation=normalize(slerp(quaternion(from.x,from.y,from.z,from.w),quaternion(to.x,to.y,to.z,to.w),t));
+  world->kinematic(root.body,mix(s.recoveryBody.position,target[0].center,t),{rotation.x,rotation.y,rotation.z,rotation.w},dt);
+  for(size_t i=1;i<s.parts.size();++i) {
+    auto& part=s.parts[i];if(part.parent<0)continue;
+    world->wake(part.body);
+    world->drive(part.body,multiply(inverse(target[part.parent].rotation),target[i].rotation),8.f,1.f,180.f,true);
+  }
+}
+} // namespace
+bool React(UPawn* p,vec3 hit,vec3 momentum,int joint) {
+  if(!engine || !engine->LaunchInfo.IsRune() || !puppetEnabled() || !p || !live(p) || p->bHidden() ||
+     p->XLevel()!=engine->Level || Controls(p) || !humanoid(model(p)) || p->DrawScale()<=0 || p->DrawScale()>2 ||
+     p->GetStateName()=="Scripting" || (p->HasProperty("bIsBoss") && p->GetBool("bIsBoss")) ||
+     (p->Physics()!=PHYS_Walking && p->Physics()!=PHYS_Falling && !(p->NetworkReplica && p->Physics()==PHYS_None)) || RuneCorpse::Busy(p) || Carrying(p) ||
+     std::clamp(RequestedMode.load(),0,2)==Original || !finiteVector(hit) || !finiteVector(momentum))return false;
+  ensure(p->XLevel());
+  if(auto it=puppets.find(p);it!=puppets.end() && it->second.age<.12f)return false;
+  if(!puppets.contains(p) && puppets.size()>=12)return false;
+  if(!makeRagdoll(p,vec3(0),nullptr,true,nullptr,false,true))return false;
+  auto& s=puppets.at(p);int selected=-1;float nearest=1e30f;
+  // A named/nearest upper-body branch reacts; legs stay with locomotion.
+  // Kicks and shield hits can recoil the head without taking over navigation.
+  for(size_t i=1;i<s.parts.size();++i) {
+    auto& part=s.parts[i];auto name=s.model->Joints[part.joint].Name.ToString();
+    if(name!="head" && name!="neck" && name.find("should")==std::string::npos && name.find("elbow")==std::string::npos)continue;
+    float distance=part.joint==joint?-1.f:length(part.bindPoint-hit);
+    if(distance<nearest){nearest=distance;selected=int(i);}
+  }
+  if(selected<0){clearPuppet(p);return false;}
+  int rootJoint=s.parts[selected].joint;
+  for(size_t i=1;i<s.parts.size();++i) {
+    int j=s.parts[i].joint;bool child=false;
+    for(int depth=0;j>0 && depth<64;++depth){if(j==rootJoint){child=true;break;}j=s.model->Joints[j].Parent;}
+    if(child){s.activeJoints.insert(s.parts[i].joint);world->motion(s.parts[i].body,Motion::Dynamic);}
+  }
+  s.targetPose=s.rest;
+  if(!DrivePuppet(s,1.f/60)){clearPuppet(p);return false;}
+  auto direction=length(momentum)>1?normalize(momentum):vec3(-std::cos(p->Rotation().YawRadians()),-std::sin(p->Rotation().YawRadians()),.2f);
+  auto& body=s.parts[selected];auto point=body.bindPoint;
+  // A bounded off-centre impulse gives both rotation and deflection. The
+  // gameplay momentum has already been applied by the authoritative hit.
+  world->impulse(body.body,direction*std::clamp(p->Mass()/14.f,2.f,16.f)*190.f,point);
+  if(commandline->HasArg("","--rune-puppet-trace") && commandline->HasArg("","--save-directory"))LogMessage("RUNE_PUPPET_REACT actor="+p->Name.ToString()+" replica="+std::to_string(p->NetworkReplica));
+  return true;
+}
+
 bool Ragdoll(UActor *a, vec3 velocity, UPawn *instigator, bool living) {
   return makeRagdoll(a, velocity, instigator, living, nullptr);
 }
@@ -1154,6 +1312,8 @@ void Impact(UPawn *attacker, UPawn *target, vec3 velocity, bool blocked) {
 }
 void Release(UActor *a) { erase(a, true); }
 void OnDestroy(UActor *a) {
+  clearPuppet(a);
+  RuneIK::Forget(a);
   pendingDeaths.erase(a);
   deathObservations.erase(a);
   hazards.erase(a);
@@ -1185,6 +1345,7 @@ void OnDestroy(UActor *a) {
     resistantUntil.erase(p);
 }
 void BeforeSave() {
+  while(!puppets.empty())clearPuppet(puppets.begin()->first);
   std::vector<UActor *> all;
   for (auto &[a, s] : states)
     all.push_back(a);
@@ -1194,10 +1355,19 @@ void BeforeSave() {
 void Tick(ULevel *level, float elapsed, bool paused) {
   if (!engine || !engine->LaunchInfo.IsRune() || level != engine->Level)
     return;
+  bool remote=false;
 #ifdef OPENRUNE_ENABLE_NETWORK
-  if (engine->NetworkClient)
-    return; // Remote physics is pose interpolation only.
+  remote=engine->NetworkClient;
 #endif
+  if(remote) {
+    if(paused || elapsed<=0)return;
+    if(!puppetEnabled() || RequestedMode.load()==Original){while(!puppets.empty())clearPuppet(puppets.begin()->first);return;}
+    ensure(level); // Prewarm scenery at join, rather than on the first hit.
+    if(puppets.empty())return;
+    accumulator=std::min(.15f,accumulator+elapsed);
+    while(accumulator>=1.f/60) {accumulator-=1.f/60;StepPuppets(1.f/60,true);world->step(1.f/60);StepPuppets(1.f/60,false);}
+    return;
+  }
   int requested = std::clamp(RequestedMode.load(), 0, 2);
   if (requested != applied) {
     BeforeSave();
@@ -1207,7 +1377,7 @@ void Tick(ULevel *level, float elapsed, bool paused) {
   }
   if (paused || elapsed <= 0 || engine->LevelInfo->bPlayersOnly())
     return;
-  if(!applied && states.empty()){simulationTime+=elapsed;return;}
+  if(!applied && states.empty() && puppets.empty()){simulationTime+=elapsed;return;}
   ensure(level);
   if(applied)adoptDeaths(level);
   simulationTime += elapsed;
@@ -1339,7 +1509,10 @@ void Tick(ULevel *level, float elapsed, bool paused) {
         s.previousLocation = a->Location();
         s.previousBody = s.currentBody;
       }
+    for(auto& [a,s]:states)if(!s.replica && s.recovering && puppetEnabled())DriveRecovery(s,dt);
+    StepPuppets(dt,true);
     world->step(dt);
+    StepPuppets(dt,false);
     // Validate the actual solver results before contact impulses or snapshots
     // can spread a bad body state to another actor. Normal poses reuse these
     // reads, so this adds no second per-bone physics query in ordinary play.
@@ -1418,15 +1591,16 @@ void Tick(ULevel *level, float elapsed, bool paused) {
               s.recovering = true;
               s.recoveryLocation = candidate.second;
               s.recoveryStart = a->Location();
-              for (auto &part : s.parts)
-                world->sleep(part.body);
+              s.recoveryBody=s.parts[0].current;
+              if(puppetEnabled())world->motion(s.parts[0].body,Motion::Kinematic);
+              else for(auto& part:s.parts)world->sleep(part.body);
             }
           }
         }
         if (s.recovering) {
           s.recovery += dt;
           pose(s);
-          if (s.recovery >= .45f)
+          if (s.recovery >= (puppetEnabled()?.6f:.45f))
             finish.push_back(a);
         }
         if (s.age > 6)
@@ -1724,6 +1898,82 @@ void RunProbe(Engine &game) {
     }
   };
   tick(60);
+  if(commandline->HasArg("","--rune-ceiling-probe")){RunRuneCeilingProbe(game,p);return;}
+  if(commandline->HasArg("","--rune-puppet-probe")) {
+    unsigned avatars=0,reacted=0;float maxReaction=0,maxStep=0;
+    auto advance=[&](int n){for(int i=0;i<n;++i){game.LevelInfo->TimeSeconds()+=1.f/120;game.TotalTime+=1.f/120;Tick(game.Level,1.f/120,false);maxStep=std::max(maxStep,float(Stats().stepMs));}};
+    bool disabled=!puppetEnabled();
+    for(size_t index=0;index<openrune::Characters.size();++index)for(int skin=0;skin<openrune::Characters[index].skins;++skin) {
+      if(campaign && (index || skin))continue;
+      auto* v=campaign?p:game.LoginNetworkPlayer("MuscleAvatar",-1,int(index),skin);
+      check(v,"muscle avatar");v->DisableEvent("PlayerTick");v->DisableEvent("Tick");v->GotoState("","");v->Health()=1000;v->SetPhysics(PHYS_Walking);
+      auto* m=model(v);check(m && humanoid(m),"humanoid puppet");auto at=v->Location();auto saved=save(v);auto velocity=v->Velocity();
+      auto bones=m->JointMatrices(m->ActorPose(v));int head=0;for(size_t j=0;j<m->Joints.size();++j)if(m->Joints[j].Name=="head")head=int(j);
+      auto hit=point(GetRuneMeshToWorld(v)*bones[head]);bool began=React(v,hit,{600,120,100},head);
+      check(began!=disabled,"muscle toggle");
+      if(!disabled) {
+        check(puppets.contains(v) && !Controls(v) && !CustomTransform(v),"cosmetic ownership only");
+        check(!React(v,hit,{600,0,0},head),"duplicate damage hook bounded");
+        openrune::net::PhysicalPose wire;check(!Capture(v,wire),"muscle not a full-body wire override");
+        float reaction=0;
+        for(int frame=0;frame<60;++frame) {
+          advance(1);auto raw=m->ActorPose(v),presented=raw;
+          {PresentationScope present;ApplyPose(v,presented);}
+          for(size_t j=0;j<raw.size();++j){
+            check(length(raw[j].Position-presented[j].Position)<1e-6f && length(raw[j].Scale-presented[j].Scale)<1e-6f,"no muscle bone stretch");
+            auto a=rotationOf(RunePoseRotation(raw[j].Rotation)),b=rotationOf(RunePoseRotation(presented[j].Rotation));
+            float dot=std::abs(a.x*b.x+a.y*b.y+a.z*b.z+a.w*b.w);reaction=std::max(reaction,2*std::acos(std::clamp(dot,0.f,1.f)));
+          }
+        }
+        check(reaction>.01f,"visible nonzero physical reaction");maxReaction=std::max(maxReaction,reaction);++reacted;
+        check(length(v->Location()-at)<.001f && length(v->Velocity()-velocity)<.001f && v->Physics()==saved.physics && bool(v->bBlockActors())==saved.blockActors,"muscle preserves gameplay movement");
+        advance(100);check(!puppets.contains(v),"reaction retires without actor restore");
+      }
+      ++avatars;if(!campaign)v->Destroy();
+    }
+    if(!disabled) {
+      p->SetPhysics(PHYS_Walking);p->GotoState("","");p->Health()=1000;
+      clearPuppet(p);int health=p->Health();
+      CallEvent(p,"JointDamaged",{ExpressionValue::IntValue(5),ExpressionValue::ObjectValue(nullptr),ExpressionValue::VectorValue(p->Location()+vec3(0,0,20)),ExpressionValue::VectorValue(vec3(200,0,20)),ExpressionValue::NameValue("blunt"),ExpressionValue::IntValue(0)});
+      check(p->Health()<health && puppets.contains(p),"actual committed damage triggers a muscle reaction");
+      clearPuppet(p);p->Health()=1000;
+      check(React(p,p->Location()+vec3(0,0,30),{400,40,0}),"fault-isolation puppet");
+      auto previousVelocity=p->Velocity();p->Velocity()={15,25,0};
+      puppets.at(p).parts[0].current.velocity.x=std::numeric_limits<float>::quiet_NaN();
+      check(!validateMotion(puppets.at(p)) && p->Velocity()==vec3(15,25,0),"invalid cosmetic solve cannot change gameplay velocity");
+      clearPuppet(p);p->Velocity()=previousVelocity;
+
+      check(React(p,p->Location()+vec3(0,0,30),{400,40,0}),"pre-save puppet");
+      auto at=p->Location();BeforeSave();check(puppets.empty() && length(p->Location()-at)<.001f,"save removes cosmetics without movement");
+      check(React(p,p->Location()+vec3(0,0,30),{400,40,0}),"pre-teleport puppet");
+      position(p,at+vec3(200,0,0));advance(2);check(!puppets.contains(p),"teleport invalidates old physical target");position(p,at);
+      auto previousClient=game.NetworkClient;p->NetworkReplica=true;game.NetworkClient=true;
+      check(React(p,p->Location()+vec3(0,0,30),{400,40,0}),"remote committed hit supports local muscle");
+      advance(20);check(puppets.contains(p) && !Controls(p),"remote cosmetic ticks without movement authority");
+      advance(100);check(!puppets.contains(p),"remote muscle retires");game.NetworkClient=previousClient;p->NetworkReplica=false;
+      check(React(p,p->Location()+vec3(0,0,30),{400,40,0}),"pre-knockdown puppet");
+      check(Knockdown(p,nullptr,{100,30,180}),"partial promotes to full physical knockdown");
+      check(Controls(p) && !puppets.contains(p),"no double rig after knockdown");
+      bool recovering=false,driving=false;for(int i=0;i<840 && Controls(p);++i){advance(1);if(auto it=states.find(p);it!=states.end()){recovering|=it->second.recovering;driving|=!it->second.targetPose.empty();}}
+      check(recovering && driving && !Controls(p) && p->Health()>0,"motored standing recovery completes alive");
+      check(world->bodies()<300,"transient muscle bodies released");
+      if(!campaign) {
+        std::vector<UPlayerPawn*> crowd;
+        for(int i=0;i<13;++i){auto* bot=game.LoginNetworkPlayer("MuscleBudget");check(bot,"budget avatar");bot->Health()=1000;bot->SetPhysics(PHYS_Walking);bot->DisableEvent("PlayerTick");bot->DisableEvent("Tick");bot->GotoState("","");crowd.push_back(bot);
+          Array<RuneJointPose> otherPrevious;if(i==1)otherPrevious=puppets.at(crowd[0]).previousPose;
+          bool accepted=React(bot,bot->Location()+vec3(0,0,30),{300,0,50});check(accepted==(i<12),"bounded concurrent muscle budget");
+          if(i==1){auto& after=puppets.at(crowd[0]).previousPose;check(after.size()==otherPrevious.size(),"other muscle interpolation retained");for(size_t j=0;j<after.size();++j)check(after[j].Rotation==otherPrevious[j].Rotation && after[j].Position==otherPrevious[j].Position,"new hit does not reset another character interpolation");}
+          if(i==0)advance(12);
+        }
+        float peak=0;for(int i=0;i<100;++i){advance(1);peak=std::max(peak,float(Stats().stepMs));}
+        check(puppets.empty(),"budget crowd retires all rigs");for(auto* bot:crowd)bot->Destroy();advance(2);
+        std::cout<<"RUNE_PUPPET_STRESS_OK concurrent=12 max_step_ms="<<peak<<std::endl;
+      }
+
+    }
+    std::cout<<"RUNE_PUPPET_RUNTIME_OK avatars="<<avatars<<" reacted="<<reacted<<" disabled="<<disabled<<" max_reaction_radians="<<maxReaction<<" max_step_ms="<<maxStep<<" checks="<<checks<<std::endl;return;
+  }
+  if(commandline->HasArg("","--rune-ik-probe")){RuneIK::RunProbe(game,p);return;}
   if(commandline->HasArg("","--rune-physics-recovery-probe")) {
     check(!campaign,"recovery fixture uses authority capture");
     auto* source=game.LoginNetworkPlayer("RecoverySource");source->DisableEvent("PlayerTick");source->DisableEvent("Tick");source->GotoState("","");
@@ -2598,6 +2848,7 @@ void Present(UActor *a, const openrune::net::PhysicalPose &before,
   }
   if (!ValidateReplica(a, after))
     return;
+  clearPuppet(a);
   auto &s = states[a];
   s.actor = a;
   s.model = model(a);

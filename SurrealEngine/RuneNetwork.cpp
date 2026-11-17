@@ -2,6 +2,7 @@
 #include "Precomp.h"
 #include "OpenRuneVersion.h"
 #include "RunePhysics.h"
+#include "RuneIK.h"
 #include "RuneNetwork.h"
 #include "Packages/Engine/Actors/Brush/MovingBrush.h"
 #include "Engine.h"
@@ -12,6 +13,8 @@
 #include "Package/Package.h"
 #include "Packages/Core/UClass.h"
 #include "RuneKick.h"
+#include "RuneLeg.h"
+#include "RuneSpider.h"
 #include "RuneBash.h"
 #include "RuneDualWield.h"
 #include "RuneBloodlust.h"
@@ -224,10 +227,10 @@ uint32_t RuneNetworkAuthority::playerLife(uint64_t peer) const
 std::optional<MovementAck> RuneNetworkAuthority::movementAck(uint64_t peer) const
 {
     auto it=players.find(peer);if(it==players.end())return {};
-    const auto& player=it->second;auto* p=player.pawn;if(RunePhysics::Controls(p))return {};
+    const auto& player=it->second;auto* p=player.pawn;if(RunePhysics::Controls(p) || RuneSpider::Busy(p))return {};
     MovementAck a;a.ref=identity(p);a.life=player.life;a.input=player.physicsInput;a.heldTicks=player.heldTicks;
     auto* zone=p->Region().Zone;
-    float factor=(p->bIsWalking()?.3f:1.0f)*RuneCorpse::SpeedScale(p);
+    float factor=(p->bIsWalking()?.3f:1.0f)*RuneCorpse::SpeedScale(p)*RuneLeg::SpeedScale(p);
     auto quantize=[](float v,float scale)->uint16_t {
         return std::isfinite(v) && v>0 && v*scale<=65535?uint16_t(std::round(v*scale)):0;
     };
@@ -245,7 +248,7 @@ std::optional<MovementAck> RuneNetworkAuthority::movementAck(uint64_t peer) cons
         zone && !zone->bWaterZone() && p->FootRegion().Zone && !p->FootRegion().Zone->bWaterZone() &&
         zone->ZoneGravity().z<0 && std::abs(zone->ZoneGravity().x)<.001f && std::abs(zone->ZoneGravity().y)<.001f &&
         length(zone->ZoneVelocity())<.001f && std::isfinite(p->AirControl()) && p->AirControl()>=0) {
-        a.speed=quantize(p->GroundSpeed(),8);
+        a.speed=quantize(p->GroundSpeed()*RuneLeg::SpeedScale(p),8);
         a.acceleration=quantize(game.LaunchInfo.ue1Version>219?p->AirControl()*p->AccelRate():0,1);
         a.friction=quantize(-zone->ZoneGravity().z,1);a.step=quantize(zone->ZoneTerminalVelocity(),8);
         if(a.speed && a.friction && a.step && a.friction<=25600)a.mode=MovementFalling;
@@ -372,6 +375,7 @@ void RuneNetworkAuthority::unbind(uint64_t peer)
         p->Acceleration()=vec3(0); p->bFire()=p->bAltFire()=p->bDuck()=0;
         CallEvent(p,"ActivateShield",{ExpressionValue::BoolValue(false)});
     }
+    RuneSpider::Stop(p);
     RuneCorpse::Drop(p);
     p->NetworkDriven=false; players.erase(it);defenses.erase(p);
     std::erase_if(contacts,[&](const auto& c){return c.attacker==p || c.target==p;});
@@ -388,6 +392,7 @@ bool RuneNetworkAuthority::input(uint64_t peer,const Input& i)
     it->second.pendingInput=i.sequence;
     double length=std::hypot(double(i.forward),double(i.strafe));
     double scale=length>1000 ? 1000.0/length : 1.0;
+    RuneSpider::Input(p,float(i.forward*scale/1000),float(i.strafe*scale/1000));
     p->aForward()=float(i.forward*scale*6); p->aStrafe()=float(i.strafe*scale*6);
     p->aTurn()=p->aLookUp()=p->aBaseX()=p->aBaseY()=p->aMouseX()=p->aMouseY()=0;
     if(!(i.held&2) && (newInput || p->bAltFire()))
@@ -430,6 +435,11 @@ bool RuneNetworkAuthority::action(uint64_t peer,const AdmittedAction& a,uint64_t
         return p->Health()>0;
     }
     if (p->bDeleteMe() || p->Health()<=0 || p->GetStateName()=="Dying" || p->GetStateName()=="Unresponsive") return false;
+    if(RuneSpider::Busy(p)){
+        if(a.action.kind==ActionKind::Use){RuneSpider::Stop(p);return true;}
+        if(a.action.kind==ActionKind::Jump || a.action.kind==ActionKind::BloodLeap){RuneSpider::Stop(p,true);watermark.lastJump=0;return true;}
+        return a.action.kind==ActionKind::LowerShield;
+    }
     if(RuneBloodlust::Busy(p) && a.action.kind!=ActionKind::LowerShield && !(a.action.kind==ActionKind::Attack && RuneSlam::CanStart(p)))return false;
     if(RunePhysics::Controls(p))return false;
     if(RunePhysics::Carrying(p)){if(a.action.kind==ActionKind::Attack||a.action.kind==ActionKind::Throw)return RunePhysics::ThrowProp(p);if(a.action.kind==ActionKind::Use)return RunePhysics::UseProp(p);return false;}
@@ -492,6 +502,23 @@ bool RuneNetworkAuthority::action(uint64_t peer,const AdmittedAction& a,uint64_t
         if (!object(p,"Weapon")) return false;
         CallEvent(p,"Throw"); return true;
     case ActionKind::Jump:
+        if(p->GetStateName()=="EdgeHanging") {
+            // The original ledge state owns pull-up/drop collision. Do not
+            // treat this as a new airborne jump or arm a giant-leap combo.
+            watermark.lastJump=0;p->Bloodlust.tap=-1;
+            CallEvent(p,"Jump",{ExpressionValue::FloatValue(0)});
+            auto* climbProxy=UObject::TryCast<UActor>(object(p,"AnimProxy"));
+            if(p->GetStateName()=="EdgeHanging" && p->AnimRate()==0 && p->AnimFrame()>=0 &&
+               (!climbProxy || climbProxy->AnimRate()==0)) {
+                // A finished/stalled automatic pull-up cannot leave a living
+                // pawn flying forever. Release at the current collision-valid
+                // position; ordinary swept falling owns the descent.
+                p->GotoState("PlayerWalking","Begin");p->SetPhysics(PHYS_Falling);
+                p->SetBase(nullptr,true);p->Velocity().z=std::min(0.f,p->Velocity().z);
+                LogMessage("RUNE_LEDGE_RELEASE actor="+p->Name.ToString());
+            }
+            return true;
+        }
         if(p->Physics()!=PHYS_Walking || p->GetStateName()!="PlayerWalking")return false;
         watermark.lastJump=a.localTime;p->Bloodlust.tap=game.LevelInfo->TimeSeconds();
         CallEvent(p,"Jump",{ExpressionValue::FloatValue(0)});return true;
@@ -624,7 +651,9 @@ bool RuneNetworkAuthority::deferWeaponCall(UObject* instance,const NameString& n
     // The same frontal shield rule applies before and during the grace window;
     // deliberately delivering a block late must not grant extra shield coverage.
     bool blocked=hitShield || (struck==target && RuneKick::ShieldBlocks(target,attacker));
-    return deferContact(attacker,target,blocked,weapon,[weapon,struck,shield,low,high,location,normal,momentum,hitShield](bool defended){
+    auto legContact=RuneLeg::Exposure(weapon,target,uint32_t(low),uint32_t(high),location);
+    return deferContact(attacker,target,blocked,weapon,[weapon,struck,shield,low,high,location,normal,momentum,hitShield,legContact](bool defended){
+        RuneLeg::ReplayScope legReplay(defended?RuneLeg::Contact{}:legContact);
         auto* hit=defended&&!hitShield?shield:struck;
         if(!hit || hit->bDeleteMe())return;
         int lo=defended&&!hitShield?0:low,hi=defended&&!hitShield?0:high;
@@ -745,9 +774,9 @@ bool RuneNetworkAuthority::capture(World& out)
         if(proxy && proxy->GetStateName()=="Defending")e.flags|=4;
         if(pawn) {
             auto& c=e.combat;const auto& d=pawn->Dual;const auto& b=pawn->Bloodlust;
-            bool dual=RuneDualWield::Equipped(pawn);
+            bool dual=RuneDualWield::Equipped(pawn) && !RuneSpider::Busy(pawn);
             c.offhand=dual?identity(d.offhand):EntityRef{};
-            c.flags=(dual && d.left?1:0)|(dual && d.guard?2:0)|(RuneBloodlust::Active(pawn)?4:0)|(b.phase && b.rushing?8:0);
+            c.flags=(dual && d.left?1:0)|(dual && d.guard?2:0)|(RuneBloodlust::Active(pawn)?4:0)|(b.phase && b.rushing?8:0)|(RuneSpider::Busy(pawn)?16:0);
             c.guard=dual?uint8_t(std::lround(std::clamp(d.guardBlend,0.f,1.f)*255)):0;
             c.meter=uint8_t(std::clamp(pawn->IsA("RunePlayer")?100.f*pawn->GetInt("Strength")/std::max(1,(int)pawn->GetInt("MaxStrength")):b.rage,0.f,100.f));
             c.phase=uint8_t(b.phase);c.age=b.phase?uint16_t(std::lround(std::clamp(b.age,0.f,10.f)*1000)):0;
@@ -867,6 +896,7 @@ bool RuneNetworkReplica::appearance(Engine& game,const ActorEvent& event)
     std::copy(v.jointFlags.begin(),v.jointFlags.end(),static_cast<uint8_t*>(a->GetProperty("JointFlags")));
     auto** skins=static_cast<UObject**>(a->GetProperty("SkelGroupSkins"));
     std::copy(resolved.begin(),resolved.end(),skins+v.firstGroup);
+    RuneLeg::ReplicaAppearance(a);
     return true;
 }
 bool RuneNetworkReplica::unbind(EntityRef ref)
@@ -887,6 +917,7 @@ bool RuneNetworkReplica::unbind(EntityRef ref)
     };
     auto* proxy=object(actor,"AnimProxy");
     if(proxy){actor->SetObject("AnimProxy",nullptr);detach(proxy);}
+    RuneIK::Forget(actor);
     detach(actor);
     animationPlayback.erase(ref.id);effectAges.erase(ref.id);actors.erase(it);healthOverlays.erase(ref.id);adaptiveLives.erase(ref.id);
     retired.push_back(ref);if(retired.size()>MaxEntities)retired.pop_front();
@@ -935,7 +966,7 @@ bool RuneNetworkReplica::install(const Snapshot& s)
                 health=overlay->second.health;
             else healthOverlays.erase(overlay);
         }
-        if(auto* pawn=UObject::TryCast<UPawn>(a))pawn->Health()=health;
+        if(auto* pawn=UObject::TryCast<UPawn>(a)){pawn->Health()=health;pawn->Spider.active=(e.combat.flags&16)!=0;RuneIK::SetGrounded(a,(e.flags&2)!=0);}
         else if(a->HasProperty("Health"))a->SetInt("Health",health);
         if(e.kind==EntityKind::Weapon)a->SetBool("bPoweredUp",(e.flags&128)!=0);
         if(a->HasProperty("Weapon"))a->SetObject("Weapon",e.weapon.id?actors.at(e.weapon.id).second:nullptr);
@@ -1004,6 +1035,16 @@ RuneNetworkReplica::CombatApply RuneNetworkReplica::applyCombat(const CombatOutc
     if(source==2 || target==2)return CombatApply::Rejected;
     if(source<0 || target<0)return CombatApply::Deferred;
     auto presentBash=[&]() {
+        if(!source && !target && c.target.id && c.contact==CombatContact::Hit && c.targetHealth>0 && (current.tick<=c.tick || current.tick-c.tick<=15)) {
+            auto v=actors.find(c.target.id),a=actors.find(c.attacker.id);
+            if(v!=actors.end() && v->second.first==c.target && a!=actors.end() && a->second.first==c.attacker) {
+                auto* pawn=UObject::TryCast<UPawn>(v->second.second);
+                auto direction=v->second.second->Location()-a->second.second->Location();
+                if(length(direction)>1)direction=normalize(direction)*400.f;
+                RunePhysics::React(pawn,v->second.second->Location()+vec3(0,0,20),direction);
+            }
+        }
+
         if(source || target || !c.target.id || c.move!=CombatMove::Bash || c.contact!=CombatContact::Hit || c.targetHealth<=0)return;
         // Late reliable outcomes must not replay an ancient reaction or affect a new life.
         if(current.tick>c.tick && current.tick-c.tick>15)return;

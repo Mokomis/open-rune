@@ -104,6 +104,15 @@ void RunRuneCorpseProbe(Engine& game) {
     check(length((GetRuneMeshToWorld(body)*vec4(center,1)).xyz()-(GetRuneMeshToWorld(remoteBody)*vec4(remoteBody->CorpseBody.center,1)).xyz())<.3f,"overhead render matches");
     check(!RuneCorpse::Throw(remote) && !RuneCorpse::Pickup(remote,body),"replicas lack authority");
     auto pose=UObject::TryCast<USkelModel>(GetRuneDisplayMesh(p))->ActorPose(p);check(pose.size()>20,"carry pose evaluates");
+    {auto* model=UObject::TryCast<USkelModel>(GetRuneDisplayMesh(p));auto toActor=Coords::Rotation(model->RotationOffset).ToMatrix();
+     for(auto* who:{static_cast<UPawn*>(p),remote}){auto pose=model->ActorPose(who),raw=model->SampleAnimation(who),controlled=raw;RuneCorpse::ApplyPose(*model,who,controlled);auto bones=model->JointMatrices(pose);
+      for(bool left:{true,false})for(size_t j=0;j<model->Joints.size();++j)if(model->Joints[j].Name==(left?"lwrist":"rwrist")){
+       auto up=normalize((toActor*bones[j]*vec4(0,0,1,0)).xyz());auto fingers=normalize((toActor*bones[j]*vec4(0,-1,0,0)).xyz());
+       check(up.z>.9f,"overhead hands stay palm-up on authority and replica");check(fingers.y*(left?1.f:-1.f)>.9f,"carry fingers curl toward the supported body");
+       check(controlled[j].Position==raw[j].Position && controlled[j].Scale==raw[j].Scale,"grip keeps wrist proportions");
+      }
+     }
+    }
     tick(10);int before=target->Health();check(action(ActionKind::Attack),"attack throws body");tick(16);check(RuneCorpse::Held(p)==body,"visible release windup");tick(5);check(!RuneCorpse::Held(p) && body->CorpseBody.flying,"launch after windup");
     unsigned renderChecks=0;
     auto compareSkin=[&](UActor* copy) {
@@ -188,7 +197,11 @@ void RunRuneCorpseProbe(Engine& game) {
         body->SetBase(nullptr,true);body->SetPhysics(PHYS_None);body->Velocity()=vec3(0);body->SetLocation(npc->Location()+direction*65.f-vec3(0,0,24));
         check(RuneCorpse::Eligible(npc),"eligible campaign humanoid");RuneCorpse::Tick(npc,.02f);check(RuneCorpse::Held(npc)==body,"campaign AI opportunistic pickup");
         tick(105);check(npc->CorpseCarry.throws==1,"campaign AI winds up and throws");tick(100);check(!body->CorpseBody.active,"campaign throw settles");
-        npc->Destroy();p->SetLocation(origin);p->SetPhysics(PHYS_Walking);p->Velocity()=vec3(0);moveBody();p->CorpseCarry.cooldown=0;
+        // End the live-AI combat case before starting the disconnect case.
+        // A last kick can otherwise leave the player in hit recovery when the
+        // next, unrelated pickup assertion executes (observed on Windows).
+        npc->Destroy();tick(90);p->GotoState("PlayerWalking","Begin");p->GetUObject("AnimProxy")->GotoState("Idle","Begin");
+        p->SetLocation(origin);p->SetPhysics(PHYS_Walking);p->Velocity()=p->Acceleration()=vec3(0);moveBody();p->CorpseCarry.cooldown=0;
     }
     check(RuneCorpse::Pickup(p,body),"disconnect pickup");CheckRuneCorpseMotion(game,p,body,check);
     snapshot();auto* cosmeticReplica=replica.actor(authority.identity(body));

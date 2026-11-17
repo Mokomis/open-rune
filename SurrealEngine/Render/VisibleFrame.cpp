@@ -4,6 +4,8 @@
 #include "VisibleSnow.h"
 #include "VisibleRuneBlood.h"
 #include "VisibleRuneBash.h"
+#include "VisibleRuneBreath.h"
+#include "RuneLeg.h"
 #include "VisibleFrame.h"
 #include "VisibleCorona.h"
 #include "RenderSubsystem.h"
@@ -305,7 +307,13 @@ void VisibleFrame::ProcessNodeSurface(BspNode* node, bool front)
             }
         if (ShadowFrustum.testIntersecting(bounds) == -1) return;
     }
-    else if (!Clipper.CheckSurface(points, numverts, !ShadowView && (PolyFlags & PF_NoOcclude) == 0)) return;
+    else {
+        float crestHeight=0;
+        bool crestWater=!ShadowView && Device->UsesCrestWater() && info.WaterPlane(crestHeight);
+        // Refraction needs the geometry behind formerly opaque water. Do not
+        // let the software occluder discard the riverbed before it is drawn.
+        if(!Clipper.CheckSurface(points,numverts,!ShadowView && !crestWater && (PolyFlags&PF_NoOcclude)==0))return;
+    }
 
 	/*if (PolyFlags & PF_Portal)
 	{
@@ -367,10 +375,24 @@ void VisibleFrame::Draw()
 	DrawPortals();
 	DrawOpaqueNodes();
 	DrawOpaqueActors();
+    if(PortalDepth==0 && Device->UsesCrestWater()) {
+        bool hasWater=false;float height=0;
+        for(auto& node:OpaqueNodes)hasWater|=node.WaterPlane(height);
+        for(auto& t:Translucents)if(!t.Actor.Actor)hasWater|=t.Node.WaterPlane(height);
+        if(hasWater) {
+            Device->CaptureCrestBackground();Device->SetSceneNode(&Frame);
+            // Actual water surfaces retain their individual heights and masks.
+            for(auto& node:OpaqueNodes)if(node.WaterPlane(height))node.Draw(this);
+            SortTranslucent();
+            for(auto& t:Translucents)if(!t.Actor.Actor && t.Node.WaterPlane(height))t.Node.Draw(this);
+        }
+    }
     RuneSnow::Draw(this);
     RuneBloodPresentation::Draw(this);
     RuneGore::Draw(this);
     RuneBashPresentation::Draw(this);
+    RuneBreathPresentation::Draw(this);
+    RuneLeg::Draw(this);
 	SortTranslucent();
 	DrawTranslucent();
 }
@@ -389,8 +411,11 @@ void VisibleFrame::DrawCoronas()
 void VisibleFrame::DrawOpaqueNodes()
 {
 	Device->SetSceneNode(&Frame);
-	for (VisibleNode& node : OpaqueNodes)
-		node.Draw(this);
+	for (VisibleNode& node : OpaqueNodes) {
+        float height=0;
+        if(PortalDepth==0 && Device->UsesCrestWater() && node.WaterPlane(height))continue;
+        node.Draw(this);
+    }
 }
 
 void VisibleFrame::DrawOpaqueActors()
@@ -403,8 +428,11 @@ void VisibleFrame::DrawOpaqueActors()
 void VisibleFrame::DrawTranslucent()
 {
 	Device->SetSceneNode(&Frame);
-	for (VisibleTranslucent& translucent : Translucents)
-		translucent.Draw(this);
+	for (VisibleTranslucent& translucent : Translucents) {
+        float height=0;
+        if(PortalDepth==0 && Device->UsesCrestWater() && !translucent.Actor.Actor && translucent.Node.WaterPlane(height))continue;
+        translucent.Draw(this);
+    }
 }
 
 void VisibleFrame::DrawPortals()

@@ -1,0 +1,44 @@
+[
+  {
+    "name": "SpectrumInit",
+    "sha256": "2dea3f405aaf4271e28a06fbc48050dcce0ff6dae9c0b824fc8f95bb57aadd59",
+    "source": "Spectrum.hlsl",
+    "entry": "SpectrumInitalize",
+    "defines": []
+  },
+  {
+    "name": "SpectrumUpdate",
+    "sha256": "cfbae2e3798878b25b5b00f6b3aad92210c044cf365887e70ba36cf7213fdf91",
+    "source": "Spectrum.hlsl",
+    "entry": "SpectrumUpdate",
+    "defines": []
+  },
+  {
+    "name": "FFTX",
+    "sha256": "f0351703aa8f05ae2c0e7d98867c9b739c1016fd9eed5fd2ed13ea121eebeed0",
+    "source": "FFT.hlsl",
+    "entry": "ComputeFFT",
+    "defines": [
+      "-DSIZE=128",
+      "-DPASSES=7",
+      "-DCHANNEL=x",
+      "-DTX=128",
+      "-DTY=1",
+      "-DFINAL=0"
+    ]
+  },
+  {
+    "name": "FFTY",
+    "sha256": "2d0a166c0dccaa82e36efb3c66d43ea9789bebd6c6e99277fe5cb0ba3fdafcf3",
+    "source": "FFT.hlsl",
+    "entry": "ComputeFFT",
+    "defines": [
+      "-DSIZE=128",
+      "-DPASSES=7",
+      "-DCHANNEL=y",
+      "-DTX=1",
+      "-DTY=128",
+      "-DFINAL=1"
+    ]
+  }
+]

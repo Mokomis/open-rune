@@ -38,6 +38,12 @@ if(NOT ANDROID)
   add_executable(openrune_physics_tests EXCLUDE_FROM_ALL Tools/RuneValidation/cinematic_world.cpp)
   target_link_libraries(openrune_physics_tests PRIVATE openrune_physics_world)
   set_target_properties(openrune_physics_tests PROPERTIES CXX_STANDARD 20)
+  add_executable(openrune_ik_tests EXCLUDE_FROM_ALL Tools/RuneValidation/character_ik_math.cpp)
+  target_include_directories(openrune_ik_tests PRIVATE SurrealEngine)
+  set_target_properties(openrune_ik_tests PROPERTIES CXX_STANDARD 20)
+  add_executable(openrune_muscle_tests EXCLUDE_FROM_ALL Tools/RuneValidation/character_muscles.cpp)
+  target_link_libraries(openrune_muscle_tests PRIVATE openrune_physics_world)
+  set_target_properties(openrune_muscle_tests PROPERTIES CXX_STANDARD 20)
 endif()
 add_subdirectory(SurrealGPU)
 add_subdirectory(SurrealWidgets)
@@ -80,8 +86,13 @@ set(SURREALCOMMON_SOURCES
 	SurrealEngine/DebuggerApp.h
 	SurrealEngine/Engine.cpp
 	SurrealEngine/RuneKick.cpp
+	SurrealEngine/RuneLeg.cpp
+	SurrealEngine/RuneSpider.cpp
+	SurrealEngine/RuneBreath.cpp
+    SurrealEngine/RuneShieldTaunt.cpp
 	SurrealEngine/RuneBash.cpp
 	SurrealEngine/RuneSlam.cpp
+	SurrealEngine/RuneIK.cpp
 	SurrealEngine/RunePhysics.cpp
 	SurrealEngine/RuneRushPose.cpp
 	SurrealEngine/RuneStairPresentation.cpp

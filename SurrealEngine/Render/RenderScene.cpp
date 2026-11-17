@@ -41,6 +41,7 @@ void RenderSubsystem::DrawScene()
     // Build visibility once, before shadow selection: scenery lights must be
     // selected from their receivers, not only lights reaching the player pawn.
     mat4 worldToView = Coords::ViewToRenderDev().ToMatrix() * Coords::Rotation(engine->CameraRotation).Inverse().ToMatrix() * Coords::Location(engine->CameraLocation).ToMatrix();
+    Device->SetWaterMainView(worldToView);
     MainFrame.Process(engine->CameraLocation, worldToView, Coords::Rotation(engine->CameraRotation));
     auto* cameraZone=engine->GetZoneActor(MainFrame.ViewZone);
     Device->SetWaterView(cameraZone && cameraZone->bWaterZone(),engine->LevelInfo->TimeSeconds());
@@ -220,24 +221,31 @@ void RenderSubsystem::DrawScene()
         for(const auto& translucent:MainFrame.Translucents)considerWater(translucent.Node);
         for(const auto& node:MainFrame.OpaqueNodes)considerWater(node);
         if(found && Device->UsesModernWater()) {
-            // Sky exposure belongs to the water facet, not the camera direction.
-            // Cache static BSP tests per face so ordinary rendering adds no rays.
-            bool outdoors=false;
-            if(waterReceiver && waterReceiver->Node) {
-                auto* node=waterReceiver->Node;
-                auto found=WaterSkyExposure.find(node);
-                if(found!=WaterSkyExposure.end())outdoors=found->second;
-                else {
-                    auto* model=engine->Level->Model;vec3 point(0);
-                    for(int i=0;i<node->NumVertices;++i)point+=model->Points[model->Vertices[node->VertPool+i].Vertex];
-                    point/=float(node->NumVertices);point.z=waterHeight+4;
+            // A connected visible water height shares one environment. Testing
+            // only the nearest face's centre classified the entire open ocean as
+            // indoors whenever that point happened to lie below a boathouse.
+            auto exposedWater=[&](const VisibleNode& visible) {
+                float height=0;
+                if(!visible.WaterPlane(height) || std::abs(height-waterHeight)>1.f)return false;
+                auto* node=visible.Node;auto cached=WaterSkyExposure.find(node);
+                if(cached!=WaterSkyExposure.end())return cached->second;
+                auto* model=engine->Level->Model;vec3 center(0);
+                for(int i=0;i<node->NumVertices;++i)center+=model->Points[model->Vertices[node->VertPool+i].Vertex];
+                center/=float(node->NumVertices);bool open=false;
+                // Fixed samples, cached for the level. No per-frame sky traces.
+                for(int i=-1;i<node->NumVertices && !open;++i) {
+                    vec3 point=i<0?center:mix(center,model->Points[model->Vertices[node->VertPool+i].Vertex],.75f);
+                    point.z=height+4;
                     TraceFlags flags;flags.world=true;
                     auto hit=engine->Level->Collision.TraceFirstHit(point,point+vec3(0,0,32768),nullptr,vec3(0),flags);
-                    outdoors=hit.Actor==engine->LevelInfo && hit.Node && hit.Node->Surf>=0 && size_t(hit.Node->Surf)<model->Surfaces.size() && (model->Surfaces[hit.Node->Surf].PolyFlags&PF_FakeBackdrop);
-                    WaterSkyExposure.emplace(node,outdoors);
-                    if(commandline->HasArg("","--trace-rune-water"))LogMessage("RUNE_WATER_SKY_EXPOSURE x="+std::to_string(point.x)+" y="+std::to_string(point.y)+" z="+std::to_string(point.z)+" sky="+std::to_string(outdoors));
+                    open=hit.Actor==engine->LevelInfo && hit.Node && hit.Node->Surf>=0 && size_t(hit.Node->Surf)<model->Surfaces.size() && (model->Surfaces[hit.Node->Surf].PolyFlags&PF_FakeBackdrop);
                 }
-            }
+                WaterSkyExposure.emplace(node,open);
+                return open;
+            };
+            bool outdoors=false;
+            for(const auto& visible:MainFrame.OpaqueNodes)if(exposedWater(visible)){outdoors=true;break;}
+            if(!outdoors)for(const auto& visible:MainFrame.Translucents)if(!visible.Actor.Actor && exposedWater(visible.Node)){outdoors=true;break;}
             auto probes=engine->Level->Light.SampleEnvironment(engine->CameraLocation);
             vec3 environment(0);for(const auto& lobe:probes.Lobes)environment+=lobe.xyz()/6.f;
             if(outdoors) {

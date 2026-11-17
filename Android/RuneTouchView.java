@@ -133,47 +133,7 @@ final class RuneTouchView extends FrameLayout {
             invalidate();return true;
         }
         void line(Canvas c,float... points){path.reset();path.moveTo(points[0],points[1]);for(int i=2;i<points.length;i+=2)path.lineTo(points[i],points[i+1]);c.drawPath(path,p);}
-        void icon(Canvas c){p.setColor(IVORY);p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(4);p.setStrokeCap(Paint.Cap.ROUND);p.setStrokeJoin(Paint.Join.ROUND);
-            if(id==4){line(c,-17,20,19,-22,24,-25,23,-15,-13,23);line(c,-19,10,-4,24);line(c,-20,25,-12,16);}
-            else if(id==3){line(c,0,-26,23,-17,20,6,12,20,0,28,-12,20,-20,6,-23,-17,0,-26);line(c,0,-20,0,22);}
-            else if(id==5){ // Side-on kicking figure, extended boot and planted rear foot.
-                p.setStyle(Paint.Style.FILL);c.drawCircle(-14,-23,5.5f,p);
-                p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(6);
-                line(c,-14,-12,-8,2,-20,24);line(c,-24,26,-12,26);
-                line(c,-8,2,7,-6,23,0);line(c,-12,-9,-27,-2);line(c,-11,-9,2,-15);
-                path.reset();path.moveTo(19,-4);path.lineTo(28,-3);path.lineTo(32,5);path.lineTo(20,5);path.close();
-                p.setStyle(Paint.Style.FILL);c.drawPath(path,p);
-            }
-            else if(id==6){ // Three ascending tiers; longest at the bottom.
-                p.setStrokeWidth(5);line(c,-26,18,26,18);line(c,-17,0,17,0);line(c,-8,-18,8,-18);
-            }
-            else if(id==7){ // Raised axe gripped in a solid fist; arc shows the throwing motion.
-                p.setStrokeWidth(5);line(c,-4,26,8,-23);
-                path.reset();path.moveTo(7,-25);path.lineTo(28,-27);path.quadTo(21,-16,29,-5);path.lineTo(5,-12);path.close();
-                p.setStyle(Paint.Style.FILL);c.drawPath(path,p);
-                path.reset();path.moveTo(-25,26);path.lineTo(-15,12);path.lineTo(-15,6);path.lineTo(-10,1);
-                path.lineTo(1,3);path.lineTo(6,9);path.lineTo(3,17);path.lineTo(-6,20);path.lineTo(-13,29);path.close();c.drawPath(path,p);
-                p.setStyle(Paint.Style.STROKE);p.setColor(0xff181b1c);p.setStrokeWidth(2.5f);
-                line(c,-10,7,2,9);line(c,-11,12,0,14);line(c,-6,3,4,8);
-                p.setColor(IVORY);p.setStrokeWidth(3);
-                path.reset();path.moveTo(-29,-5);path.quadTo(-25,-24,-10,-29);c.drawPath(path,p);
-                line(c,-17,-29,-10,-29,-11,-22);
-            }
-            else if(id==8){ // Head-first dive: straight trailing legs, torso, arms reaching ahead.
-                p.setStyle(Paint.Style.FILL);c.drawCircle(14,0,6,p);
-                p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(9);
-                line(c,-9,-7,4,6); // torso
-                p.setStrokeWidth(5.5f);
-                line(c,-12,-8,-30,-29);line(c,-6,-11,-22,-32); // two straight legs, no reversed knees
-                line(c,0,4,15,16,29,28);line(c,5,7,20,15,32,24); // arms extended head-first
-            }
-            else if(id==2){line(c,-17,8,-22,-4,-18,-9,-10,0,-10,-23,-5,-26,-3,-24,-3,-5,-3,-30,3,-31,5,-28,5,-5,5,-25,11,-25,13,-21,13,-4,13,-17,19,-16,20,-10,20,13,13,25,-3,25,-17,8);}
-            else if(id==RuneTouchLayout.POWER){ // Rune stone with a bright central sigil.
-                line(c,0,-30,23,-9,16,19,0,29,-16,19,-23,-9,0,-30);
-                line(c,-10,-8,0,-18,10,-8,0,11,-10,-8);
-                line(c,0,11,0,22);
-            }
-        }
+        void icon(Canvas c){RuneControlIcons.draw(c,id,p,path);}
         @Override protected void onDraw(Canvas c){float w=getWidth(),h=getHeight();if(id==9){if(editing){p.setColor(0x18d3af70);p.setStyle(Paint.Style.FILL);c.drawRect(0,0,w,h,p);label(c,"Look area",w/2,h/2,22*unit());}else return;}
             else{path.reset();if(id==1)path.addRoundRect(2,2,w-2,h-2,7*unit(),7*unit(),Path.Direction.CW);else path.addCircle(w/2,h/2,Math.min(w,h)/2-2,Path.Direction.CW);p.setStyle(Paint.Style.FILL);boolean cue=bloodlustCue(id);float pulse=cue?.5f+.5f*(float)Math.sin(SystemClock.uptimeMillis()*Math.PI*2/1100):0;
                 p.setColor(cue?Color.argb(220,75+(int)(65*pulse),46+(int)(35*pulse),12):(isPressed()?0xe0473821:0xd0181b1c));c.drawPath(path,p);p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(1.7f*unit());p.setColor(cue?Color.rgb(255,165+(int)(55*pulse),38):(isPressed()?0xffffd58b:GOLD));c.drawPath(path,p);

@@ -10,6 +10,8 @@ class UObject;
 namespace RuneBash {
 inline std::atomic<bool> Enabled{true};
 bool Compatible(UPawn* pawn);
+// Brief heavy-hit stagger in Cinematic/Chaos; original hit/damage remains authoritative.
+bool DamageReaction(UPawn* target,UPawn* instigator,int healthLost);
 void PresentImpact(UPawn* target,bool staggered);
 void ApplyPose(const USkelModel&,UActor*,Array<RuneJointPose>&);
 bool Start(UPawn* pawn);

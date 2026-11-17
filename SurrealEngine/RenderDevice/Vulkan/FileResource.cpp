@@ -47,6 +47,9 @@ std::string FileResource::readAllText(const std::string& filename)
             layout(location = 10) out vec3 meshNormal;
             layout(location = 11) out vec3 environmentDiffuse;
             layout(location = 12) out vec3 environmentSpecular;
+            #ifdef CREST_WATER
+            layout(location=13) flat out vec4 waterViewInfo;
+            #endif
             struct MeshLight { vec4 positionRadius; vec4 color; };
             struct MeshLighting { vec4 ambientScale; ivec4 meta; MeshLight lights[8]; vec4 surfaceOrigin; vec4 surfaceU; vec4 surfaceV; vec4 material; ivec4 materialMaps; vec4 viewCamera; vec4 surfaceTangent; vec4 surfaceBitangent; vec4 environment[6]; };
             layout(std430, set = 1, binding = 0) readonly buffer MeshLightBuffer { MeshLighting meshLights[]; };
@@ -74,11 +77,28 @@ std::string FileResource::readAllText(const std::string& filename)
 
 			void main()
 			{
-				gl_Position = objectToProjection * vec4(aPosition, 1.0);
-				gl_ClipDistance[0] = dot(nearClip, objectToView * vec4(aPosition, 1.0));
+				vec3 renderPosition=aPosition;
+                #ifdef CREST_WATER
+                // Skybox water is a distant backdrop with its own miniature coordinate scale.
+                // Animate its shading, but keep its authored horizon geometry flat.
+                // Gameplay water volumes are flat. From below, keep a stable carrier
+                // plane and animate refraction/normals, rather than letting waves
+                // expose alternating above-water BSP slivers at grazing angles.
+                float crestGeometryFade=smoothstep(-24.0,24.0,aNormal.z-aPosition.z);
+                // Main water stores its geometry-enable bit in texCoord3.y.
+                // Skybox water uses that lane for the main camera's height.
+                if(uintBitsToFloat(padding3)>.5 && aTexCoord3.x>.5 && aTexCoord3.y>.5 && crestGeometryFade>0.0)
+                    renderPosition+=crestDisplacement(aPosition.xy,aColor.a,vec2(uintBitsToFloat(padding1),uintBitsToFloat(padding2)))*crestGeometryFade;
+                #endif
+                gl_Position = objectToProjection * vec4(renderPosition, 1.0);
+				gl_ClipDistance[0] = dot(nearClip, objectToView * vec4(renderPosition, 1.0));
 				flags = aFlags;
                 meshPosition = (aFlags & (65536u|524288u))!=0u ? aPosition : vec3(0.0);
                 meshNormal = (aFlags & 65536u)!=0u ? aNormal : vec3(0.0);
+                #ifdef CREST_WATER
+                waterViewInfo=aTexCoord3.x>.5?vec4(aNormal,1):vec4(uintBitsToFloat(padding1),uintBitsToFloat(padding2),aTexCoord3.y,0);
+                if(aTexCoord3.x<.5)meshNormal=aNormal; // Main-world skybox ray.
+                #endif
                 environmentDiffuse=environmentSpecular=vec3(0);
                 if((aFlags&65536u)!=0u)vertexEnvironment(aTextureBinds.y,aPosition,normalize(aNormal));
                 else if((aFlags&262144u)!=0u) {
@@ -147,6 +167,9 @@ std::string FileResource::readAllText(const std::string& filename)
             layout(location = 10) centroid in vec3 meshNormal;
             layout(location = 11) in vec3 environmentDiffuse;
             layout(location = 12) in vec3 environmentSpecular;
+            #ifdef CREST_WATER
+            layout(location=13) flat in vec4 waterViewInfo;
+            #endif
             struct MeshLight { vec4 positionRadius; vec4 color; };
             struct MeshLighting { vec4 ambientScale; ivec4 meta; MeshLight lights[8]; vec4 surfaceOrigin; vec4 surfaceU; vec4 surfaceV; vec4 material; ivec4 materialMaps; vec4 viewCamera; vec4 surfaceTangent; vec4 surfaceBitangent; vec4 environment[6]; };
             layout(std430, set = 1, binding = 0) readonly buffer MeshLightBuffer { MeshLighting meshLights[]; };
@@ -162,6 +185,11 @@ std::string FileResource::readAllText(const std::string& filename)
             };
             layout(set=1, binding=2) uniform sampler2D dynamicShadow;
             layout(set=1, binding=3) uniform sampler2D waterReflection;
+            #ifdef CREST_WATER
+            layout(set=1,binding=5)uniform sampler2DArray crestFoam;
+            layout(set=1,binding=6)uniform sampler2D crestBackground;
+            layout(set=1,binding=7)uniform sampler2D crestDepth;
+            #endif
             bool remastered() { return OpenRuneFixedRemastered || lightingCamera.w > 0.5; }
 
             float contactShadow(vec3 position, vec3 normal, int mask)
@@ -469,9 +497,39 @@ std::string FileResource::readAllText(const std::string& filename)
                 #endif
                 vec2 wave=vec2(0);
                 #ifdef WATER_SURFACE
+                #ifdef CREST_WATER_ONLY
+                { // Dedicated pipeline: omit dormant material and legacy-water paths.
+                #else
                 if(waterParameters.w>1.5) {
+                #endif
+                    #ifdef CREST_WATER_DEBUG
+                    outColor=waterViewInfo.w>.5?vec4(0,1,0,1):vec4(1,0,1,1);
+                    #ifndef NO_HIT_OUTPUT
+                    outHitIndex=hitIndex;
+                    #endif
+                    return;
+                    #endif
                     float t=waterParameters.x;
                     vec2 p=meshPosition.xy;
+                    #ifdef CREST_WATER
+                    vec3 waterPosition=meshPosition;
+                    if(waterViewInfo.w<.5) {
+                        float rayZ=abs(meshNormal.z)>.0001?meshNormal.z:(meshNormal.z<0.0?-.0001:.0001);
+                        float cameraHeight=waterViewInfo.z-waterParameters.y;
+                        // Crossing the gameplay water plane must not collapse
+                        // every projected point onto the camera (undefined normals).
+                        if(abs(cameraHeight)<.5)cameraHeight=rayZ<0.0?.5:-.5;
+                        float distanceAlongRay=clamp(-cameraHeight/rayZ,.001,1e6);
+                        waterPosition=waterViewInfo.xyz+meshNormal*distanceAlongRay;
+                        waterPosition.z=waterParameters.y;
+                    }
+                    p=waterPosition.xy;
+                    vec3 crestD=crestDisplacement(p,color.a,waterViewInfo.xy);
+                    vec3 crestP=waterPosition+crestD;
+                    vec3 N=normalize(cross(dFdx(crestP),dFdy(crestP)));
+                    if(N.z<0.0)N=-N;
+                    vec2 gradient=-N.xy/max(abs(N.z),.15);
+                    #else
                     // Two broad, non-aligned currents bend every ripple band.
                     // Local energy varies too, avoiding equally spaced comb-like ridges.
                     // Reuses the two cross-modulation oscillators; no extra samples/pass.
@@ -487,29 +545,47 @@ std::string FileResource::readAllText(const std::string& filename)
                     vec4 slopes=cos(phase)*bandFade*energy*vec4(.10,.14,.11,.08);
                     vec2 gradient=slopes.x*vec2(.938,.349)+slopes.y*vec2(-.452,.892)+slopes.z*vec2(.874,.486)+slopes.w*vec2(-.855,.518);
                     vec3 N=normalize(vec3(-gradient,1));
+                    #endif
+                    #ifdef CREST_WATER
+                    vec3 V=normalize(waterViewInfo.xyz-waterPosition);
+                    #else
                     vec3 V=normalize(lightingCamera.xyz-meshPosition);
+                    #endif
                     if(V.z<0.0)N=-N;
                     float nv=clamp(dot(N,V),0.0,1.0);
                     float fresnel=.02+.98*pow(1.0-nv,5.0);
-                    vec3 sourceColor=darkClamp(textureTex(texCoord+gradient*.012)).rgb;
-                    vec3 authored=sourceColor;
-                    float sourceLuma=dot(authored,vec3(.2126,.7152,.0722));
-                    vec3 hue=clamp(authored/max(sourceLuma,.06),vec3(.35),vec3(1.8));
-                    // Original fluid textures often contain large cloudy white
-                    // patches. Retain their hue, not those baked pseudo-waves.
-                    authored=vec3(.21,.32,.36)*mix(vec3(1),hue,.35)*(.75+.25*sourceLuma);
-                    vec3 lighting=(flags&1u)!=0u?clamp(textureLightmap(texCoord2).rgb*2.0,vec3(0),vec3(1)):color.rgb;
-                    vec3 base=clamp(authored*lighting,vec3(0),vec3(1));
-                    float brightness=dot(base,vec3(.2126,.7152,.0722));
                     float depth=clamp(color.a,1.0,2048.0);
                     float deep=1.0-exp(-depth*.006);
-                    // Keep the map's colour and exposure, with a restrained
-                    // cool absorption gradient rather than opaque blue paint.
-                    vec3 body=mix(base*vec3(.78,1.02,1.08),base*vec3(.38,.68,.78),deep);
-                    body*=.91+.09*sin(phase.x+sin(phase.y)*.65);
-                    vec3 R=reflect(-V,N);
                     vec3 environment=waterWorldToClip[0].rgb;
                     float outdoors=waterWorldToClip[0].w;
+                    vec3 sourceColor=vec3(0),lighting=vec3(0),body=vec3(0);
+                    float brightness=0;
+                    #ifdef CREST_WATER
+                    if(outdoors>.5) {
+                        // Shared ocean tint/exposure: miniature skybox lightmaps
+                        // must not create a second material at the horizon.
+                        // No legacy animated-water/lightmap fetches on this path.
+                        vec3 basin=vec3(.21,.32,.36)*clamp(environment*1.5,vec3(.35),vec3(1));
+                        body=mix(basin*vec3(.78,1.02,1.08),basin*vec3(.38,.68,.78),deep);
+                        brightness=dot(body,vec3(.2126,.7152,.0722));
+                    } else
+                    #endif
+                    {
+                        sourceColor=darkClamp(textureTex(texCoord+gradient*.012)).rgb;
+                        vec3 authored=sourceColor;
+                        float sourceLuma=dot(authored,vec3(.2126,.7152,.0722));
+                        vec3 hue=clamp(authored/max(sourceLuma,.06),vec3(.35),vec3(1.8));
+                        // Retain hue, not baked pseudo-waves in original textures.
+                        authored=vec3(.21,.32,.36)*mix(vec3(1),hue,.35)*(.75+.25*sourceLuma);
+                        lighting=(flags&1u)!=0u?clamp(textureLightmap(texCoord2).rgb*2.0,vec3(0),vec3(1)):color.rgb;
+                        vec3 base=clamp(authored*lighting,vec3(0),vec3(1));
+                        brightness=dot(base,vec3(.2126,.7152,.0722));
+                        body=mix(base*vec3(.78,1.02,1.08),base*vec3(.38,.68,.78),deep);
+                        #ifndef CREST_WATER
+                        body*=.91+.09*sin(phase.x+sin(phase.y)*.65);
+                        #endif
+                    }
+                    vec3 R=reflect(-V,N);
                     // Indoor caustic textures are often the only authored light
                     // cues on translucent water. Preserve their energy rather
                     // than replacing a bright basin with dark absorption.
@@ -534,12 +610,68 @@ std::string FileResource::readAllText(const std::string& filename)
                     float sparkle=pow(max(dot(N,H),0.0),power)*direct;
                     vec3 lamp=waterWorldToClip[2].rgb;
                     lamp=mix(vec3(.95,.98,1),clamp(lamp,vec3(0),vec3(1)),step(.01,dot(lamp,lamp)));
+                    #ifdef CREST_WATER
+                    vec3 refracted=body;
+                    if(waterViewInfo.w>.5) {
+                    vec2 screenUV=gl_FragCoord.xy/vec2(textureSize(crestBackground,0));
+                    // Distort colour, not the optical thickness. A warped depth
+                    // lookup can jump from a shallow floor to sky/foreground and
+                    // make an otherwise static riverbed flash dark/bright.
+                    vec2 offset=gradient*(V.z<0.0?.002:.008);
+                    float maxOffset=V.z<0.0?.004:.008;
+                    offset*=maxOffset/sqrt(dot(offset,offset)+maxOffset*maxOffset);
+                    vec2 refractedUV=clamp(screenUV+offset,vec2(.001),vec2(.999));
+                    ivec2 depthSize=textureSize(crestDepth,0);
+                    ivec2 basePixel=clamp(ivec2(gl_FragCoord.xy),ivec2(0),depthSize-1);
+                    ivec2 shiftedPixel=clamp(ivec2(refractedUV*vec2(depthSize)),ivec2(0),depthSize-1);
+                    // Never bilinearly interpolate unrelated foreground/floor depths.
+                    float baseDepth=texelFetch(crestDepth,basePixel,0).r;
+                    float shiftedDepth=texelFetch(crestDepth,shiftedPixel,0).r;
+                    float floorDistance=.9/max(1.0000305-baseDepth,.00003);
+                    float shiftedDistance=.9/max(1.0000305-shiftedDepth,.00003);
+                    float surfaceDistance=.9/max(1.0000305-gl_FragCoord.z,.00003);
+                    float safeRefraction=smoothstep(0.0,12.0,shiftedDistance-surfaceDistance);
+                    safeRefraction*=1.0-smoothstep(24.0,96.0,abs(shiftedDistance-floorDistance));
+                    vec3 sceneColour=mix(texture(crestBackground,screenUV).rgb,
+                                         texture(crestBackground,refractedUV).rgb,safeRefraction);
+                    // From below, only camera-to-surface is in water. Beyond is air.
+                    float thickness=clamp(V.z<0.0?surfaceDistance:floorDistance-surfaceDistance,0.0,2048.0);
+                    vec3 transmission=exp(-vec3(.015,.006,.0035)*thickness);
+                    refracted=sceneColour*transmission+body*(1.0-transmission);
+                    }
+                    // From beneath the surface, transmit the scene above it;
+                    // do not paint an unlit fake sky onto the water's underside.
+                    if(waterViewInfo.w>.5 && V.z<0.0)fresnel*=.20;
+                    vec3 waterColor=mix(refracted,sky,fresnel)+lamp*sparkle*(.35+brightness*.7);
+                    #else
                     vec3 waterColor=mix(body,sky,.18+.78*fresnel)+lamp*sparkle*(.35+brightness*.7);
+                    #endif
+                    #ifdef CREST_WATER
+                    float foam=0.0;
+                    foam=max(foam,textureLod(crestFoam,vec3(p/80.0,2.0),0.0).r);
+                    foam=max(foam,textureLod(crestFoam,vec3(p/160.0,3.0),0.0).r);
+                    foam=max(foam,textureLod(crestFoam,vec3(p/320.0,4.0),0.0).r);
+                    foam=max(foam,textureLod(crestFoam,vec3(p/640.0,5.0),0.0).r);
+                    foam=max(foam,textureLod(crestFoam,vec3(p/1280.0,6.0),0.0).r);
+                    foam=max(foam,textureLod(crestFoam,vec3(p/2560.0,7.0),0.0).r);
+                    // Body-specific shallow depth keeps shoreline foam attached
+                    // to Rune's actual basin, not a global ocean elevation.
+                    float shore=(1.0-smoothstep(2.0,36.0,depth))*.25;
+                    foam=clamp(foam+shore,0.0,.75);
+                    #else
                     float crest=dot(sin(phase)*bandFade,vec4(.45,.30,.17,.08));
                     float foam=smoothstep(.82,.99,crest)*.09*(.3+.7*brightness);
+                    #endif
+                    #ifdef CREST_WATER
+                    waterColor=mix(waterColor,vec3(max(brightness*.85,.30)),foam);
+                    #else
                     waterColor=mix(waterColor,vec3(brightness*.85),foam);
+                    #endif
                     if((flags&8u)!=0u) {vec4 fog=textureDetail(texCoord4);waterColor=mix(waterColor,clamp(fog.rgb/max(fog.a,.001),vec3(0),vec3(1)),clamp(fog.a,0.0,.25));}
                     float opacity=(flags&131072u)!=0u?1.0:clamp(.18+.25*deep+.48*fresnel,.18,.95);
+                    #ifdef CREST_WATER
+                    opacity=1.0; // Refraction already contains the background.
+                    #endif
                     outColor=vec4(clamp(waterColor,vec3(0),vec3(1.2))*opacity,opacity);
                     #ifndef NO_HIT_OUTPUT
                     outHitIndex=hitIndex;

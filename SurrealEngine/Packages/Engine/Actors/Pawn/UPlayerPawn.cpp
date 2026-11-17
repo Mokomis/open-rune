@@ -31,7 +31,7 @@ void UPlayerPawn::Tick(float elapsed)
 {
 	UPawn::Tick(elapsed);
 
-	if (Role() >= ROLE_SimulatedProxy)
+	if (!RuneShieldTaunt::Controls(this) && Role() >= ROLE_SimulatedProxy)
 	{
 		if ((Player() || NetworkDriven) && !UObject::TryCast<UCamera>(this))
 		{

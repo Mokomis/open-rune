@@ -1,0 +1,67 @@
+{
+  "parts": [
+    {
+      "file": "open-rune-1.0.0-textures-windows-01-of-12.zip",
+      "sha256": "0a4d61e8c1f6f884dcf0232eefb4d5de043fe79cfea86e7ced4f70e8e8fe6f70",
+      "bytes": 796351410
+    },
+    {
+      "file": "open-rune-1.0.0-textures-windows-02-of-12.zip",
+      "sha256": "ff2a39292a19e8ce3adce9caff7293cd079fb8fb731368bbd622ee4ba7357baa",
+      "bytes": 778451543
+    },
+    {
+      "file": "open-rune-1.0.0-textures-windows-03-of-12.zip",
+      "sha256": "87f0514de985e87cecd1594a65981004e34ea07d608be9fc4aa7f6ca3dcd0480",
+      "bytes": 767617680
+    },
+    {
+      "file": "open-rune-1.0.0-textures-windows-04-of-12.zip",
+      "sha256": "6c1daf3555fc19dd2c95afac370cb2f08ab0b2d31bedb680f68bb08ecc66daf7",
+      "bytes": 753204884
+    },
+    {
+      "file": "open-rune-1.0.0-textures-windows-05-of-12.zip",
+      "sha256": "47f396c31504859847355ffd679b8e50de3b96da5b2ab5f51fcf7c0131b88c3d",
+      "bytes": 809778670
+    },
+    {
+      "file": "open-rune-1.0.0-textures-windows-06-of-12.zip",
+      "sha256": "24831a48ccbfd610bd0a3e3adb07c3ab11f991527a0f78365cfbb9da0672a59f",
+      "bytes": 796430495
+    },
+    {
+      "file": "open-rune-1.0.0-textures-windows-07-of-12.zip",
+      "sha256": "9c93aa5571e846ad0b16304efc3a59f0c08024ff92f5b43672910ff5ca5e47a6",
+      "bytes": 790451418
+    },
+    {
+      "file": "open-rune-1.0.0-textures-windows-08-of-12.zip",
+      "sha256": "18ea49e353b57a41a55eeb4c4eb6e89c8f21db7143c65337ea1f6bc99f28e7e4",
+      "bytes": 797340562
+    },
+    {
+      "file": "open-rune-1.0.0-textures-windows-09-of-12.zip",
+      "sha256": "173de73b4fe2c527fdab7814d3328e009a42f8169f19a9e1cd7e550f4213ea49",
+      "bytes": 737455089
+    },
+    {
+      "file": "open-rune-1.0.0-textures-windows-10-of-12.zip",
+      "sha256": "02fc63607c960722d68ab721292ecdb12599323b12c444521526f35c6cc068cf",
+      "bytes": 724208987
+    },
+    {
+      "file": "open-rune-1.0.0-textures-windows-11-of-12.zip",
+      "sha256": "f3ebe40430bea1d1b140420ab19ddfe36b91becb971d8cd3473b9bab98b6438b",
+      "bytes": 744804348
+    },
+    {
+      "file": "open-rune-1.0.0-textures-windows-12-of-12.zip",
+      "sha256": "b0ed51568d2552593532fa309ecb88ee47694014f44c3af6959ca5741cd1ef3c",
+      "bytes": 608773007
+    }
+  ],
+  "pack": "5873f93653464b307a5a4bfcd9341e22c0501d472d63fb980671abbe2a1c49dc",
+  "unpacked_bytes": 21616821040,
+  "url": "https://github.com/Mokomis/open-rune/releases/download/v1.0.0/"
+}

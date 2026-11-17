@@ -2,6 +2,8 @@
 #include "Precomp.h"
 #include "RunePhysics.h"
 #include "RuneKick.h"
+#include "RuneLeg.h"
+#include "RuneSpider.h"
 #include "RuneDualWield.h"
 #include "RuneFeedback.h"
 #include "Engine.h"
@@ -29,6 +31,7 @@ bool InRange(UPawn* a,UPawn* b){
 void Sound(UPawn* p){if(p->HasProperty("KickSound"))if(auto* s=p->GetUObject("KickSound"))CallEvent(p,"PlaySound",{ExpressionValue::ObjectValue(s)});}
 }
 bool Compatible(UPawn* p){
+    if(RuneLeg::Missing(p)>=0 || RuneSpider::Busy(p))return false;
     if(!RuneBattleLaws::Enabled(RuneBattleLaws::Kick,Enabled.load()))return false;
     if(!engine->LaunchInfo.IsRune() || !Alive(p) || !(p->IsA("RunePlayer") || p->IsA("ScriptPawn")))return false;
     auto* m=UObject::TryCast<USkelModel>(GetRuneDisplayMesh(p));
@@ -41,7 +44,7 @@ UPawn* Target(UPawn* a){
     UPawn* best=nullptr;float nearest=1e10f;
     for(auto* obj:a->XLevel()->Actors){auto* p=UObject::TryCast<UPawn>(obj);
         if(p==a || !Alive(p) || !InRange(a,p))continue;
-        if(p->Physics()!=PHYS_Walking && p->Physics()!=PHYS_Falling)continue;
+        if(p->Physics()!=PHYS_Walking && p->Physics()!=PHYS_Falling && !RuneSpider::Busy(p))continue;
         if(auto* player=UObject::TryCast<UPlayerPawn>(p);player && player->ViewTarget())continue;
         if(!UObject::TryCast<UPlayerPawn>(a) && p!=a->Enemy())continue;
         float distance=length(p->Location()-a->Location());
@@ -159,6 +162,7 @@ void Tick(UPawn* p,float elapsed){
     if(!engine->LaunchInfo.IsRune())return;
     bool pending=p->RuneKickPending;
     p->RuneKickCooldown=std::max(0.0f,p->RuneKickCooldown-elapsed);p->RuneKickImmunity=std::max(0.0f,p->RuneKickImmunity-elapsed);
+    if(RuneSpider::Busy(p))return;
     if(p->RuneKickActive && (!Alive(p) || p->GetStateName()!="Uninterrupted")){p->RuneKickActive=false;p->RuneKickPending=false;}
     if(!RuneBattleLaws::Enabled(RuneBattleLaws::Kick,Enabled.load()))p->RuneKickPending=false;
 #ifdef OPENRUNE_ENABLE_NETWORK

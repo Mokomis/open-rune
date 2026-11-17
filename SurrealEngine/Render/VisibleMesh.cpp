@@ -1,5 +1,6 @@
 
 #include "Precomp.h"
+#include "RuneLeg.h"
 #include "RuneGore.h"
 #include "RuneStairPresentation.h"
 #include "VisibleMesh.h"
@@ -211,9 +212,17 @@ bool VisibleMesh::DrawMesh(VisibleFrame* frame, UActor* actor, UActor* lightLoca
 	lightsys->InitVertexLight(vertexLight, lightLocationActor, zoneActor);
 	const VertexLight* pixelLighting = RunePixelLighting(frame, actor, vertexLight);
 
+    // A gore/limb classification belongs to the actor, not to each triangle.
+    // Keep a launch-time comparison switch for identical-image A/B profiling.
+    static const bool defaultHoistGore=commandline->GetArgInt("","--render-hoist-gore-material",1)!=0;
+    const bool hoistGore=RuneGore::MaterialBatchOverride<0?defaultHoistGore:RuneGore::MaterialBatchOverride!=0;
+    const bool runeMaterials=engine->LaunchInfo.IsRune();
+    const auto goreMaterial=hoistGore && runeMaterials?RuneGore::ActorMaterial(actor):RuneGore::MaterialState{};
 	GouraudVertex vertices[3];
+	const auto* legFaces=RuneLeg::TriangleMask(actor);size_t legTriangle=0;
 	for (const MeshTri& tri : mesh->Tris)
 	{
+        const auto legIndex=legTriangle++;if(legFaces && legIndex<legFaces->size() && !(*legFaces)[legIndex])continue;
 		if (tri.TextureIndex >= mesh->Textures.size())
 			continue;
 
@@ -244,7 +253,7 @@ bool VisibleMesh::DrawMesh(VisibleFrame* frame, UActor* actor, UActor* lightLoca
 
 		TextureInfo texinfo;
 		engine->render->UpdateTextureInfo(texinfo, tex);
-        if(engine->LaunchInfo.IsRune())RuneGore::Material(texinfo,actor);
+        if(runeMaterials){if(hoistGore)RuneGore::Material(texinfo,goreMaterial);else RuneGore::Material(texinfo,actor);}
 
 		float uscale = (tex ? tex->UsedMipmaps.front().Width : 256) * (1.0f / 255.0f);
 		float vscale = (tex ? tex->UsedMipmaps.front().Height : 256) * (1.0f / 255.0f);
@@ -539,6 +548,12 @@ bool VisibleMesh::DrawLodMeshFace(VisibleFrame* frame, UActor* actor, UActor* li
 
 	bool needTranslucentPass = false;
 
+    // A gore/limb classification belongs to the actor, not to each triangle.
+    // Keep a launch-time comparison switch for identical-image A/B profiling.
+    static const bool defaultHoistGore=commandline->GetArgInt("","--render-hoist-gore-material",1)!=0;
+    const bool hoistGore=RuneGore::MaterialBatchOverride<0?defaultHoistGore:RuneGore::MaterialBatchOverride!=0;
+    const bool runeMaterials=engine->LaunchInfo.IsRune();
+    const auto goreMaterial=hoistGore && runeMaterials?RuneGore::ActorMaterial(actor):RuneGore::MaterialState{};
 	GouraudVertex vertices[3];
 	for (const MeshFace& face : faces)
 	{
@@ -573,7 +588,7 @@ bool VisibleMesh::DrawLodMeshFace(VisibleFrame* frame, UActor* actor, UActor* li
 
 		TextureInfo texinfo;
 		engine->render->UpdateTextureInfo(texinfo, tex);
-        if(engine->LaunchInfo.IsRune())RuneGore::Material(texinfo,actor);
+        if(runeMaterials){if(hoistGore)RuneGore::Material(texinfo,goreMaterial);else RuneGore::Material(texinfo,actor);}
 
 		float uscale = (texinfo.Texture ? texinfo.Texture->UsedMipmaps.front().Width : 256) * (1.0f / 255.0f);
 		float vscale = (texinfo.Texture ? texinfo.Texture->UsedMipmaps.front().Height : 256) * (1.0f / 255.0f);
@@ -769,9 +784,17 @@ bool VisibleMesh::DrawMeshDX(VisibleFrame* frame, UActor* actor, UActor* lightLo
 	lightsys->InitVertexLight(vertexLight, lightLocationActor, zoneActor);
 	const VertexLight* pixelLighting = RunePixelLighting(frame, actor, vertexLight);
 
+    // A gore/limb classification belongs to the actor, not to each triangle.
+    // Keep a launch-time comparison switch for identical-image A/B profiling.
+    static const bool defaultHoistGore=commandline->GetArgInt("","--render-hoist-gore-material",1)!=0;
+    const bool hoistGore=RuneGore::MaterialBatchOverride<0?defaultHoistGore:RuneGore::MaterialBatchOverride!=0;
+    const bool runeMaterials=engine->LaunchInfo.IsRune();
+    const auto goreMaterial=hoistGore && runeMaterials?RuneGore::ActorMaterial(actor):RuneGore::MaterialState{};
 	GouraudVertex vertices[3];
+	const auto* legFaces=RuneLeg::TriangleMask(actor);size_t legTriangle=0;
 	for (const MeshTri& tri : mesh->Tris)
 	{
+        const auto legIndex=legTriangle++;if(legFaces && legIndex<legFaces->size() && !(*legFaces)[legIndex])continue;
 		if (tri.TextureIndex >= mesh->Textures.size())
 			continue;
 
@@ -796,7 +819,7 @@ bool VisibleMesh::DrawMeshDX(VisibleFrame* frame, UActor* actor, UActor* lightLo
 
 		TextureInfo texinfo;
 		engine->render->UpdateTextureInfo(texinfo, tex);
-        if(engine->LaunchInfo.IsRune())RuneGore::Material(texinfo,actor);
+        if(runeMaterials){if(hoistGore)RuneGore::Material(texinfo,goreMaterial);else RuneGore::Material(texinfo,actor);}
 
 		float uscale = (tex ? tex->UsedMipmaps.front().Width : 256) * (1.0f / 255.0f);
 		float vscale = (tex ? tex->UsedMipmaps.front().Height : 256) * (1.0f / 255.0f);
@@ -1018,6 +1041,12 @@ bool VisibleMesh::DrawLodMeshFaceDX(VisibleFrame* frame, UActor* actor, UActor* 
 
 	bool needTranslucentPass = false;
 
+    // A gore/limb classification belongs to the actor, not to each triangle.
+    // Keep a launch-time comparison switch for identical-image A/B profiling.
+    static const bool defaultHoistGore=commandline->GetArgInt("","--render-hoist-gore-material",1)!=0;
+    const bool hoistGore=RuneGore::MaterialBatchOverride<0?defaultHoistGore:RuneGore::MaterialBatchOverride!=0;
+    const bool runeMaterials=engine->LaunchInfo.IsRune();
+    const auto goreMaterial=hoistGore && runeMaterials?RuneGore::ActorMaterial(actor):RuneGore::MaterialState{};
 	GouraudVertex vertices[3];
 	for (const MeshFace& face : faces)
 	{
@@ -1052,7 +1081,7 @@ bool VisibleMesh::DrawLodMeshFaceDX(VisibleFrame* frame, UActor* actor, UActor* 
 
 		TextureInfo texinfo;
 		engine->render->UpdateTextureInfo(texinfo, tex);
-        if(engine->LaunchInfo.IsRune())RuneGore::Material(texinfo,actor);
+        if(runeMaterials){if(hoistGore)RuneGore::Material(texinfo,goreMaterial);else RuneGore::Material(texinfo,actor);}
 
 		float uscale = (texinfo.Texture ? texinfo.Texture->UsedMipmaps.front().Width : 256) * (1.0f / 255.0f);
 		float vscale = (texinfo.Texture ? texinfo.Texture->UsedMipmaps.front().Height : 256) * (1.0f / 255.0f);

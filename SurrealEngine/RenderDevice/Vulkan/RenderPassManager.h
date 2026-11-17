@@ -1,4 +1,6 @@
 #pragma once
+#include <chrono>
+#include <filesystem>
 
 #include <surrealgpu/vulkanobjects.h>
 
@@ -42,10 +44,12 @@ public:
 		std::unique_ptr<VulkanRenderPass> RenderPassContinueDiscardHit;
 		std::unique_ptr<VulkanRenderPass> RenderPassNoHit;
 		std::unique_ptr<VulkanRenderPass> RenderPassContinueNoHit;
+		std::unique_ptr<VulkanRenderPass> FinalNoHit[2];
+		std::unique_ptr<VulkanRenderPass> FinalNoHitKeepDepth[2];
 		struct PipelineSet
 		{
 			PipelineState Pipeline[33];
-            PipelineState WaterOpaque, WaterTransparent, CameraFade[2];
+            PipelineState WaterOpaque, WaterTransparent, CrestOpaque, CameraFade[2];
 			PipelineState LinePipeline[2];
 			PipelineState PointPipeline[2];
 		} Pipelines[2];
@@ -79,6 +83,11 @@ private:
 	void CreateSceneBindlessPipelineLayout();
 	void CreatePresentPipelineLayout();
 	void CreateBloomPipelineLayout();
+    void LogPipelineTiming(const char* phase, std::chrono::steady_clock::time_point start);
+    std::unique_ptr<VulkanPipelineCache> pipelineCache;
+    std::filesystem::path pipelineCachePath;
+    size_t pipelineCacheBytesRead = 0;
+
 
 	VulkanRenderDevice* renderer = nullptr;
 };

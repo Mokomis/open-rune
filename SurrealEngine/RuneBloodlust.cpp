@@ -1,5 +1,6 @@
 #include "RuneBattleLaws.h"
 #include "Precomp.h"
+#include "RuneSpider.h"
 #include "RunePhysics.h"
 #include "RuneBloodlust.h"
 #include "RuneRushPose.h"
@@ -153,6 +154,7 @@ void Gain(UPawn* p,float amount){
 }
 }
 bool Eligible(UPawn* p){
+    if(RuneSpider::Busy(p))return false;
     if(!engine || !engine->LaunchInfo.IsRune() || !Alive(p) || p->NetworkReplica)return false;
 #ifdef OPENRUNE_ENABLE_NETWORK
     if(engine->NetworkClient)return false;

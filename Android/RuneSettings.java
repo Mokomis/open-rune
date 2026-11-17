@@ -6,6 +6,8 @@ import java.util.LinkedHashMap;
 /** One model for every occurrence of a setting, including Enhancements. */
 final class RuneSettings {
     interface Listener { void changed(String key); }
+    static final int PHYSICS_DEFAULT=2;
+    static final String[] PHYSICS={"Legacy","Cinematic","Standard"};
     static final String[] LEVELS={"Off","Low","Medium","High"};
     static final String[] SWITCH={"Off","On"};
     static final class Item {
@@ -31,9 +33,9 @@ final class RuneSettings {
         add("fov","Field of view","Base horizontal view at 4:3. Wider screens expand the sides automatically.",null,90);
         add("wideView","Widescreen framing","Automatic preserves vertical visibility as the screen gets wider.",new String[]{"Original","Automatic"},1);
         add("bloom","Bloom & color","Subtle highlight glow and warmer color tuning.",new String[]{"Original","Enhanced"},0);
-        add("fireEffects","Fire & combat effects","Fuller flames, rising embers and motion-aligned sparks, debris and blood droplets. Cosmetic only, with a shared particle budget.",new String[]{"Original","Enhanced"},1);
+        add("fireEffects","Fire & combat effects","Fuller flames, rising embers and motion-aligned sparks, debris and blood droplets. Includes outdoor breath for living characters. Cosmetic only, with a shared particle budget.",new String[]{"Original","Enhanced"},1);
         add("gore","Gore presentation","Enhanced adds cosmetic tumbling fragments, wound shading, impact blood and corpse settling. Pickupable limbs and match rules stay unchanged.",new String[]{"Original","Enhanced"},1);
-        add("snow","Snow","Off keeps original map weather. Light and Heavy add drifting snow beneath open sky, with roof shelter. Cosmetic only.",new String[]{"Off","Light","Heavy"},0);
+        add("snow","Snowfall override","Automatic follows changing outdoor weather; multiplayer follows the host. Always Off disables snowfall. Other choices force a local snow level without changing anyone else. Roofs provide shelter.",new String[]{"Automatic","Always Off","Always Light","Always Heavy"},0);
         add("sharp","Adaptive sharpening","Restores fine contrast while limiting bright edge halos.",LEVELS,1);
         add("filter","Texture filtering","Keeps angled textures clear; limited by GPU support.",new String[]{"8×","16×"},1);
         add("shadow","Shadow / midtone lift","Reveals dark detail while preserving deep blacks.",LEVELS,1);
@@ -42,7 +44,7 @@ final class RuneSettings {
         add("environmentProbes","Local environment lighting","Baked room color and broad reflections. Static scenery only; prepared when first enabled. Requires Remastered lighting.",SWITCH,0);
         add("materialMaps","Material maps","Generated normal and roughness detail for Remastered lighting.",new String[]{"Original","Enhanced"},0);
         add("texturePack","Texture artwork","Work-in-progress remastered artwork. Unfinished or unavailable textures keep their original artwork.",new String[]{"Original","WIP 2×","WIP 4×"},0);
-        add("water","Water reflections","Approximate adds ripples and an environment sheen. Full scene reflects nearby scenery at higher cost.",new String[]{"Original","Approximate","Full scene"},0);
+        add("water","Water rendering","Enhanced adds animated water and underwater distortion. Full scene uses the older scene reflection. Crest adds simulated waves, foam and refraction (experimental). Restart Open Rune after switching to or from Crest.",new String[]{"Original","Enhanced","Full scene (legacy)","Crest (experimental)"},0);
         add("shadowLights","Shadow-casting lights","Maximum nearby shadow-casting lights. Higher counts cost more rendering time. Requires Remastered lighting.",new String[]{"One nearby","Three nearby","Four nearby","Six nearby","Eight nearby"},0);
         add("ambientOcclusion","Ambient occlusion","Experimental contact shading around corners and objects. Off is recommended at native resolution until this effect is faster.",LEVELS,0);
         add("detail","Surface detail","Generated relief on stone and wood. High strengthens shading.",LEVELS,0);
@@ -62,9 +64,10 @@ final class RuneSettings {
         add("opacity","Control opacity","Adjust the visibility of the on-screen controls.",new String[]{"35%","50%","65%","80%","100%"},2);
         add("counter","Show FPS","Displays engine FPS; actual display timing is measured separately.",SWITCH,1);
         add("networkDiagnostics","Network diagnostics","Multiplayer frame times, acknowledged round-trip time, snapshot gaps and transport timeouts. Timeouts are not a packet-loss measurement.",SWITCH,0);
+        add("playerNames","Player names","Show names above players and bots. Team markers stay visible when names are hidden. The scoreboard always shows names and bot labels.",SWITCH,1);
         add("networkSmoothing","Network smoothing","Adaptive smooths remote movement against packet jitter with a bounded buffer. Local controls stay responsive; gameplay remains server controlled.",new String[]{"Original","Adaptive"},1);
         add("hud","HUD style","Themed meters with independently saved positions and sizes.",new String[]{"Original","Open Rune"},1);
-        add("physics","Cinematic physics","Articulated bodies, recoverable knockdowns and throwable props. Chaos increases force and bounce. Bosses and scripted scenes are protected. Multiplayer follows host rules.",new String[]{"Original","Cinematic","Chaos"},0);
+        add("physics","Physics mode","Standard uses energetic articulated bodies, recoverable knockdowns, hit reactions and throwable props. Cinematic softens forces. Legacy uses original gameplay physics. Bosses and scripted scenes stay protected. Multiplayer follows host rules.",PHYSICS,PHYSICS_DEFAULT);
         add("kick","Combat kicks","F / right-stick click. Raised shields absorb damage and most knockback.",SWITCH,1);
         add("bash","Shield bash","Double-tap Block. Brief stagger and small shove; raised shields counter it.",SWITCH,1);
         add("normalBloodlust","Leap & rush availability","Normal combat is the default: neither move needs or spends bloodlust. The shared 4-second cooldown and shield requirement remain. Choose Bloodlust only to restore the old requirement. Multiplayer follows the host.",new String[]{"Bloodlust only","Normal combat"},1);
@@ -90,7 +93,7 @@ final class RuneSettings {
         items.get("materialMaps").value=(world>>10)&1;
         items.get("materialLighting").value=(world>>16)&1;
         items.get("environmentProbes").value=(world>>17)&1;
-        items.get("water").value=(world&2048)==0?0:(world&8192)!=0?2:1;
+        items.get("water").value=(world&2048)==0?0:(world&8192)!=0?2:prefs.getInt("menu.water",1)==3?3:1;
         Item shadowLights=items.get("shadowLights");
         shadowLights.value=bounded(shadowLights,prefs.getInt("menu.shadowLights",(world>>12)&1));
         items.get("ambientOcclusion").value=(world>>14)&3;
@@ -101,7 +104,7 @@ final class RuneSettings {
     }
     private void add(String key,String name,String hint,String[] choices,int value) {
         Item item=new Item(key,name,hint,choices,value);
-        item.value=bounded(item,prefs.getInt("menu."+key,value));
+        item.value=bounded(item,prefs.getInt(key.equals("snow")?"menu.snowOverride":"menu."+key,value));
         items.put(key,item);
     }
     private static int bounded(Item item,int value) {
@@ -138,11 +141,20 @@ final class RuneSettings {
         prefs.edit().putInt(campaign?"campaignCharacter":"multiplayerCharacter",value).apply();
         if(listener!=null)listener.changed("character");
     }
+    static String cleanPlayerName(String name){return name==null?"":name.trim().replaceAll(" +"," ");}
+    static boolean validPlayerName(String name){
+        if(name==null||name.isEmpty()||!name.equals(cleanPlayerName(name))||name.length()>24||name.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>48)return false;
+        for(int i=0;i<name.length();i++){char c=name.charAt(i);if(Character.isSurrogate(c)||Character.isISOControl(c)||Character.getType(c)==Character.FORMAT)return false;
+            if(!(Character.isLetterOrDigit(c)||c==' '||c=='\''||c=='.'||c=='-'||c=='_'))return false;}
+        return true;
+    }
+    String playerName(){String s=prefs.getString("multiplayer.playerName","");return validPlayerName(s)?s:"";}
+    void playerName(String name){name=cleanPlayerName(name);if(!validPlayerName(name))throw new IllegalArgumentException("Use 1–24 letters/numbers, spaces, apostrophe, dot, hyphen or underscore.");prefs.edit().putString("multiplayer.playerName",name).apply();if(listener!=null)listener.changed("playerName");}
     int get(String key) { return items.get(key).value; }
     void set(String key,int value) {
         Item item=items.get(key);
         item.value=bounded(item,value);
-        prefs.edit().putInt("menu."+key,item.value).apply();
+        prefs.edit().putInt(key.equals("snow")?"menu.snowOverride":"menu."+key,item.value).apply();
         // Persist only the changed family: changing volume must not save a
         // diagnostic launch's resolution/effect override as the user's default.
         SharedPreferences.Editor legacy=prefs.edit();

@@ -154,7 +154,6 @@ The `--rune-probe` runtime also checks property lookup cache semantics: missing 
 Run the game first, leave it visible, and use the read-only timestamp reader:
 
 ```sh
-python3 Tools/RuneValidation/android_present.py --device 192.168.68.51:37547 \
   --samples 60 --output /absolute/path/to/analysis/display
 ```
 
@@ -193,7 +192,6 @@ paused in its original Escape menu; the script pauses it again on exit. Example:
 
 ```sh
 python3 Tools/RuneValidation/android_waypoint.py 56 383 1196 \
-  --device 192.168.68.51:37547 \
   --output /absolute/path/to/local-analysis/wall-approach --steps 4
 ```
 

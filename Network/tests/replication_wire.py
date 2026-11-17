@@ -8,7 +8,7 @@ from pathlib import Path
 rng = random.Random(92061)
 header = lambda kind: struct.pack('!4sBI', b'ORR1', kind, 7)
 def status(mode,winner,red,blue,phase,countdown,round_no,started,hb_count,red_ready,blue_ready):
-    return struct.pack('!BBiiiiBBBIBBBBBB',mode,winner,red,blue,0,0,2,phase,countdown,round_no,started,hb_count,red_ready,blue_ready,0,0)
+    return struct.pack('!BBiiiiBBBIBBBBBB',mode,winner,red,blue,0,0,2,phase,countdown,round_no,started,hb_count,red_ready,blue_ready,0,0)+struct.pack('!IQ',0x8e71a91d,123456789)
 valid = []
 invalid = []
 for _ in range(200):
@@ -112,6 +112,13 @@ invalid += [physical_prefix+physical_entity(1,bytes([3])+rag[1:]+bytes([0])),
             physical_prefix+physical_entity(1,bytes([3])+rag[1:]+struct.pack('!BBhhhHHH',1,1,0,0,0,0,4096,4096)),
             physical_prefix+physical_entity(1,bytes([3])+rag[1:]+struct.pack('!BBhhhHHH',1,1,0,0,0,16385,4096,4096)),
             physical_prefix+physical_entity(1,bytes([3])+rag[1:]+bytes([2])+basis[1:]+basis[1:])]
+# Independently assembled bounded profile/name messages. BOT is a typed field,
+# not embedded into the name (only scoreboards add the display prefix).
+for name in ['Sigrun','Øystein','Torvald Ironpine']:
+    raw=name.encode('utf-8');valid += [header(14)+struct.pack('!BB',0,len(raw))+raw,header(13)+struct.pack('!IBB',1,1,len(raw))+raw]
+for raw in [b'',b'[BOT] Fake',b'A\nB',b'X'*25,b'A\xc0\x80',b'A\xe2\x80\xaeB']:
+    invalid += [header(14)+struct.pack('!BB',0,len(raw))+raw,header(13)+struct.pack('!IBB',1,0,len(raw))+raw]
+invalid += [header(14)+struct.pack('!BB',2,1)+b'A',header(13)+struct.pack('!IBB',33,0,1)+b'A']
 for b in valid:
     invalid += [b[:rng.randrange(len(b))], b+b'\0']
 # Bounds/reserved fields/wrong epoch are independent negative fixtures.

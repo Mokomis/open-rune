@@ -1,5 +1,6 @@
 #include "Precomp.h"
 #include "RuneGore.h"
+#include "RuneLeg.h"
 #include "RunePhysics.h"
 #include "GorePhysics.h"
 #include "RuneBloodPresentation.h"
@@ -26,7 +27,7 @@ struct Tracked {
     vec3 visualAngles=vec3(0);float correction=0,target=0;
 };
 struct Fragment {GorePhysics::Body body;VertexLight lighting{};vec3 shape=vec3(1);bool pool=false;};
-struct Stain {bool live=false;vec3 point=vec3(0),normal=vec3(0,0,1);float radius=1;double born=0;bool pool=false;};
+struct Stain {bool live=false;vec3 point=vec3(0),normal=vec3(0,0,1);float radius=1;double born=0;bool pool=false;vec3 color=RuneBloodPresentation::BloodColor();};
 std::map<int,Tracked> actors;
 std::map<UClass*,Kind> kinds;
 std::map<UTexture*,bool> capTextures;
@@ -42,6 +43,7 @@ float frameDt=0;double now=0;
 std::map<UTexture*,std::unique_ptr<std::array<TextureColor,256>>> woundPalettes;
 
 Kind Type(UActor* a) {
+    if(RuneLeg::Detached(a))return Limb;
     auto it=kinds.find(a->Class);if(it!=kinds.end())return it->second;
     Kind k=a->IsA("LimbWeapon")?Limb:a->IsA("GibRedMedium")?Gib:a->IsA("Carcass")?Corpse:a->IsA("Pawn")?PawnCandidate:Other;
     kinds[a->Class]=k;return k;
@@ -66,7 +68,7 @@ CollisionHit Trace(vec3 from,vec3 to,float radius=0) {
     ++stats.traces;TraceFlags flags;flags.world=true;
     return engine->Level->Collision.TraceFirstHit(from,to,nullptr,vec3(radius),flags);
 }
-bool Mark(vec3 point,vec3 normal,float radius,bool pool=false) {
+bool Mark(vec3 point,vec3 normal,float radius,bool pool=false,vec3 color=RuneBloodPresentation::BloodColor()) {
     if(stats.traces+5>TraceBudget || dot(normal,normal)<.5f)return false;
     normal=normalize(normal);vec3 u=GorePhysics::Tangent(normal),v=cross(normal,u);
     // Reject overhanging corners, steps and moving surfaces. Persisted stains
@@ -75,7 +77,7 @@ bool Mark(vec3 point,vec3 normal,float radius,bool pool=false) {
         auto hit=Trace(point+corner*radius+normal*2.f,point+corner*radius-normal*2.f);
         if(hit.Actor!=engine->LevelInfo || hit.Fraction>=1 || std::abs(hit.Fraction-.5f)>.2f || dot(hit.Normal,normal)<.9f)return false;
     }
-    stains[stainCursor++%stains.size()]={true,point+normal*.25f,normal,radius,now,pool};++stats.stains;
+    stains[stainCursor++%stains.size()]={true,point+normal*.25f,normal,radius,now,pool,color};++stats.stains;
     return true;
 }
 void Burst(UActor* a,int count) {
@@ -133,6 +135,11 @@ float Angle(float current,float target,float fraction) {
 }
 }
 
+void BleedMark(vec3 source,vec3 color) {
+    if(!allowed || stats.traces+6>TraceBudget)return;
+    auto hit=Trace(source,source-vec3(0,0,160));
+    if(hit.Actor==engine->LevelInfo && hit.Fraction<1 && hit.Normal.z>.7f)Mark(source-vec3(0,0,160)*hit.Fraction,hit.Normal,2.5f,false,color);
+}
 void Reset() {
     actors.clear();kinds.clear();capTextures.clear();fragments={};stains={};woundPalettes.clear();evidence={};evidenceCursor=0;bloodActors.clear();
     stainCursor=fragmentCursor=0;stats={};serial=0;baseline=allowed=false;frameDt=0;now=0;
@@ -257,15 +264,16 @@ mat4 MeshTransform(UActor* a,UMesh* mesh,const mat4& original) {
     return mat4::translate(p+vec3(0,0,t.correction))*Coords::Rotation(diff).ToMatrix()*mat4::translate(-p)*original;
 }
 
-void Material(TextureInfo& info,UActor* a) {
-    if(!allowed || !Enabled.load() || !info.Texture)return;
+namespace {
+bool CapTexture(TextureInfo& info) {
     auto tag=capTextures.find(info.Texture);
     if(tag==capTextures.end()) {
         std::string name=info.Texture->Name.ToString();for(char& c:name)c=char(std::tolower((unsigned char)c));
         tag=capTextures.emplace(info.Texture,name.find("gore")!=std::string::npos).first;
     }
-    bool cap=tag->second;
-    if((!cap && Type(a)!=Gib) || !Red(a))return;
+    return tag->second;
+}
+void ApplyWetMaterial(TextureInfo& info) {
     info.WetGore=true;
     if(!info.Palette || info.Format!=TextureFormat::P8)return;
     auto found=woundPalettes.find(info.Texture);
@@ -286,6 +294,22 @@ void Material(TextureInfo& info,UActor* a) {
     }
     info.Palette=found->second->data();info.CacheID=uint64_t(uintptr_t(found->second.get()));
 }
+}
+MaterialState ActorMaterial(UActor* a) {
+    if(!allowed || !Enabled.load() || !a)return {};
+    return {true,Type(a)==Gib,Red(a)};
+}
+void Material(TextureInfo& info,UActor* a) {
+    // Retain original per-triangle evaluation for diagnostic comparisons.
+    if(!allowed || !Enabled.load() || !info.Texture)return;
+    if((!CapTexture(info) && Type(a)!=Gib) || !Red(a))return;
+    ApplyWetMaterial(info);
+}
+void Material(TextureInfo& info,const MaterialState& state) {
+    if(!state.enabled || !info.Texture)return;
+    if((!CapTexture(info) && !state.gib) || !state.red)return;
+    ApplyWetMaterial(info);
+}
 
 void Draw(VisibleFrame* frame) {
     if(!allowed || !Enabled.load() || frame->ShadowView || frame->PortalDepth || frame->MirrorFlag)return;
@@ -303,7 +327,7 @@ void Draw(VisibleFrame* frame) {
         if(count++>=48 || frame->EffectQuadBudget<=0)break;
         auto& s=*entry.second;vec3 u=GorePhysics::Tangent(s.normal),v=cross(s.normal,u);
         float growth=s.pool?.5f+.5f*std::clamp(float(now-s.born)/2.f,0.f,1.f):1;
-        RuneEffects::Quad(frame,texture,s.point,u*s.radius*growth,v*s.radius*growth*.75f,crimson,s.pool?.8f:.7f,PF_Highlighted);
+        RuneEffects::Quad(frame,texture,s.point,u*s.radius*growth,v*s.radius*growth*.75f,s.color,s.pool?.8f:.7f,PF_Highlighted);
     }
     // Small real 3D fragments: eight faces, no new actor or shadow passes.
     const int faces[8][3]={{4,0,2},{4,2,1},{4,1,3},{4,3,0},{5,2,0},{5,1,2},{5,3,1},{5,0,3}};

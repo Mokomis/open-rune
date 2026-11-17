@@ -8,6 +8,7 @@
 #include "Packages/Engine/Resources/Mesh/USkelModel.h"
 #include "Engine.h"
 #include "RuneBash.h"
+#include "RuneShieldTaunt.h"
 #include "RuneKick.h"
 #include "RuneBloodlust.h"
 
@@ -340,7 +341,7 @@ void UActor::TickAnimation(float elapsed)
 {
 	auto notifyRuneFrames=[&](float from,float to)
 	{
-        if(RuneBloodlust::AnimationFrames(this) || RuneBash::AnimationFrames(this,from,to))return;
+        if(RuneBloodlust::AnimationFrames(this) || RuneBash::AnimationFrames(this,from,to) || RuneShieldTaunt::AnimationFrames(this,from,to))return;
 		if (!engine->LaunchInfo.IsRune() || !GetBool("bFrameNotifies")) return;
 		auto* mesh=GetRuneDisplayMesh(this);
 		auto* sequence=mesh?mesh->GetSequence(AnimSequence()):nullptr;

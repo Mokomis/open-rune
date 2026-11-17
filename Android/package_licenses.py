@@ -53,6 +53,8 @@ def stage_licenses(root, sdl, build, assets, discovery=None):
         'miniz.txt': 'Thirdparty/miniz/LICENSE',
         'OpenMPT.txt': 'Thirdparty/openmpt/LICENSE',
         'JoltPhysics-MIT.txt': 'Thirdparty/JoltPhysics/LICENSE',
+        'Crest-MIT.txt': 'Thirdparty/crest/LICENSE',
+        'Crest-provenance.txt': 'Thirdparty/crest/UPSTREAM.txt',
     }
     for name, path in required.items():
         add(name, root / path)

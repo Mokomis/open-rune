@@ -2,6 +2,7 @@
 #include "Precomp.h"
 #include "ShaderManager.h"
 #include "FileResource.h"
+#include "crest/CrestSampling.h"
 #include "VulkanRenderDevice.h"
 #include "Utils/CommandLine.h"
 #include "Utils/Logger.h"
@@ -19,7 +20,7 @@ ShaderManager::ShaderManager(VulkanRenderDevice* renderer) : renderer(renderer)
     LogMessage("RUNE_OPAQUE_EARLY_DEPTH enabled="+std::to_string(earlyDepth));
     LogMessage("RUNE_LIGHTING_PRECISION relaxed="+std::to_string(!fullPrecisionLighting));
 
-	auto compileScene = [&](SceneShaders& shaders, bool noHit, bool water = false)
+	auto compileScene = [&](SceneShaders& shaders, bool noHit, bool water = false, bool crest = false)
 	{
 		std::string defines = "#extension GL_EXT_nonuniform_qualifier : enable\n";
 		defines += fullPrecisionLighting ? "#define LIGHTP highp\n" : "#define LIGHTP mediump\n";
@@ -28,19 +29,28 @@ ShaderManager::ShaderManager(VulkanRenderDevice* renderer) : renderer(renderer)
         if(commandline->GetArgInt("","--render-shadow-receivers",1)!=0) defines += "#define SHADOW_RECEIVER_BOUNDS\n";
 		if (noHit) defines += "#define NO_HIT_OUTPUT\n";
         if (water) defines += "#define WATER_SURFACE\n";
+        if(water && crest) {
+            defines+="#define CREST_WATER\n"+CrestSamplingGLSL();
+            if(commandline->GetArgInt("","--crest-specialized",1)!=0)defines+="#define CREST_WATER_ONLY\n";
+            if(commandline->HasArg("","--crest-debug-water"))defines+="#define CREST_WATER_DEBUG\n";
+        }
 		shaders.VertexShader = GLSLCompiler().Type(ShaderType::Vertex)
 			.AddSource("shaders/Scene.vert", LoadShaderCode("shaders/Scene.vert", defines)).Compile(renderer->Device.get());
 		shaders.FragmentShader = GLSLCompiler().Type(ShaderType::Fragment)
-			.AddSource("shaders/Scene.frag", LoadShaderCode("shaders/Scene.frag", defines + (earlyDepth ? "#define NO_DISCARD\n" : ""))).Compile(renderer->Device.get());
+			.AddSource("shaders/Scene.frag", LoadShaderCode("shaders/Scene.frag", "#define CREST_FRAGMENT\n"+defines + (earlyDepth ? "#define NO_DISCARD\n" : ""))).Compile(renderer->Device.get());
 		shaders.FragmentShaderCoverage = GLSLCompiler().Type(ShaderType::Fragment)
-			.AddSource("shaders/Scene.frag", LoadShaderCode("shaders/Scene.frag", defines)).Compile(renderer->Device.get());
+			.AddSource("shaders/Scene.frag", LoadShaderCode("shaders/Scene.frag", "#define CREST_FRAGMENT\n"+defines)).Compile(renderer->Device.get());
 		shaders.FragmentShaderAlphaTest = GLSLCompiler().Type(ShaderType::Fragment)
-			.AddSource("shaders/Scene.frag", LoadShaderCode("shaders/Scene.frag", defines + "#define ALPHATEST\n")).Compile(renderer->Device.get());
+			.AddSource("shaders/Scene.frag", LoadShaderCode("shaders/Scene.frag", "#define CREST_FRAGMENT\n"+defines + "#define ALPHATEST\n")).Compile(renderer->Device.get());
 	};
 	compileScene(Scene, false);
 	compileScene(SceneNoHit, true);
     compileScene(Water, false, true);
     compileScene(WaterNoHit, true, true);
+    if(commandline->GetArgInt("","--water-model",1)==3) {
+        compileScene(CrestSurface,false,true,true);
+        compileScene(CrestSurfaceNoHit,true,true,true);
+    }
     ShadowVertex = GLSLCompiler().Type(ShaderType::Vertex).AddSource("shaders/Shadow.vert", LoadShaderCode("shaders/Shadow.vert")).Compile(renderer->Device.get());
     ShadowFragment = GLSLCompiler().Type(ShaderType::Fragment).AddSource("shaders/Shadow.frag", LoadShaderCode("shaders/Shadow.frag", "#extension GL_EXT_nonuniform_qualifier : enable\n")).Compile(renderer->Device.get());
 

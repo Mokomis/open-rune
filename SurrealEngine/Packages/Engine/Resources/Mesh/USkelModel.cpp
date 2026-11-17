@@ -1,5 +1,10 @@
 #include "Precomp.h"
 #include "RunePhysics.h"
+#include "RuneBreath.h"
+#include "RuneShieldTaunt.h"
+#include "RuneLeg.h"
+#include "RuneSpider.h"
+#include "RuneIK.h"
 #include "RuneSlam.h"
 #include "RuneBash.h"
 #include "USkelModel.h"
@@ -262,6 +267,7 @@ mat4 GetRuneActorToWorld(UActor* actor,int depth)
 
 mat4 GetRuneMeshToWorld(UActor* actor,int depth)
 {
+    mat4 legTransform;if(engine->LaunchInfo.IsRune() && RuneLeg::LooseTransform(actor,legTransform))return legTransform;
     if(engine->LaunchInfo.IsRune() && RunePhysics::CustomTransform(actor))return RunePhysics::MeshToWorld(actor);
     if(engine->LaunchInfo.IsRune() && RuneCorpse::CustomTransform(actor))return RuneCorpse::MeshToWorld(actor);
 	auto* mesh=GetRuneDisplayMesh(actor);
@@ -375,6 +381,7 @@ void USkelModel::Load(ObjectStream* s)
 	if (!Frames.empty()) { BoundingBox=Frames.front().Bounds; MeshBoundingBox=BoundingBox; }
 	Origin=PositionOffset; RotOrigin=RotationOffset; Scale=vec3(1.0f);
 	meshToObject=Coords::Rotation(RotOrigin).ToMatrix()*mat4::translate(-Origin);
+    RuneShieldTaunt::Install(*this);
 }
 
 void USkelModel::Save(PackageStreamWriter*)
@@ -408,6 +415,7 @@ Array<RuneJointPose> USkelModel::DecodeFrame(size_t sequence, int frame, bool va
 	if (validateToEnd && pos!=s.Data.size()) Exception::Throw("Trailing bytes in Rune animation");
 	if (actor)
 	{
+		RuneBreath::IdlePose(*this,actor,sequence,result);
 		// GetSkeleton selects group 0 from the actor and group 1 from AnimProxy.
 		// Decode without an actor for the secondary pose to avoid recursion.
 		auto* proxy=UObject::TryCast<UActor>(actor->GetUObject("AnimProxy"));
@@ -417,6 +425,7 @@ Array<RuneJointPose> USkelModel::DecodeFrame(size_t sequence, int frame, bool va
 			{
 				int proxyFrame=(int)(std::max(0.0f,proxy->AnimFrame())*Sequences[i].Info.NumFrames)%Sequences[i].Info.NumFrames;
 				auto upper=DecodeFrame(i,proxyFrame);
+                RuneBreath::IdlePose(*this,proxy,i,upper);
 				for (size_t j=0;j<result.size();j++) if (Joints[j].Group==1) result[j]=upper[j];
 				break;
 			}
@@ -427,6 +436,9 @@ Array<RuneJointPose> USkelModel::DecodeFrame(size_t sequence, int frame, bool va
         RuneRushPose::Apply(*this,actor,result);
         RuneSlam::Apply(*this,actor,result);
         RuneCorpse::ApplyPose(*this,actor,result);
+        RuneIK::Apply(*this,actor,result);
+        RuneLeg::ApplyPose(*this,actor,result);
+        RuneSpider::ApplyPose(*this,actor,result);
         RunePhysics::ApplyPose(actor,result);
 	}
 	return result;
@@ -455,6 +467,7 @@ Array<RuneJointPose> USkelModel::SampleAnimation(UActor* actor) const
     size_t sequence=0;
     for(size_t i=0;i<Sequences.size();i++) if(Sequences[i].Info.Name==name){sequence=i;break;}
     auto pose=SampleFrame(sequence,actor->AnimFrame(),actor->bAnimLoop());
+    RuneBreath::IdlePose(*this,actor,sequence,pose);
     if(actor->AnimFrame()<0 && actor->RuneTweenModel==this && actor->RuneTweenTarget==name && actor->RuneTweenPose.size()==pose.size()) {
         float t=std::clamp(1.0f+actor->AnimFrame()*Sequences[sequence].Info.NumFrames,0.0f,1.0f);
         for(size_t j=0;j<pose.size();j++) pose[j]=BlendRunePose(actor->RuneTweenPose[j],pose[j],t);
@@ -500,6 +513,9 @@ Array<RuneJointPose> USkelModel::ActorPose(UActor* actor) const
     RuneSlam::Apply(*this,actor,pose);
     RuneBash::ApplyPose(*this,actor,pose);
     RuneCorpse::ApplyPose(*this,actor,pose);
+    RuneIK::Apply(*this,actor,pose);
+    RuneLeg::ApplyPose(*this,actor,pose);
+        RuneSpider::ApplyPose(*this,actor,pose);
     RunePhysics::ApplyPose(actor,pose);
     return pose;
 }

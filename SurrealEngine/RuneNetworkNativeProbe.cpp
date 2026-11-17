@@ -33,12 +33,43 @@ void RunRuneBotGoalProbe(Engine& game);
 void RunRuneBotTraversalProbe(Engine& game);
 void RunRuneBotTeamProbe(Engine& game);
 void RunRuneBotCrowdProbe(Engine& game);
+void RunRuneCeilingBotProbe(Engine& game) {
+ auto check=[](bool b,const char* why){if(!b)throw std::runtime_error(std::string("ceiling bots: ")+why);};
+ RuneBattleLaws::Campaign=RuneBattleLaws::All;RuneBloodlust::AllowNormal=true;RuneBloodlust::Enabled=true;RuneTactics::Enabled=false;RunePhysics::RequestedMode=2;
+ game.NetworkAuthority=true;auto url=game.GetDefaultURL("DM-Hildir.run");url.AddOrReplaceOption("game=RuneI.RuneMultiPlayer");game.LoadMap(url);
+ RuneNetworkAuthority authority(game);RuneNetworkReplica replica;std::vector<UPlayerPawn*> pawns;std::vector<RuneBot::Brain> brains;
+ std::vector<uint64_t> actions;std::vector<int> frozen;std::vector<bool> reported;
+ for(int i=0;i<7;++i){auto* v=game.LoginNetworkPlayer("CeilingBot"+std::to_string(i),-1,i*2,0);check(v,"login");check(authority.bind(i+1,v,1),"bind");pawns.push_back(v);brains.emplace_back(73+i*17,2);actions.push_back(0);frozen.push_back(0);reported.push_back(false);}
+ game.viewport->Actor()=pawns[0];uint64_t tickId=0,snapshotId=0,now=1000;World world;MatchStatus status;status.mode=GameMode::Deathmatch;status.phase=MatchPhase::Playing;
+ unsigned hangs=0,grabs=0;int frames=commandline->GetArgInt("","--ceiling-bot-frames",7200);
+ for(int frame=0;frame<frames;++frame) {
+  now=1000+(tickId*1000)/60;authority.beginTick(++tickId,now);authority.commitContacts();
+  if(frame%6==0){check(authority.capture(world),"world capture");uint64_t release=0;
+   for(const auto& event:authority.pendingActors()) {if(event.operation==ActorOperation::Spawn)check(replica.spawn(game,event),"spawn replica");else if(event.operation==ActorOperation::Appearance)check(replica.appearance(game,event),"appearance");else check(replica.unbind(event.ref),"despawn");release=event.id;}
+   if(release)authority.releaseActorsThrough(release);check(replica.install(Snapshot{++snapshotId,0,tickId,world}),"install");replica.present(1);
+   for(auto* a:game.Level->Actors)if(a && a->NetworkReplica && a->IsA("Pawn"))game.Level->Collision.RemoveFromCollision(a);
+   for(int i=0;i<7;++i){auto d=brains[i].think(game,replica,world,status,authority.identity(pawns[i]),now);auto in=d.input;in.sequence=tickId;in.createdMs=now;authority.input(i+1,in);if(d.action){AdmittedAction a{{++actions[i],in.sequence,now,in.life,*d.action},in,now};authority.action(i+1,a,now);}}
+   const auto& combat=authority.pendingCombat();if(!combat.empty())authority.releaseCombatThrough(combat.back().id);authority.drainSounds();
+  }
+  game.LevelInfo->TimeSeconds()+=1.f/60;game.TotalTime+=1.f/60;game.Level->Tick(1.f/60,false);
+  for(int i=0;i<7;++i){auto* v=pawns[i];bool trapped=v->Health()>0 && !RunePhysics::Controls(v) && (v->GetStateName()=="EdgeHanging" || v->Physics()==PHYS_None || v->Physics()==PHYS_Flying);if(trapped)++frozen[i];else frozen[i]=0;
+   if(frozen[i]==1)++grabs;
+   if(frozen[i]>=180 && !reported[i]){reported[i]=true;++hangs;std::cout<<"BOT_CEILING_STUCK class="<<v->Class->Name.ToString()<<" t="<<frame/60.f<<" state="<<v->GetStateName().ToString()<<" physics="<<int(v->Physics())<<" anim="<<v->AnimSequence().ToString()<<" frame="<<v->AnimFrame()<<" rate="<<v->AnimRate()<<" xyz="<<v->Location().x<<","<<v->Location().y<<","<<v->Location().z<<std::endl;}
+  }
+ }
+ unsigned leaps=0,attacks=0;for(auto& b:brains){leaps+=b.leaps;attacks+=b.attacks;}
+ std::cout<<"RUNE_CEILING_BOT_OK seconds="<<frames/60.f<<" transitions="<<grabs<<" stuck="<<hangs<<" leaps="<<leaps<<" attacks="<<attacks<<std::endl;
+}
+
 void RunRuneNetworkNativeProbe(Engine& game)
 {
+    if(commandline->HasArg("","--rune-ceiling-bot-probe")){RunRuneCeilingBotProbe(game);return;}
     if(commandline->HasArg("","--rune-bot-traversal-probe")){RunRuneBotTraversalProbe(game);return;}
     if(commandline->HasArg("","--rune-bot-crowd-probe") || commandline->HasArg("","--rune-bot-group-probe")){RunRuneBotCrowdProbe(game);return;}
     if(commandline->HasArg("","--rune-bot-team-probe")){RunRuneBotTeamProbe(game);return;}
     if(commandline->HasArg("","--rune-bot-goal-probe") || commandline->HasArg("","--rune-bot-navigation-probe")){RunRuneBotGoalProbe(game);return;}
+ // This fixture starts with the original contact/pose baseline before its explicit mode tests.
+ if(!commandline->HasArg("","--rune-physics"))RunePhysics::RequestedMode=RunePhysics::Legacy;
  struct RestoreLaws{uint32_t value=RuneBattleLaws::Campaign.load();~RestoreLaws(){RuneBattleLaws::Campaign=value;}} restoreLaws;
  RuneBattleLaws::Campaign=RuneBattleLaws::All; // Explicit fixture rules; real campaign still rejects leap.
     auto check=[](bool v,const char* why){if(!v)throw std::runtime_error(std::string("network native combat: ")+why);};
@@ -106,6 +137,32 @@ void RunRuneNetworkNativeProbe(Engine& game)
         check(replica.install(decoded),"install native world");replica.present(1);
         return UObject::TryCast<UPlayerPawn>(replica.actor(authority.identity(p)));
     };
+    if(commandline->HasArg("","--rune-ceiling-recovery-probe")) {
+      reset(150);p->SetLocation(origin+vec3(0,0,100));p->GotoState("EdgeHanging","Begin");p->SetPhysics(PHYS_Flying);
+      p->AnimSequence()="intropullupA";p->AnimFrame()=.99f;p->AnimRate()=0;
+      p->GetUObject("AnimProxy")->SetName("AnimSequence","intropullupA");p->GetUObject("AnimProxy")->SetFloat("AnimRate",0);
+      const auto at=p->Location();snapshot();World observed;check(authority.capture(observed),"capture hanging avatar");
+      MatchStatus status;status.mode=GameMode::Deathmatch;status.phase=MatchPhase::Playing;RuneBot::Brain brain(73);
+      auto own=authority.identity(p);auto d=brain.think(game,replica,observed,status,own,now);
+      check(!d.action || *d.action!=ActionKind::Jump,"normal climb given time");
+      d=brain.think(game,replica,observed,status,own,now+1100);check(d.action && *d.action==ActionKind::Jump,"bot recognizes its own stalled climb");
+      now+=1100;check(action(1,ActionKind::Jump),"authority admits ledge recovery");
+      check(p->Physics()==PHYS_Falling && p->GetStateName()=="PlayerWalking" && length(p->Location()-at)<.001f,"stale climb releases without teleport");
+      check(!action(1,ActionKind::BloodLeap),"ledge release cannot arm an airborne leap");
+      tick(120);check(p->Location().z<at.z-20 && p->Physics()==PHYS_Walking,"released pawn lands using world collision");
+      std::cout<<"RUNE_CEILING_RECOVERY_OK bot_jump=1 swept_landing=1 no_teleport=1"<<std::endl;return;
+    }
+    if(commandline->HasArg("","--rune-stagger-network-probe")) {
+      reset(150);RunePhysics::RequestedMode=2;give(target,"VikingShield",true);
+      int before=target->Health();CallEvent(target,"JointDamaged",{ExpressionValue::IntValue(24),ExpressionValue::ObjectValue(p),ExpressionValue::VectorValue(target->Location()),ExpressionValue::VectorValue(vec3(0)),ExpressionValue::NameValue("blunt"),ExpressionValue::IntValue(0)});
+      check(target->Health()<before && target->RuneBashPhase==3,"committed authority damage staggers");snapshot();
+      auto* rt=UObject::Cast<UPawn>(replica.actor(authority.identity(target)));
+      check(rt->AnimSequence()==target->AnimSequence() && rt->AnimRate()>0,"directional stagger and playback rate replicate");
+      tick(45);check(target->GetStateName()=="PlayerWalking" && target->RuneBashPhase==0,"stagger returns control");
+      check(action(2,ActionKind::RaiseShield,2),"blocking available after stagger");
+      check(!RuneBash::DamageReaction(target,p,24),"authority immunity prevents repeat stun");
+      std::cout<<"RUNE_STAGGER_NETWORK_OK replicated=1 control_restored=1 immunity=1"<<std::endl;return;
+    }
     reset(150);give(p,"VikingShortSword",true);auto* off=UObject::TryCast<UWeapon>(give(p,"HandAxe",false));
     // Native eligibility and execution gates, not just menu-model checks.
     {

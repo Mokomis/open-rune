@@ -1,6 +1,7 @@
 #pragma once
 #include "openrune/CharacterRoster.h"
 #include "SecureSession.h"
+#include "PlayerIdentity.h"
 #include <map>
 #include <deque>
 #include <functional>
@@ -193,6 +194,7 @@ struct MatchStatus {
     bool headBallStarted=false;
     uint8_t headBallCountdown=0;
     std::array<uint8_t,4> readyTeams{};
+    uint32_t weatherSeed=0;uint64_t weatherStartMs=0; // Host clock; fixed per map.
     bool operator==(const MatchStatus&) const = default;
 };
 bool encodeMatchStatus(uint32_t epoch,const MatchStatus&,Bytes&);
@@ -363,10 +365,18 @@ private:
 bool encodeCharacterChoice(uint32_t epoch, CharacterChoice, Bytes&);
 bool decodeCharacterChoice(uint32_t epoch, std::span<const uint8_t>, CharacterChoice&);
 
+bool encodePlayerProfile(uint32_t,const PlayerProfile&,Bytes&);
+bool decodePlayerProfile(uint32_t,std::span<const uint8_t>,PlayerProfile&);
+bool encodePlayerLabel(uint32_t,const PlayerLabel&,Bytes&);
+bool decodePlayerLabel(uint32_t,std::span<const uint8_t>,PlayerLabel&);
 class ReplicationPeer
 {
 public:
-    ReplicationPeer(SecureSession&, MatchContract, CharacterChoice choice = {});
+    ReplicationPeer(SecureSession&, MatchContract, CharacterChoice choice = {},PlayerProfile profile = {});
+    const std::optional<PlayerProfile>& playerProfile()const{return receivedProfile;}
+    bool setPlayerProfile(const PlayerProfile& p){if(!validPlayerName(p.name))return false;if(p!=localProfile){localProfile=p;profileSent=false;}return true;}
+    bool publishPlayerLabel(const PlayerLabel&);
+    const PlayerLabel* playerLabel(uint32_t p)const{auto i=labels.find(p);return i==labels.end()?nullptr:&i->second;}
     const std::optional<CharacterChoice>& characterChoice() const { return receivedCharacter; }
     void step(bool sendInputs = true);
     void flushInputs();
@@ -410,6 +420,8 @@ private:
     MatchState matchState=MatchState::Awaiting;
     bool matchSent=false, characterSent=false;
     CharacterChoice localCharacter;
+    PlayerProfile localProfile;std::optional<PlayerProfile> receivedProfile;bool profileSent=false;
+    std::map<uint32_t,PlayerLabel> labels,sentLabels;
     std::optional<CharacterChoice> receivedCharacter;
     uint64_t nextFeedback = 0, lastActive = 0, rejected = 0, lastActionOffered = 0;
     uint64_t lastCombatSent = 0, lastCombatReceived = 0, lastCombatTick = 0;

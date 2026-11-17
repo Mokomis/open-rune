@@ -1,5 +1,9 @@
 
 #include "Precomp.h"
+#include "RuneBreath.h"
+#include "RuneShieldTaunt.h"
+#include "RuneLeg.h"
+#include "RuneSpider.h"
 #include "RuneUpdates.h"
 #include "UI/Launcher/RuneUpdatesPage.h"
 #include "RunePhysics.h"
@@ -79,8 +83,9 @@ int GameApp::main(Array<std::string> args)
 		CommandLine cmd(args);
 		commandline = &cmd;
         if(commandline->HasArg("","--updates"))return ShowRuneUpdatesWindow();
+        RuneBreath::Enabled=commandline->GetArgInt("","--rune-breath",1)!=0;
         RuneAnimation::Interpolate=commandline->GetArgInt("", "--rune-animation-interpolation", 1)!=0;
-        RunePhysics::RequestedMode=std::clamp(commandline->GetArgInt("","--rune-physics",0),0,2);
+        RunePhysics::RequestedMode=std::clamp(commandline->GetArgInt("","--rune-physics",RunePhysics::DefaultMode),0,2);
         RuneShadows::RequestedBudget=commandline->GetArgInt("","--shadow-lights",0);
 
         if(commandline->HasArg("","--sound-pack-probe")){
@@ -208,6 +213,10 @@ int GameApp::main(Array<std::string> args)
 				GameFolderSelection::UpdateList();
 				if (GameFolderSelection::Games.size()!=1 || !GameFolderSelection::Games[0].IsRune())
 					throw std::runtime_error("Pass exactly one recognized Rune installation folder");
+				if(commandline->HasArg("","--rune-spider-probe")){Engine game(GameFolderSelection::GetLaunchInfo(0));RuneSpider::Probe(game);return 0;}
+                if(commandline->HasArg("","--rune-kick-counter-probe")){Engine game(GameFolderSelection::GetLaunchInfo(0));RuneLeg::Probe(game);return 0;}
+                if(commandline->HasArg("","--rune-shield-taunt-probe")){Engine game(GameFolderSelection::GetLaunchInfo(0));RuneShieldTaunt::Probe(game);return 0;}
+                if(commandline->HasArg("","--rune-breath-probe")){Engine game(GameFolderSelection::GetLaunchInfo(0));RuneBreath::Probe(game);return 0;}
 				if(commandline->HasArg("","--rune-physics-probe")){Engine physics(GameFolderSelection::GetLaunchInfo(0));RunePhysics::RunProbe(physics);return 0;}
                 Engine probe(GameFolderSelection::GetLaunchInfo(0), true);
 				IniFile originalUser(probe.LaunchInfo.gameRootFolder+"/System/User.ini");

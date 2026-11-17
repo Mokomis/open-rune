@@ -27,11 +27,3 @@ __pycache__/
 
 # AppleDouble metadata is not project source.
 ._*
-
-# Clean distribution snapshot: research evidence and derived previews stay outside Git.
-/Tools/RuneRecovery/
-/Tools/RuneWorker/
-/Docs/RunePort/evidence/
-/Docs/RunePort/images/
-/Docs/RunePort/menu-design/
-/Docs/RunePort/hud-design/

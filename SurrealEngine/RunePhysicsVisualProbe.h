@@ -189,6 +189,18 @@ public:
       }
       return;
     }
+    if(frame==110 && commandline->HasArg("","--physics-stagger") && enemy) {
+      enemy->GotoState("Fighting","Begin");enemy->RuneBashImmunity=0;
+      CallEvent(enemy,"JointDamaged",{ExpressionValue::IntValue(24),ExpressionValue::ObjectValue(p),ExpressionValue::VectorValue(enemy->Location()+vec3(0,0,25)),ExpressionValue::VectorValue(vec3(0)),ExpressionValue::NameValue("blunt"),ExpressionValue::IntValue(0)});
+      LogMessage("RUNE_STAGGER_RENDER active="+std::to_string(enemy->RuneBashPhase==3));
+    }
+    if(frame==110 && commandline->HasArg("","--physics-muscles") && enemy) {
+      auto* m=UObject::TryCast<USkelModel>(GetRuneDisplayMesh(enemy));auto bones=m->ActorJointMatrices(enemy);int head=0;
+      for(size_t j=0;j<m->Joints.size();++j)if(m->Joints[j].Name=="head")head=int(j);
+      auto hit=(GetRuneMeshToWorld(enemy)*bones[head]*vec4(0,0,0,1)).xyz();
+      bool reacted=RunePhysics::React(enemy,hit,direction*600.f+vec3(0,0,80),head);
+      LogMessage("RUNE_PUPPET_RENDER_IMPULSE active="+std::to_string(reacted));
+    }
     if (frame == 150) {
       if (!RunePhysics::Controls(enemy) &&
           !RunePhysics::Knockdown(enemy, p,
@@ -428,7 +440,7 @@ public:
         else previousDeathFrame.clear();
       }
     }
-    if (frame == 90 || frame == 175 || frame == 210 || frame == 270 ||
+    if (frame == 90 || frame == 110 || frame == 130 || frame == 175 || frame == 210 || frame == 270 ||
         frame == 400 || frame == 475 || frame == 500 || frame == 650 ||
         frame == 1000 || frame == 1120 || frame == 1190 || frame == 1300) {
       auto prefix = commandline->GetArg("", "--physics-captures", "");

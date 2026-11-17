@@ -100,19 +100,27 @@ void VisibleNode::Draw(VisibleFrame* frame)
         auto& waterDepth=engine->render->WaterFaceDepth[{Node,frame->MirrorFlag}];
         if(waterDepth.empty()) {
         waterDepth.reserve(numverts);
-        vec3 center(0);for(int i=0;i<numverts;++i)center+=points[i];center/=float(numverts);
         auto& cache=engine->render->WaterDepthSamples;
         for(int i=0;i<numverts;++i) {
-            // Inset edge samples slightly: a BSP boundary may sit inside a wall.
-            vec3 inward=center-points[i];float d=length(inward);
-            vec3 sample=points[i]+(d>0.01f?inward*(std::min(8.f,d*0.1f)/d):vec3(0));
-            std::array<int,3> key={int(std::lround(sample.x*4)),int(std::lround(sample.y*4)),int(std::lround(sample.z*4))};
+            // Shared BSP corners must sample the same world position. Moving
+            // toward each face's centre gave the same edge different depths.
+            std::array<int,3> key={int(std::lround(points[i].x*4)),int(std::lround(points[i].y*4)),int(std::lround(points[i].z*4))};
             auto found=cache.find(key);
             if(found==cache.end()) {
-                vec3 start=sample-vec3(0,0,1),end=start-vec3(0,0,2048);
-                TraceFlags flags;flags.world=true; // Static BSP only: movers cannot stale the cache.
-                auto hit=engine->Level->Collision.TraceFirstHit(start,end,nullptr,vec3(0),flags);
-                found=cache.emplace(key,std::clamp(hit.Fraction*2048.f+1.f,1.f,2048.f)).first;
+                const vec3 sample(float(key[0])*.25f,float(key[1])*.25f,float(key[2])*.25f);
+                std::array<float,5> depths{};int count=0;
+                // Boundary vertices can lie inside a wall. Use a fixed,
+                // face-independent footprint; reject solid starts/missed floors
+                // instead of treating them as very shallow/deep water.
+                for(vec2 offset:{vec2(0,0),vec2(8,0),vec2(-8,0),vec2(0,8),vec2(0,-8)}) {
+                    vec3 start=sample+vec3(offset.x,offset.y,-1);
+                    TraceFlags flags;flags.world=true;
+                    auto hit=engine->Level->Collision.TraceFirstHit(start,start-vec3(0,0,2048),nullptr,vec3(0),flags);
+                    if(hit.Actor && hit.Fraction>0 && hit.Fraction<1 && hit.Normal.z>.1f)
+                        depths[count++]=std::clamp(hit.Fraction*2048.f+1.f,1.f,2048.f);
+                }
+                std::sort(depths.begin(),depths.begin()+count);
+                found=cache.emplace(key,count?depths[(count-1)/2]:2048.f).first;
             }
             waterDepth.push_back(found->second);
         }

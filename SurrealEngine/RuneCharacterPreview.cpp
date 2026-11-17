@@ -1,12 +1,14 @@
 #include "Precomp.h"
 #include "RuneCharacterPreview.h"
 #include "RuneCharacters.h"
+#include "RuneBreath.h"
 #include "RuneMenu.h"
 #include "Engine.h"
 #include "Package/PackageManager.h"
 #include "Package/Package.h"
 #include "Packages/Core/UClass.h"
 #include "Packages/Engine/Actors/UActor.h"
+#include "Packages/Engine/Actors/Pawn/UPawn.h"
 #include "Packages/Engine/Resources/Mesh/USkelModel.h"
 #include "Packages/Engine/Resources/Textures/UTexture.h"
 #include "Packages/Engine/Resources/UPalette.h"
@@ -72,7 +74,9 @@ std::vector<uint32_t> Render(Engine& game,openrune::CharacterChoice selected,flo
     for(size_t i=0;i<model->Sequences.size();++i)if(model->Sequences[i].Info.Name=="neutral_idle"){seq=i;idle=true;break;}
     if(!idle)throw std::runtime_error("Preview idle unavailable");
     const auto& anim=model->Sequences[seq].Info;
-    auto bones=model->JointMatrices(model->SampleFrame(seq,std::fmod(seconds*1.25f*anim.Rate/anim.NumFrames,1.f),true));
+    auto pose=model->SampleFrame(seq,std::fmod(seconds*1.25f*anim.Rate/anim.NumFrames,1.f),true);
+    RuneBreath::IdlePose(*model,actor,seq,pose,seconds);
+    auto bones=model->JointMatrices(pose);
     auto rest=model->JointMatrices(model->SampleFrame(seq,0,true));
     auto skin=[](const RuneVertex& v,const Array<mat4>& matrices){
         if(v.Joint[0]<0 || size_t(v.Joint[0])>=matrices.size() || (v.Weight!=1 && (v.Joint[1]<0 || size_t(v.Joint[1])>=matrices.size())))throw std::runtime_error("Preview joint invalid");
@@ -176,6 +180,28 @@ void Probe(Engine& game) {
         if(a==b || std::count_if(a.begin(),a.end(),[](auto c){return c!=0;})<500)throw std::runtime_error("Empty or static character preview");
         for(int f=0;f<2;++f){auto& pixels=f?b:a;std::ofstream file(out/(std::to_string(i)+"-"+std::to_string(f)+".ppm"),std::ios::binary);file<<"P6\n"<<Width<<" "<<Height<<"\n255\n";
             for(auto c:pixels){unsigned char rgb[]={uint8_t(c>>16),uint8_t(c>>8),uint8_t(c)};file.write(reinterpret_cast<char*>(rgb),3);}++frames;}
+    }
+    if(commandline->HasArg("","--preview-idle-phase-audit")) {
+        unsigned held=0,living=0;
+        for(int i=0;i<37;++i) {
+            auto* actor=game.packages->FindClass(openrune::Characters[choice(i).character].className)->GetDefaultObject<UPawn>();
+            auto a=Render(game,choice(i),.15f,Width*2,Height*2,.4f),b=Render(game,choice(i),1.05f,Width*2,Height*2,.4f);
+            const bool dead=RuneBreath::Undead(actor);
+            if(!dead&&a==b)throw std::runtime_error("Living idle stopped for "+std::to_string(i));
+            if(dead) {
+                bool moved=false;
+                for(float t=0;t<55;t+=.5f){auto next=Render(game,choice(i),t,Width*2,Height*2,.4f);if(next!=a){b=std::move(next);moved=true;break;}}
+                if(!moved)throw std::runtime_error("Undead gestures missing for "+std::to_string(i));++held;
+            }else ++living;
+            for(int f=0;f<2;++f){auto& pixels=f?b:a;std::ofstream file(out/("idle-"+std::to_string(i)+"-"+std::to_string(f)+".ppm"),std::ios::binary);file<<"P6\n"<<Width*2<<" "<<Height*2<<"\n255\n";
+                for(auto c:pixels){unsigned char rgb[]={uint8_t(c>>16),uint8_t(c>>8),uint8_t(c)};file.write(reinterpret_cast<char*>(rgb),3);}}
+        }
+        for(int i:{5,6,18,20})for(int t=0;t<=48;t+=2) {
+            auto pixels=Render(game,choice(i),float(t),Width*2,Height*2,.6f);
+            std::ofstream file(out/("gesture-"+std::to_string(i)+"-"+std::to_string(t)+".ppm"),std::ios::binary);file<<"P6\n"<<Width*2<<" "<<Height*2<<"\n255\n";
+            for(auto c:pixels){unsigned char rgb[]={uint8_t(c>>16),uint8_t(c>>8),uint8_t(c)};file.write(reinterpret_cast<char*>(rgb),3);}
+        }
+        std::cout<<"CHARACTER_IDLE_PIXELS_OK undead_gesturing="<<held<<" living_animated="<<living<<std::endl;
     }
     for(int i:{0,11,26,36}) {
         auto pixels=Render(game,choice(i),.4f,Width*2,Height*2);

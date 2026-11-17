@@ -8,8 +8,8 @@ final class RuneHostConfig {
     static final String[] MODES={"dm","tdm","arena","headball"};
     static final String[] NAMES={"Deathmatch","Team Deathmatch","Arena","HeadBall"};
     String mode="dm",matchName="Open Rune match";
-    int laws=4095;
-    int physics=0,bots=0,players=4,teams=2,arenaSize=1,score=20,minutes=10;
+    int laws=8191;
+    int physics=RuneSettings.PHYSICS_DEFAULT,bots=0,players=4,teams=2,arenaSize=1,score=20,minutes=10;
     boolean limbs,discoverable,normalBloodlust=true;
     final ArrayList<String> maps=new ArrayList<>();
 
@@ -50,7 +50,7 @@ final class RuneHostConfig {
         if(!matchName.matches("[ -~]{1,48}"))throw new IllegalArgumentException("Use a match name of 1–48 letters, numbers or symbols.");
         if(!Arrays.asList(MODES).contains(mode)||teams<2||teams>4||arenaSize<1||arenaSize>4||players<minimumPlayers()||players>16)
             throw new IllegalArgumentException("Choose enough player slots for this mode.");
-        if(laws<0||laws>4095)throw new IllegalArgumentException("Invalid Laws of Battle.");
+        if(laws<0||laws>8191)throw new IllegalArgumentException("Invalid Laws of Battle.");
         if(physics<0||physics>2)throw new IllegalArgumentException("Invalid physics mode.");
         if(bots<0||bots>=players)throw new IllegalArgumentException("Leave a player slot for the host.");
         if(score<0||score>10000||minutes<0||minutes>1440||(score==0&&minutes==0))throw new IllegalArgumentException("Enable a score or time limit.");

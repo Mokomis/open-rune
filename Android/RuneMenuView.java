@@ -15,6 +15,15 @@ import java.util.*;
  * hit targets, focus, sliders and accessibility bounds transform with the art. */
 final class RuneMenuView extends FrameLayout {
     static final Typeface BODY_FONT=Typeface.create("sans-serif",Typeface.NORMAL);
+    private TextView textureInstallLabel;
+
+    void updateTextureInstallStatus() {
+        if (textureInstallLabel == null) return;
+        String status = host.textureInstallStatus();
+        String actual = MainActivity.nativeTexturePackStatus();
+        textureInstallLabel.setText(status.isEmpty() ? actual : actual + "\n" + status);
+    }
+
     interface Host {
         RuneSettings settings();
         String characterRoster();
@@ -41,6 +50,7 @@ final class RuneMenuView extends FrameLayout {
         boolean multiplayerWaiting();
         String multiplayerStatus();
         void chooseInvitation();
+        String textureInstallStatus();
         void leaveMultiplayer();
         void respawnMultiplayer();
         RuneHosting hosting();
@@ -70,13 +80,13 @@ final class RuneMenuView extends FrameLayout {
     final RuneHostConfig hostConfig=new RuneHostConfig();
     String hostAddress="";
     String hostFocus="";
-    int invitationSlot=2,lawsPage=0;
+    int invitationSlot=2;
     final ArrayList<Runnable> refreshers=new ArrayList<>();
     final HashMap<View,Integer> hiddenAccessibility=new HashMap<>();
 
     RuneMenuView(Context context,Host host) {
         super(context); this.host=host;settings=host.settings();
-        hostConfig.laws=settings.prefs.getInt("laws.host",RuneBattleLaws.ALL)&RuneBattleLaws.ALL;hostConfig.normalBloodlust=(hostConfig.laws&RuneBattleLaws.NORMAL)!=0;hostConfig.physics=Math.max(0,Math.min(2,settings.prefs.getInt("laws.hostPhysics",0)));
+        hostConfig.laws=settings.prefs.getInt("laws.host",RuneBattleLaws.ALL)&RuneBattleLaws.ALL;hostConfig.normalBloodlust=(hostConfig.laws&RuneBattleLaws.NORMAL)!=0;hostConfig.physics=Math.max(0,Math.min(2,settings.prefs.getInt("laws.hostPhysics",RuneSettings.PHYSICS_DEFAULT)));
         Bitmap bitmap=null;
         try(InputStream in=context.getAssets().open("menu-background.png")) { bitmap=BitmapFactory.decodeStream(in); }
         catch(IOException ignored) {}
@@ -131,7 +141,7 @@ final class RuneMenuView extends FrameLayout {
         case "developer":showDeveloper();break;case "about":showAbout();break;
         default:showHome();break;}
     }
-    private String focusKey(View v){if(v==null)return "";if(v.getContentDescription()!=null)return v.getContentDescription().toString();return v instanceof TextView?((TextView)v).getText().toString():"";}
+    private String focusKey(View v){if(v==null)return "";if(v.getTag() instanceof String&&((String)v.getTag()).startsWith("law:"))return (String)v.getTag();if(v.getContentDescription()!=null)return v.getContentDescription().toString();return v instanceof TextView?((TextView)v).getText().toString():"";}
     private void scrollViews(View v,ArrayList<View> list){if(v instanceof ScrollView||v instanceof HorizontalScrollView)list.add(v);if(v instanceof ViewGroup)for(int i=0;i<((ViewGroup)v).getChildCount();i++)scrollViews(((ViewGroup)v).getChildAt(i),list);}
     private void restoreFocus(View v,String key){if(!key.isEmpty()&&key.equals(focusKey(v))&&v.isFocusable()){v.requestFocusFromTouch();return;}if(v instanceof ViewGroup)for(int i=0;i<((ViewGroup)v).getChildCount();i++)restoreFocus(((ViewGroup)v).getChildAt(i),key);}
     private void selectCategory(String tab){while(!history.isEmpty()&&history.peek().startsWith("settings:"))history.pop();boolean old=returning;returning=true;try{showSettings(tab);}finally{returning=old;}}
@@ -243,7 +253,7 @@ final class RuneMenuView extends FrameLayout {
         status=label(f,notice,62,28,830,60,21,MUTED,false);
         String[] keys=keysFor(screen);
         if(settingsPage&&keys.length>0)button(f,"Reset this section",955,24,300,58,false,()->confirm("Reset this section?","Only the controls in this section will return to their defaults. Other sections and layouts are kept.","Reset",()->{for(String key:keys)if(!hostControlled(key))settings.set(key,settings.items.get(key).defaultValue);settings.comparing=false;host.settings().listener.changed("compare");restorePage(screen);}));
-        if(settingsPage&&screen.endsWith(":physics")&&!host.multiplayer())button(f,"Physics playground",62,24,480,58,false,()->confirm("Enter physics playground?","This replaces the live scene. Campaign saves stay separate. Use lifts a prop or intact corpse; Attack or Throw launches it.","Enter",()->{if(settings.get("physics")==0)settings.set("physics",1);runSession(9,0);}));
+        if(settingsPage&&screen.endsWith(":physics")&&!host.multiplayer())button(f,"Physics playground",62,24,480,58,false,()->confirm("Enter physics playground?","This replaces the live scene. Campaign saves stay separate. Use lifts a prop or intact corpse; Attack or Throw launches it.","Enter",()->{if(settings.get("physics")==0)settings.set("physics",RuneSettings.PHYSICS_DEFAULT);runSession(9,0);}));
         button(f,"Back",1285,24,220,58,true,this::back);
     }
     private String[] keysFor(String key){return key.startsWith("settings:")?RuneMenuSections.keys(key.substring(key.lastIndexOf(':')+1)):new String[0];}
@@ -260,7 +270,7 @@ final class RuneMenuView extends FrameLayout {
             Button b=button(page,names[i],76,menuTop+i*96,474,86,false,()-> {
                 if(titleMode) {
                     if(index==0) { if(hasSession) host.resume();else showSaves(false); }
-                    if(index==1){lawsPage=0;showBattleLaws("new");}
+                    if(index==1){showBattleLaws("new");}
                     if(index==2)showSaves(false);
                     if(index==3)showSettings(lastSettings);
                     if(index==4)showMultiplayer();
@@ -300,9 +310,21 @@ final class RuneMenuView extends FrameLayout {
         Button remove=button(page,"Remove bot",x+half+16,y,half,64,false,()->{try{hosting.changeBot(false);}catch(RuntimeException e){setNotice(e.getMessage());}});
         refreshers.add(()->{add.setText("Add bot ("+hosting.bots+")");add.setEnabled(hosting.ready()&&hosting.bots<hosting.players-1);remove.setEnabled(hosting.ready()&&hosting.bots>0);});
     }
+    void playerProfile(Runnable next){
+        FrameLayout card=modal(settings.playerName().isEmpty()?"Choose your player name":"Multiplayer profile","Your name is saved between matches. You can change it here at any time.",540);
+        EditText field=new EditText(getContext());field.setSingleLine(true);field.setTextColor(IVORY);field.setTextSize(26);field.setText(settings.playerName());field.setSelectAllOnFocus(true);field.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(24)});place(card,field,42,195,730,70);
+        final Button[] visible={null};visible[0]=button(card,settings.get("playerNames")!=0?"Player names: On":"Player names: Off · team markers stay",42,285,730,64,false,()->{settings.set("playerNames",1-settings.get("playerNames"));visible[0].setText(settings.get("playerNames")!=0?"Player names: On":"Player names: Off · team markers stay");});
+
+        TextView error=label(card,"",42,360,730,52,20,GOLD,false);
+        Runnable save=()->{try{settings.playerName(field.getText().toString());((android.view.inputmethod.InputMethodManager)getContext().getSystemService(Context.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(field.getWindowToken(),0);back();if(next!=null)next.run();else showMultiplayer();}catch(IllegalArgumentException e){error.setText(e.getMessage());}};
+        button(card,"Save",430,440,342,64,true,save);button(card,"Cancel",42,440,340,64,false,this::back);
+        field.setOnEditorActionListener((v,action,event)->{if(action==android.view.inputmethod.EditorInfo.IME_ACTION_DONE){save.run();return true;}return false;});
+        field.requestFocus();field.post(()->((android.view.inputmethod.InputMethodManager)getContext().getSystemService(Context.INPUT_METHOD_SERVICE)).showSoftInput(field,android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT));
+    }
     void showMultiplayer() {
         screen="multiplayer";base("");
         label(page,"Multiplayer",112,190,1100,92,64,IVORY,true);
+        button(page,"Player profile",1080,200,350,64,false,()->playerProfile(null));
         RuneHosting hosting=host.hosting();
         if(host.multiplayer()) {
             ScrollView scores=place(page,new ScrollView(getContext()),740,290,700,500);
@@ -539,7 +561,7 @@ final class RuneMenuView extends FrameLayout {
         hostChoice("Visibility",hostConfig.discoverable?"Public · Find games":"Private invitation",800,320,()->{hostConfig.discoverable=!hostConfig.discoverable;showHostSetup();});
         hostChoice("Player capacity · includes you",Integer.toString(hostConfig.players),112,435,()->{hostConfig.players=nextChoice(hostConfig.players,new int[]{2,4,6,8,12,16});showHostSetup();});
         hostChoice("Starting bots",Integer.toString(hostConfig.bots),800,435,()->{hostConfig.bots=(hostConfig.bots+1)%hostConfig.players;showHostSetup();});
-        hostChoice("Laws of Battle","Players and bots",112,665,()->{lawsPage=0;showBattleLaws("host");});
+        hostChoice("Laws of Battle","Players and bots",112,665,()->{showBattleLaws("host");});
         hostChoice("Map rotation",hostConfig.maps.isEmpty()?"Choose maps":hostConfig.maps.get(0)+(hostConfig.maps.size()>1?" + "+(hostConfig.maps.size()-1)+" more":""),112,550,this::showHostMaps);
         hostChoice("Match rules",(hostConfig.score==0?"No score limit":hostConfig.score+" points")+" · "+(hostConfig.minutes==0?"No time limit":hostConfig.minutes+" min"),800,550,this::showHostRules);
         label(page,"Player capacity includes the host, other players and bots.\nThe host must remain open while others play.",112,780,1298,50,20,MUTED,false);
@@ -553,27 +575,39 @@ final class RuneMenuView extends FrameLayout {
         screen=scope.equals("host")?"hostLaws":scope.equals("match")?"matchLaws":scope.equals("new")?"newLaws":"campaignLaws";
         base("Laws of Battle / "+(multi?"Multiplayer":"Single player"));
         int mask=readOnly?MainActivity.nativeBattleLaws():multi?hostConfig.laws:RuneBattleLaws.campaign(settings);
-        lawsPage=Math.max(0,Math.min(2,lawsPage));
-        FrameLayout body=panel(84,200,1368,650,readOnly?"CURRENT HOST RULES":multi?"NEW HOSTED MATCH · PLAYERS AND BOTS":"CAMPAIGN · PLAYERS AND ELIGIBLE ENEMIES");
-        for(int row=0;row<4;row++){
-            final int index=lawsPage*4+row,bit=1<<index;int y=70+row*142;
+        FrameLayout body=panel(84,200,1368,674,readOnly?"CURRENT HOST RULES":multi?"NEW HOSTED MATCH · PLAYERS AND BOTS":"CAMPAIGN · PLAYERS AND ELIGIBLE ENEMIES");
+        ScrollView scroll=place(body,new ScrollView(getContext()),24,100,1320,550);
+        scroll.setFillViewport(false);scroll.setClipToPadding(false);scroll.setPadding(0,0,14,8);
+        scroll.setVerticalScrollBarEnabled(true);scroll.setScrollbarFadingEnabled(false);
+        scroll.setContentDescription("Laws of Battle rules");
+        LinearLayout list=new LinearLayout(getContext());list.setOrientation(LinearLayout.VERTICAL);
+        scroll.addView(list,new ScrollView.LayoutParams(-1,-2));
+        for(int row=0;row<RuneBattleLaws.NAMES.length;row++){
+            final int index=row,bit=1<<index;
             boolean locked=readOnly||(!multi&&bit==RuneBattleLaws.LEAP)||(multi&&bit==1024)||(bit==RuneBattleLaws.CROSS&&(mask&RuneBattleLaws.DUAL)==0);
             boolean checked=(RuneBattleLaws.effective(mask)&bit)!=0;
-            Button toggle=button(body,(checked?"[x]  ":"[ ]  ")+RuneBattleLaws.NAMES[index]+(!multi&&bit==RuneBattleLaws.LEAP?" · Disabled in campaign":multi&&bit==1024?" · Campaign only":bit==RuneBattleLaws.CROSS&&(mask&RuneBattleLaws.DUAL)==0?" · Requires dual wield":""),24,y,1320,50,checked,()->{
+            FrameLayout card=new FrameLayout(getContext());card.setBackground(new Iron(false,false,checked,false));
+            LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,166);lp.bottomMargin=12;list.addView(card,lp);
+            place(card,new BattleLawIcon(getContext(),index,locked),20,36,78,78);
+            label(card,RuneBattleLaws.NAMES[index],116,15,1010,40,28,locked?MUTED:IVORY,false);
+            String constraint=!multi&&bit==RuneBattleLaws.LEAP?"Disabled in campaign":multi&&bit==1024?"Campaign only":bit==RuneBattleLaws.CROSS&&(mask&RuneBattleLaws.DUAL)==0?"Requires dual wield":readOnly?"Host rule":"";
+            TextView help=label(card,(constraint.isEmpty()?"":constraint+" · ")+RuneBattleLaws.HELP[index],116,63,1050,90,23,MUTED,false);
+            help.setGravity(Gravity.TOP);help.setLineSpacing(2,1);
+            ToggleButton switchView=place(card,new ToggleButton(getContext()),1190,53,80,54);
+            switchView.setTextOn("");switchView.setTextOff("");switchView.setChecked(checked);switchView.setBackground(new ToggleArt());switchView.setPadding(0,0,0,0);switchView.setMinWidth(0);switchView.setMinimumWidth(0);switchView.setMinHeight(0);switchView.setMinimumHeight(0);switchView.setStateListAnimator(null);switchView.setClickable(false);switchView.setFocusable(false);switchView.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);switchView.setAlpha(locked?.45f:1);
+            Button toggle=button(card,"",0,0,1288,166,false,()->{
                 if(multi){hostConfig.laws^=bit;hostConfig.normalBloodlust=(hostConfig.laws&RuneBattleLaws.NORMAL)!=0;settings.prefs.edit().putInt("laws.host",hostConfig.laws).apply();}
                 else RuneBattleLaws.campaign(settings,RuneBattleLaws.campaign(settings)^bit);
                 showBattleLaws(scope);
             });
+            toggle.setTag("law:"+index);toggle.setBackgroundColor(Color.TRANSPARENT);toggle.setContentDescription(RuneBattleLaws.NAMES[index]+", "+(checked?"On":"Off")+(constraint.isEmpty()?"":", "+constraint));
             toggle.setEnabled(!locked);
-            label(body,RuneBattleLaws.HELP[index],42,y+54,1280,86,22,MUTED,false);
         }
         FrameLayout f=place(page,new FrameLayout(getContext()),0,906,1536,118);f.setBackgroundColor(0xee0b1011);
         button(f,"Back",50,24,210,58,false,this::back);
-        button(f,"Previous",280,24,190,58,false,()->{lawsPage--;showBattleLaws(scope);}).setEnabled(lawsPage>0);
-        button(f,"Next",490,24,190,58,false,()->{lawsPage++;showBattleLaws(scope);}).setEnabled(lawsPage<2);
-        label(f,(lawsPage+1)+" / 3",710,24,120,58,24,GOLD,true);
+        label(f,readOnly?"Rules are set by the host":"Applies to players and eligible enemies",300,24,600,58,22,MUTED,false);
         if(scope.equals("new"))button(f,"Begin campaign",1000,24,470,58,true,()->confirm("Start a new campaign?","Use these Laws of Battle. Unsaved progress will be replaced; existing save slots are kept.","Begin",()->runSession(1,9)));
-        else if(!readOnly)button(f,"Physics: "+new String[]{"Original","Cinematic","Chaos"}[multi?hostConfig.physics:settings.get("physics")],930,24,540,58,false,()->{
+        else if(!readOnly)button(f,"Physics: "+RuneSettings.PHYSICS[multi?hostConfig.physics:settings.get("physics")],930,24,540,58,false,()->{
             if(multi){hostConfig.physics=(hostConfig.physics+1)%3;settings.prefs.edit().putInt("laws.hostPhysics",hostConfig.physics).apply();}else settings.set("physics",(settings.get("physics")+1)%3);
             showBattleLaws(scope);
         });
@@ -585,8 +619,8 @@ final class RuneMenuView extends FrameLayout {
         if(!hostConfig.mode.equals("dm")){hostChoice(hostConfig.mode.equals("arena")?"Arena team size":"Teams",hostConfig.mode.equals("arena")?hostConfig.arenaSize+" vs "+hostConfig.arenaSize:Integer.toString(hostConfig.teams),112,y,()->{if(hostConfig.mode.equals("arena"))hostConfig.arenaSize=hostConfig.arenaSize%4+1;else hostConfig.teams=hostConfig.teams==4?2:hostConfig.teams+1;hostConfig.normalize(host.hosting().game);showHostRules();});}
         hostChoice(hostConfig.mode.equals("arena")?"Round limit":"Score limit",hostConfig.score==0?"No limit":Integer.toString(hostConfig.score),800,y,()->{hostConfig.score=nextChoice(hostConfig.score,new int[]{0,5,10,20,30,50,100});if(hostConfig.score==0&&hostConfig.minutes==0)hostConfig.minutes=10;showHostRules();});
         hostChoice("Time limit",hostConfig.minutes==0?"No limit":hostConfig.minutes+" minutes",112,360,()->{hostConfig.minutes=nextChoice(hostConfig.minutes,new int[]{0,5,10,15,20,30,60});if(hostConfig.minutes==0&&hostConfig.score==0)hostConfig.score=20;showHostRules();});
-        hostChoice("Laws of Battle","Choose permitted moves",800,360,()->{lawsPage=0;showBattleLaws("host");});
-        hostChoice("Cinematic physics",new String[]{"Original","Cinematic","Chaos"}[hostConfig.physics],112,580,()->{hostConfig.physics=(hostConfig.physics+1)%3;settings.prefs.edit().putInt("laws.hostPhysics",hostConfig.physics).apply();showHostRules();});
+        hostChoice("Laws of Battle","Choose permitted moves",800,360,()->{showBattleLaws("host");});
+        hostChoice("Physics mode",RuneSettings.PHYSICS[hostConfig.physics],112,580,()->{hostConfig.physics=(hostConfig.physics+1)%3;settings.prefs.edit().putInt("laws.hostPhysics",hostConfig.physics).apply();showHostRules();});
         if(hostConfig.mode.equals("headball"))hostChoice("Severed limbs score",hostConfig.limbs?"On":"Off",112,480,()->{hostConfig.limbs=!hostConfig.limbs;showHostRules();});
         if(!hostConfig.discoverable){ArrayList<String> addresses=host.hosting().addresses();hostChoice("Local network address",hostAddress.isEmpty()?"Connect to Wi-Fi":hostAddress,800,480,()->{if(!addresses.isEmpty())hostAddress=addresses.get((addresses.indexOf(hostAddress)+1)%addresses.size());showHostRules();});}
         label(page,"These rules apply to the new hosted match. Campaign preferences are unchanged.\nKicks, shield bash, dual wield and bloodlust moves follow the host’s supported combat rules.",112,650,1298,130,25,MUTED,false);footer(false);refresh();
@@ -668,19 +702,36 @@ final class RuneMenuView extends FrameLayout {
         if(category.equals("Connection"))button(page,"Connection",44,780,292,62,true,()->showSettings("Connection"));
     }
     private void showSection(String category,String section){
-        if(section.equals("combat")){lawsPage=0;showBattleLaws(host.multiplayer()?"match":"campaign");return;}
+        if(section.equals("combat")){showBattleLaws(host.multiplayer()?"match":"campaign");return;}
         lastSettings=category;screen="settings:"+category+":"+section;settingsFrame(category,category+" / "+RuneMenuSections.title(section));
         FrameLayout p=panel(370,216,750,650,RuneMenuSections.title(section).toUpperCase(Locale.ROOT));
         FrameLayout help=panel(1140,216,352,650,"DETAILS");
         settingHelp=label(help,RuneMenuSections.help(section),26,100,300,470,23,IVORY,false);
-        String[] keys=RuneMenuSections.keys(section);int y=92;
-        for(String key:keys){if(key.endsWith("Manual"))continue;if(settings.items.get(key).choices==null){slider(p,key,36,y,678);y+=102;}else{row(p,key,36,y,678,74);y+=74;}}
+        String[] keys=RuneMenuSections.keys(section);int y=92,left=36,width=678;
+        FrameLayout controls=p;
+        if(section.equals("effects")) {
+            // Seven effect rows exceed the space above Compare. Keep their
+            // drawing, hit targets and controller focus inside a scroll viewport.
+            ScrollView scroll=place(p,new ScrollView(getContext()),36,92,678,442);
+            scroll.setFillViewport(false);scroll.setClipChildren(true);scroll.setClipToPadding(true);
+            scroll.setVerticalScrollBarEnabled(true);scroll.setScrollbarFadingEnabled(false);
+            scroll.setContentDescription("Effects and weather controls");
+            scroll.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);
+            controls=new FrameLayout(getContext());
+            scroll.addView(controls,new ScrollView.LayoutParams(-1,-2));
+            left=0;y=0;width=664;
+        }
+        for(String key:keys){if(key.endsWith("Manual"))continue;if(settings.items.get(key).choices==null){slider(controls,key,left,y,width);y+=102;}else{row(controls,key,left,y,width,74);y+=74;}}
         if(section.equals("display")){TextView actual=label(p,host.scalingStatus()+"\n"+host.timingStatus(),36,550,678,85,19,MUTED,false);refreshers.add(()->actual.setText(host.scalingStatus()+"\n"+host.timingStatus()));}
         if(section.equals("camera")){TextView actual=label(p,host.cameraStatus(),36,400,678,150,24,GOLD,false);refreshers.add(()->actual.setText(host.cameraStatus()));}
-        if(section.equals("textures")){TextView actual=label(p,MainActivity.nativeTexturePackStatus(),36,510,678,100,21,MUTED,false);refreshers.add(()->actual.setText(MainActivity.nativeTexturePackStatus()));}
+        if(section.equals("textures")){
+            textureInstallLabel=label(p,"",36,482,678,132,21,MUTED,false);
+            refreshers.add(this::updateTextureInstallStatus);
+            updateTextureInstallStatus();
+        }
         if(section.equals("effects")){Button compare=button(p,"",36,550,678,64,false,()->{settings.compare();refresh();});refreshers.add(()->compare.setText(settings.comparing?"Restore my visuals":"Compare original visuals"));}
         if(section.equals("touch"))button(p,"Edit touch controls",36,300,678,72,false,()->host.editTouch());
-        if(section.equals("hud"))button(p,"Edit HUD layout",36,300,678,72,false,()->host.editHud());
+        if(section.equals("hud"))button(p,"Edit HUD layout",36,Math.max(300,y+16),678,72,false,()->host.editHud());
         if(section.equals("campaign"))button(p,"Campaign character & skin",36,250,678,72,false,()->showCharacters(true));
         if(section.equals("gamepad")){label(p,host.controllerStatus(),36,110,678,100,25,GOLD,false);label(p,"Move / look: left / right stick\nJump: A · Crouch / dive: B\nAttack: X / RT · Block: LB / LT\nUse: Y / left-stick click · Throw: RB\nKick: right-stick click · Rune Power: Select / View\nWeapons: D-pad · Pause: Start\nShield bash: double-tap Block\nTwo-hand slam: 2× Jump, then Attack\nBloodlust: double-tap Jump or Block + Attack",36,240,678,350,24,IVORY,false);}
         if(section.equals("input"))label(p,"Keyboard: WASD move · Enter attack · Space jump\nRight Ctrl block · Left Ctrl use · E Rune Power\nF kick · Q throw · Escape menu",36,360,678,200,23,MUTED,false);
@@ -888,6 +939,32 @@ final class RuneMenuView extends FrameLayout {
         try(InputStream in=getContext().getAssets().open(path);ByteArrayOutputStream out=new ByteArrayOutputStream()) {byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1)out.write(b,0,n);text.setText(new String(out.toByteArray(),StandardCharsets.UTF_8));}
         catch(IOException e){text.setText("Could not open notice.");}
         footer(false);
+    }
+    static final class BattleLawIcon extends View {
+        final int law;final boolean locked;final Paint p=new Paint(Paint.ANTI_ALIAS_FLAG);final Path path=new Path();
+        BattleLawIcon(Context c,int law,boolean locked){super(c);this.law=law;this.locked=locked;setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);}
+        void glyph(Canvas c,int icon,float x,float y,float scale,float rotation){c.save();c.translate(x,y);c.rotate(rotation);c.scale(scale,scale);RuneControlIcons.draw(c,icon,p,path);c.restore();}
+        void mirrored(Canvas c,int icon,float x,float y,float scale){c.save();c.translate(x,y);c.scale(-scale,scale);RuneControlIcons.draw(c,icon,p,path);c.restore();}
+        @Override protected void onDraw(Canvas c){
+            c.save();c.scale(getWidth()/78f,getHeight()/78f);if(locked)c.saveLayerAlpha(0,0,78,78,110);
+            p.setColor(0xff30291f);p.setStyle(Paint.Style.FILL);c.drawCircle(39,39,38,p);
+            switch(law){
+            case 0:glyph(c,RuneTouchLayout.KICK,39,39,.88f,0);break;
+            case 1:glyph(c,RuneTouchLayout.BLOCK,39,39,.88f,0);break;
+            case 2:glyph(c,RuneTouchLayout.ATTACK,25,39,.70f,-45);glyph(c,RuneTouchLayout.ATTACK,53,39,.70f,-45);break;
+            case 3:glyph(c,RuneTouchLayout.ATTACK,39,39,.88f,0);mirrored(c,RuneTouchLayout.ATTACK,39,39,.88f);break;
+            case 4:glyph(c,RuneTouchLayout.JUMP,39,39,.90f,0);break;
+            case 5:glyph(c,RuneTouchLayout.BLOCK,31,39,.74f,0);glyph(c,RuneTouchLayout.JUMP,58,39,.45f,90);break;
+            case 6:glyph(c,RuneControlIcons.HAMMER,39,34,.85f,0);glyph(c,RuneTouchLayout.JUMP,39,65,.34f,180);break;
+            case 7:glyph(c,RuneControlIcons.CORPSE_LIFT,39,39,.88f,0);break;
+            case 8:glyph(c,RuneTouchLayout.USE,39,39,.88f,0);break;
+            case 9:glyph(c,RuneTouchLayout.DIVE,39,39,.88f,0);break;
+            case 10:glyph(c,RuneTouchLayout.ATTACK,39,39,.88f,0);break;
+            case 12:glyph(c,RuneTouchLayout.USE,30,32,.65f,0);glyph(c,RuneTouchLayout.JUMP,57,54,.45f,0);break;
+            default:glyph(c,RuneTouchLayout.POWER,39,39,.88f,0);break;
+            }
+            if(locked)c.restore();c.restore();
+        }
     }
     static final class ToggleArt extends Drawable {
         final Paint p=new Paint(Paint.ANTI_ALIAS_FLAG);

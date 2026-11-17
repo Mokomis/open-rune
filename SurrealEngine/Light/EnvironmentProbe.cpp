@@ -3,6 +3,10 @@
 #include "Engine.h"
 #include "Render/RenderSubsystem.h"
 #include "RenderDevice/RenderDevice.h"
+#ifdef __ANDROID__
+#include "RenderDevice/Vulkan/ShaderOptimizationDefaults.h"
+#include "RenderDevice/Vulkan/VulkanRenderDevice.h"
+#endif
 #include "Packages/Engine/Resources/Level/ULevel.h"
 #include "Packages/Engine/Resources/Level/UModel.h"
 #include "Packages/Engine/Resources/Textures/UTexture.h"
@@ -12,6 +16,10 @@
 #include "Collision/BottomLevel/TraceRayModel.h"
 #include "Math/hsb.h"
 #include "Utils/Logger.h"
+#include "Utils/CommandLine.h"
+#include <atomic>
+#include <bit>
+#include <future>
 #include <chrono>
 #include <set>
 #include <tuple>
@@ -95,28 +103,118 @@ void LightSystem::PrepareEnvironmentProbes()
         surfaceRadiance[key]=result;return result;
     };
     const vec3 axes[]={{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}};
-    TraceRayModel tracer;size_t count=0,rays=0;
-    for(auto& entry:positions)for(const vec3& position:entry.second) {
-        EnvironmentProbe probe{};probe.Position=position;
-        for(int face=0;face<6;++face) {
-            vec3 axis=axes[face],u=axes[(face/2+1)%3*2],v=cross(axis,u),color(0);
-            for(int y:{-1,1})for(int x:{-1,1}) {
-                vec3 direction=normalize(axis+u*(float(x)*.45f)+v*(float(y)*.45f));
-                auto hits=tracer.Trace(engine->LevelInfo,model,to_dvec3(position),1.0,to_dvec3(direction),4096.0,true);++rays;
-                if(!hits.empty() && hits.front().Node) {
-                    auto& hit=hits.front();auto& surface=model->Surfaces[hit.Node->Surf];
-                    // Backdrop imagery is not a physical reflecting wall. Keep
-                    // its contribution empty; original zone ambient stays live.
-                    if(!(surface.PolyFlags&PF_FakeBackdrop))color+=radiance(hit.Node->Surf,hit.Normal,position+direction*hit.Fraction)*.25f;
-                }
+    std::array<vec3,24> directions;
+    for (int face=0; face<6; ++face) {
+        const vec3 axis=axes[face], u=axes[(face/2+1)%3*2], v=cross(axis,u);
+        int ray=face*4;
+        for (int y : {-1,1}) for (int x : {-1,1})
+            directions[ray++]=normalize(axis+u*(float(x)*.45f)+v*(float(y)*.45f));
+    }
+
+    struct RayHit {
+        int surface=-1;
+        float distance=0;
+        vec3 normal{0};
+    };
+    using ProbeHits = std::array<RayHit,24>;
+    struct ProbeLocation { int leaf; vec3 position; };
+    std::vector<ProbeLocation> probes;
+    for (const auto& [leaf, points] : positions)
+        for (const auto& point : points) probes.push_back({leaf,point});
+
+    auto traceProbe = [&](const vec3& position, TraceRayModel& tracer) {
+        ProbeHits result;
+        for (size_t i=0; i<directions.size(); ++i) {
+            // A null owner selects the static world's surface flags directly.
+            // Workers only read immutable BSP data and never touch actor properties.
+            auto hits = tracer.Trace(nullptr, model, to_dvec3(position), 1.0,
+                                     to_dvec3(directions[i]), 4096.0, true);
+            if (!hits.empty() && hits.front().Node) {
+                const auto& hit = hits.front();
+                result[i] = {hit.Node->Surf, hit.Fraction, hit.Normal};
+            }
+        }
+        return result;
+    };
+    auto publish = [&](const ProbeLocation& point, const ProbeHits& hits) {
+        EnvironmentProbe probe{};
+        probe.Position=point.position;
+        for (int face=0; face<6; ++face) {
+            vec3 color(0);
+            for (int ray=face*4; ray<(face+1)*4; ++ray) {
+                const auto& hit=hits[ray];
+                if (hit.surface<0 || size_t(hit.surface)>=model->Surfaces.size()) continue;
+                const auto& surface=model->Surfaces[hit.surface];
+                if (!(surface.PolyFlags&PF_FakeBackdrop))
+                    color+=radiance(hit.surface,hit.normal,point.position+directions[ray]*hit.distance)*.25f;
             }
             probe.Light.Lobes[face]=vec4(color,1);
         }
-        Environment.Leaves[entry.first].push_back(probe);++count;
+        Environment.Leaves[point.leaf].push_back(probe);
+    };
+
+    // The only parallel phase is read-only tracing. Cache population and
+    // floating-point accumulation execute on the caller in original order.
+    constexpr size_t maxParallelProbes=8192;
+    int defaultWorkers=0;
+#ifdef __ANDROID__
+    const auto* renderer=dynamic_cast<const VulkanRenderDevice*>(engine->render->Device);
+    if (renderer && UsesQualifiedShaderDefaults(*renderer->Device)) defaultWorkers=1;
+#endif
+    const bool requestWorker=commandline->GetArgInt("", "--environment-probe-workers", defaultWorkers)>0 &&
+        probes.size()>=64 && probes.size()<=maxParallelProbes;
+    bool usedWorker=false;
+    if (requestWorker) {
+        std::vector<ProbeHits> results(probes.size());
+        std::atomic<size_t> next{0};
+        auto traceBatch = [&] {
+            TraceRayModel tracer;
+            constexpr size_t chunk=8;
+            for (;;) {
+                const size_t first=next.fetch_add(chunk,std::memory_order_relaxed);
+                if (first>=probes.size()) break;
+                for (size_t index=first; index<std::min(first+chunk,probes.size()); ++index)
+                    results[index]=traceProbe(probes[index].position,tracer);
+            }
+        };
+        std::future<void> helper;
+        try {
+            helper=std::async(std::launch::async,traceBatch);
+        } catch (const std::system_error&) {
+            // A host that cannot create a helper can trace on the caller.
+        }
+        usedWorker=helper.valid();
+        traceBatch();
+        if (usedWorker) helper.get();
+        for (size_t i=0; i<probes.size(); ++i) publish(probes[i],results[i]);
+    } else {
+        TraceRayModel tracer;
+        for (const auto& probe : probes) publish(probe,traceProbe(probe.position,tracer));
     }
+    const size_t count=probes.size(),rays=count*directions.size();
     double ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
     LogMessage("RUNE_ENVIRONMENT_PROBES probes="+std::to_string(count)+" leaves="+std::to_string(Environment.Leaves.size())+
-        " rays="+std::to_string(rays)+" bake_ms="+std::to_string(ms)+" frame_rays=0");
+        " rays="+std::to_string(rays)+" bake_ms="+std::to_string(ms)+" frame_rays=0 helpers="+std::to_string(usedWorker));
+    if (commandline->HasArg("", "--frame-benchmark")) {
+        uint64_t signature=14695981039346656037ull;
+        auto hashValue=[&](uint32_t bits) {
+            signature=(signature ^ bits)*1099511628211ull;
+        };
+        for (const auto& [leaf, entries] : Environment.Leaves) {
+            hashValue(static_cast<uint32_t>(leaf));
+            for (const auto& probe : entries) {
+                for (size_t axis=0; axis<3; ++axis)
+                    hashValue(std::bit_cast<uint32_t>(probe.Position[axis]));
+                for (const auto& lobe : probe.Light.Lobes) {
+                    hashValue(std::bit_cast<uint32_t>(lobe.x));
+                    hashValue(std::bit_cast<uint32_t>(lobe.y));
+                    hashValue(std::bit_cast<uint32_t>(lobe.z));
+                    hashValue(std::bit_cast<uint32_t>(lobe.w));
+                }
+            }
+        }
+        LogMessage("RUNE_ENVIRONMENT_SIGNATURE "+std::to_string(signature));
+    }
 }
 
 EnvironmentLight LightSystem::SampleEnvironment(const vec3& position) const

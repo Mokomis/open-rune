@@ -1,5 +1,6 @@
 
 #include "Precomp.h"
+#include "RuneLeg.h"
 #include "UActor.h"
 #include "VM/ScriptCall.h"
 #include "Packages/Engine/Actors/Decoration/UDecoration.h"
@@ -50,8 +51,8 @@ void UActor::TickLadder(float elapsed)
 	UPlayerPawn* player = UObject::TryCast<UPlayerPawn>(this);
 
 	bool isCrouching = player && player->bIsWalking();
-	float accelRate = pawn->AccelRate() * (isCrouching ? 0.3f : 1.0f) * RuneCorpse::SpeedScale(pawn);
-	float maxSpeed = (player ? player->GroundSpeed() : pawn->GroundSpeed() * pawn->DesiredSpeed()) * (isCrouching ? 0.3f : 1.0f) * RuneCorpse::SpeedScale(pawn);
+	float accelRate = pawn->AccelRate() * (isCrouching ? 0.3f : 1.0f) * RuneCorpse::SpeedScale(pawn)*RuneLeg::SpeedScale(pawn);
+	float maxSpeed = (player ? player->GroundSpeed() : pawn->GroundSpeed() * pawn->DesiredSpeed()) * (isCrouching ? 0.3f : 1.0f) * RuneCorpse::SpeedScale(pawn)*RuneLeg::SpeedScale(pawn);
 	ApplyMovementAcceleration(elapsed, accelRate, zone->ZoneGroundFriction(), maxSpeed);
 
 	float timeLeft = elapsed;
@@ -139,8 +140,8 @@ void UActor::TickWalking(float elapsed)
 
 	Velocity().z = 0.0f;
 
-	float accelRate = pawn->AccelRate() * (isCrouching ? 0.3f : 1.0f) * RuneCorpse::SpeedScale(pawn);
-	float maxSpeed = (player ? player->GroundSpeed() : pawn->GroundSpeed() * pawn->DesiredSpeed()) * (isCrouching ? 0.3f : 1.0f) * RuneCorpse::SpeedScale(pawn);
+	float accelRate = pawn->AccelRate() * (isCrouching ? 0.3f : 1.0f) * RuneCorpse::SpeedScale(pawn)*RuneLeg::SpeedScale(pawn);
+	float maxSpeed = (player ? player->GroundSpeed() : pawn->GroundSpeed() * pawn->DesiredSpeed()) * (isCrouching ? 0.3f : 1.0f) * RuneCorpse::SpeedScale(pawn)*RuneLeg::SpeedScale(pawn);
 	ApplyMovementAcceleration(elapsed, accelRate, zone->ZoneGroundFriction(), maxSpeed);
 
 	Velocity().z = 0.0f;

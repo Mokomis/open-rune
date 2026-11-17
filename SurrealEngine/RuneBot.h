@@ -28,6 +28,9 @@ private:
     int difficulty=1,side=1,lastHealth=0;
     uint32_t life=0;
     uint64_t nextThink=0,readyAt=0,guardUntil=0,kickAt=0,bashAt=0,useAt=0,seenAt=0,lastSeen=0,threatAt=0,blockedAt=0,routeAt=0,patrolAt=0,progressAt=0,debugAt=0,jumpAt=0,searchUntil=0,equipmentUntil=0,woundedAt=0,leapAt=0,jumpUntil=0,unreachableAt=0,supportUntil=0,guardAt=0,powerAt=0,escapeUntil=0,trafficUntil=0,trafficWaitUntil=0,corpseAt=0,carrySince=0;
+    uint64_t spiderAt=0,spiderRetry=0;vec3 spiderExit{},spiderNormal{};
+    uint64_t ledgeSince=0,ledgeJumpAt=0;
+    vec3 ledgePosition{};
     uint16_t leapYaw=0;
     uint64_t slamAt=0,slamCooldown=0;
     uint8_t slamStage=0;

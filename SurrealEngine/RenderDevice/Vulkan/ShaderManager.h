@@ -102,7 +102,7 @@ public:
 		std::vector<uint32_t> FragmentShader;
 		std::vector<uint32_t> FragmentShaderAlphaTest;
         std::vector<uint32_t> FragmentShaderCoverage;
-	} Scene, SceneNoHit, Water, WaterNoHit;
+	} Scene, SceneNoHit, Water, WaterNoHit, CrestSurface, CrestSurfaceNoHit;
     std::vector<uint32_t> ShadowVertex, ShadowFragment;
 
 	struct

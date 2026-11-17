@@ -1,4 +1,5 @@
 #include "RuneBattleLaws.h"
+#include "RuneSpider.h"
 #include "Precomp.h"
 #include "RuneCorpse.h"
 #include "RuneSlam.h"
@@ -401,7 +402,8 @@ vec3 Brain::navigate(Engine& game, UPlayerPawn* p, vec3 goal, uint64_t now)
 Decision Brain::think(Engine& game,RuneNetworkReplica& replica,const World& world,const MatchStatus& status,EntityRef own,uint64_t now){
     const auto* self=find(world,own);auto* p=UObject::TryCast<UPlayerPawn>(replica.actor(own));
     if(!self || !p)return {};
-    if(life!=self->life){supplyTarget={};supplyTries=0;liftActive=-1;liftRetryAt=0;slamAt=slamCooldown=0;slamStage=0;life=self->life;lastHealth=self->health;searchUntil=0;equipmentUntil=now+25000;target={};nextThink=readyAt=guardUntil=kickAt=bashAt=useAt=routeAt=patrolAt=progressAt=jumpAt=woundedAt=leapAt=jumpUntil=unreachableAt=supportUntil=guardAt=powerAt=escapeUntil=trafficUntil=trafficWaitUntil=0;trafficBlocker={};seenAt=lastSeen=threatAt=blockedAt=0;wasThreat=false;route.clear();rejected.clear();searchedPatrols.clear();intent={};side=random()<.5f?-1:1;}
+    if(life!=self->life){spiderAt=spiderRetry=0;ledgeSince=ledgeJumpAt=0;supplyTarget={};supplyTries=0;liftActive=-1;liftRetryAt=0;slamAt=slamCooldown=0;slamStage=0;life=self->life;lastHealth=self->health;searchUntil=0;equipmentUntil=now+25000;target={};nextThink=readyAt=guardUntil=kickAt=bashAt=useAt=routeAt=patrolAt=progressAt=jumpAt=woundedAt=leapAt=jumpUntil=unreachableAt=supportUntil=guardAt=powerAt=escapeUntil=trafficUntil=trafficWaitUntil=0;trafficBlocker={};seenAt=lastSeen=threatAt=blockedAt=0;wasThreat=false;route.clear();rejected.clear();searchedPatrols.clear();intent={};side=random()<.5f?-1:1;}
+    if(self->health>0 && p->AnimSequence()==RuneShieldTaunt::Clip){Decision out;out.input.life=life;out.input.yaw=self->angles[1];intent=out;return out;}
     if(now<nextThink){auto out=intent;out.action.reset();out.input.life=life;return out;}
     const auto decisionStarted=std::chrono::steady_clock::now();
     nextThink=now+100;++decisions;Decision out;out.input.life=life;out.input.yaw=self->angles[1];
@@ -416,7 +418,7 @@ Decision Brain::think(Engine& game,RuneNetworkReplica& replica,const World& worl
                 std::cout<<"OPEN_RUNE_AI_HEADS free="<<heads<<" visible="<<visible<<" nearest="<<nearest<<" held="<<(p->Weapon()?p->Weapon()->Class->Name.ToString():"None")<<std::endl;
             }
             std::cout<<"OPEN_RUNE_AI_TRACE team="<<int(team(status,own))<<" yaw="<<self->angles[1]<<" pawn="<<own.id<<" pos="<<p->Location().x<<","<<p->Location().y<<","<<p->Location().z<<" health="<<self->health<<" weapon="<<self->weapon.id<<" target="<<target.id<<" route="<<routeIndex<<"/"<<route.size()<<" goal="<<waypoint.x<<","<<waypoint.y<<","<<waypoint.z<<" move="<<out.input.forward<<","<<out.input.strafe<<" action="<<(out.action?int(*out.action):0)<<std::endl;}
-        avoidTeammates(p,replica,world,status,*self,now,out);
+        if(!(self->combat.flags&16))avoidTeammates(p,replica,world,status,*self,now,out);
         if(debug && debugAt==now+3000)std::cout<<"OPEN_RUNE_AI_TRAFFIC block="<<trafficBlocker.id<<" until="<<trafficUntil<<" now="<<now<<" goal="<<trafficGoal.x<<","<<trafficGoal.y<<","<<trafficGoal.z<<" move="<<out.input.forward<<","<<out.input.strafe<<std::endl;
         maxThinkUs=std::max(maxThinkUs,uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()-decisionStarted).count()));
         intent=out;return out;
@@ -424,6 +426,30 @@ Decision Brain::think(Engine& game,RuneNetworkReplica& replica,const World& worl
     auto act=[&](ActionKind a,uint64_t recovery){if(now>=readyAt){out.action=a;readyAt=now+recovery;return true;}return false;};
     if(self->physical.kind==1 || self->physical.kind==3){liftActive=-1;slamStage=0;intent=out;return out;}
     if(status.phase!=MatchPhase::Playing)return finish();
+    if(self->combat.flags&16){out.input.forward=1000;out.input.yaw=self->angles[1];
+        if(!RuneBattleLaws::Allowed(RuneBattleLaws::Spider) || now>spiderRetry+10000){act(ActionKind::Use,500);spiderRetry=now+3000;}
+        return finish();}
+    if(spiderAt){if(!RuneBattleLaws::Allowed(RuneBattleLaws::Spider)||now>spiderAt+500){spiderAt=0;return finish();}
+        out.input.yaw=uint16_t(Rotator::FromVector(-spiderNormal).Yaw);out.input.forward=0;
+        if(now>=spiderAt && act(ActionKind::Use,400)){spiderAt=0;spiderRetry=now+2000;}return finish();}
+
+    // Observe our own replicated climbing pose, not server-only state. Give
+    // the authored automatic pull-up time to finish; if it stops, use exactly
+    // the same Jump/backward-Duck controls available to a human player.
+    auto climbName=p->AnimSequence().ToString();
+    for(auto& c:climbName)c=char(std::tolower(static_cast<unsigned char>(c)));
+    const bool climbing=self->health>0 && !(self->flags&2) &&
+        (climbName.find("pullup")!=std::string::npos || climbName.find("hang")!=std::string::npos);
+    if(climbing) {
+        auto at=position(*self);
+        if(!ledgeSince || length(at-ledgePosition)>12.f){ledgeSince=now;ledgePosition=at;ledgeJumpAt=now+1000;}
+        if(now-ledgeSince>=1000) {
+            liftActive=-1;slamStage=0;leapAt=jumpUntil=guardUntil=0;
+            if(now>=ledgeJumpAt && act(ActionKind::Jump,350))ledgeJumpAt=now+800;
+            if(now-ledgeSince>=2400){out.input.forward=-600;out.input.held=4;}
+            return finish();
+        }
+    }else ledgeSince=ledgeJumpAt=0;
     if(liftActive>=0 && self->health>0){if(auto lift=liftStep(game,p,*self,liftGoal,now)){out=*lift;return finish();}}
     if(self->health<=0){act(ActionKind::Respawn,1500);return finish();}
     const auto here=position(*self);auto temperament=RuneTactics::ForDifficulty(difficulty);const auto reaction=uint64_t(temperament.reaction*1000);
@@ -871,6 +897,12 @@ Decision Brain::think(Engine& game,RuneNetworkReplica& replica,const World& worl
                 if(dot(yawDirection(out.input.yaw),v)<.85f)return finish();
                 if(act(ActionKind::Jump,350)){jumpAt=now+2200;jumpUntil=now+700;jumpGoal=landing;move(landing,750);return finish();}
             }
+        }
+        if(now>=spiderRetry && RuneBattleLaws::Allowed(RuneBattleLaws::Spider) && (self->flags&2)){
+            vec3 n,exit;if(RuneSpider::Plan(p,goal,n,exit)){
+                out.input.yaw=uint16_t(Rotator::FromVector(-n).Yaw);out.input.forward=0;
+                if(act(ActionKind::Jump,100)){spiderAt=now+100;spiderRetry=now+3000;spiderNormal=n;spiderExit=exit;return finish();}
+            }else spiderRetry=now+1500;
         }
         if(now>=useAt && act(ActionKind::Use,400))useAt=now+1500; // ordinary doors only
     }

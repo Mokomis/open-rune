@@ -196,3 +196,32 @@ required for Use. `DebugContinue` clears that flag idempotently. Live enemies
 resume and ordinary Ctrl/Use acquires a fresh hammer; the isolated practice
 checkpoint was rewritten after recovery. Normal saves/INI hashes match.
 Do not freeze world ticks while preparing a session that can autosave.
+
+## November 8: overhead grip visibility (dev.14)
+
+The carrier previously moved the wrists overhead while retaining their standing
+or running world rotation. The hands could fold into the forearms or carried
+torso, leaving an apparent handless support. The overhead pose now explicitly
+orients both palms upward and the fingers inward, with relaxed finger-joint
+rotations. Body support is lifted two units onto the palm surface instead of
+intersecting it. Bone positions/scales, body proportions, leg animation and the
+shared shield-rush solver are preserved. The shared carry presentation applies
+to local pawns, eligible bots and multiplayer replicas.
+
+Focused native checks verify palm/finger orientation on authority and replica,
+retained wrist proportions, pickup, walking, throwing, damage, cleanup and
+replicated skin transforms. Mac single/network/team cases pass at approximately
+two million geometry/state checks per case. A bounded orbit fixture captures
+front/back/both sides using the actual wrist positions as its camera target;
+--corpse-hand-audit is isolated under --probe-corpse and --save-directory.
+Android exposes this only for bounded isolated diagnostics via corpseHandProbe.
+
+Mac native2816x1762/4xAA captures of a DarkViking carry were visually reviewed.
+Earlier orbit captures with first-person hiding, obstructed cameras or poor
+framing were rejected as visual evidence. They remain in the external evidence
+folder for traceability. Android native2520x1680/4xAA captures, installation and
+normal data preservation are in the same evidence folder. No new FPS gain or
+all-character visual certification is claimed by this pose correction.
+
+Evidence: controller ~/OpenRuneArtifacts/CarryHands-20261108 and Windows
+C:/OpenRune/outputs/carry-hands-20261108. Protocol25/rules34 remain unchanged.

@@ -68,7 +68,7 @@ public final class RuneHostService extends Service {
             session=new File(getFilesDir(),"multiplayer/host/"+id);
             if(!session.isDirectory())throw new IllegalArgumentException("Host session is missing.");
             RuneHostConfig config=new RuneHostConfig();config.mode=intent.getStringExtra("mode");
-            config.laws=intent.getIntExtra("laws",4095);config.physics=intent.getIntExtra("physics",0);config.normalBloodlust=intent.getBooleanExtra("normalBloodlust",true);config.bots=intent.getIntExtra("bots",0);config.players=intent.getIntExtra("players",4);config.teams=intent.getIntExtra("teams",2);config.arenaSize=intent.getIntExtra("arenaSize",1);
+            config.laws=intent.getIntExtra("laws",8191);config.physics=intent.getIntExtra("physics",RuneSettings.PHYSICS_DEFAULT);config.normalBloodlust=intent.getBooleanExtra("normalBloodlust",true);config.bots=intent.getIntExtra("bots",0);config.players=intent.getIntExtra("players",4);config.teams=intent.getIntExtra("teams",2);config.arenaSize=intent.getIntExtra("arenaSize",1);
             config.score=intent.getIntExtra("score",20);config.minutes=intent.getIntExtra("minutes",10);config.limbs=intent.getBooleanExtra("limbs",false);
             String[] maps=intent.getStringArrayExtra("maps");if(maps!=null)java.util.Collections.addAll(config.maps,maps);
             matchName=config.matchName=intent.getStringExtra("matchName");if(matchName==null)matchName=config.matchName="Open Rune match";

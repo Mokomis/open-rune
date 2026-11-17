@@ -22,7 +22,7 @@ final class RuneInvitation {
             long players=version>=2?number(t[8],2,16):2;if(slot>players)throw new IllegalArgumentException();
             if(version>=3)number(t[9],1,4);
             if(version>=4){number(t[10],2,4);number(t[11],1,4);number(t[12],0,1);}
-            if(version==5)number(t[13],0,4095);
+            if(version==5)number(t[13],0,8191);
             // The native reader requires the magic on its own line; retain its
             // whitespace format and normalize Windows line endings only.
             if(!text.startsWith(t[0]+"\n"))throw new IllegalArgumentException();

@@ -24,6 +24,9 @@ p.add_argument('--fixture',choices=('dual','blood','bash'),required=True)
 p.add_argument('--latency',type=int,default=0)
 p.add_argument('--physics-mode',type=int,choices=(0,1,2),default=0)
 p.add_argument('--device')
+p.add_argument('--puppet-trace',action='store_true')
+p.add_argument('--width',type=int,default=960)
+p.add_argument('--height',type=int,default=600)
 p.add_argument('--characters',nargs=2,default=['0:0','0:0'],help='Character ID:skin for the two desktop clients')
 p.add_argument('--touch-gesture',choices=('leap','charge'))
 p.add_argument('--host',default='127.0.0.1')
@@ -40,10 +43,10 @@ with tempfile.TemporaryDirectory(prefix='open-rune-native-net-') as folder:
     def launch(name,args):
         saves=root/(name+'-saves');saves.mkdir();log=(a.output/(name+'.log')).open('w');logs.append(log)
         config=root/(name+'-config');(config/'SurrealEngine').mkdir(parents=True)
-        proc=subprocess.Popen([str(a.binary.resolve()),'--direct',f'--save-directory={saves}',*args,str(a.game.resolve())],stdout=log,stderr=subprocess.STDOUT,env=dict(os.environ,SURREALENGINE_CONFIG_DIR=str(config)))
+        proc=subprocess.Popen([str(a.binary.resolve()),'--direct',f'--save-directory={saves}',*(['--rune-puppet-trace']if a.puppet_trace else []),*args,str(a.game.resolve())],stdout=log,stderr=subprocess.STDOUT,env=dict(os.environ,SURREALENGINE_CONFIG_DIR=str(config)))
         processes.append(proc);return proc
     try:
-        host=launch('server',[f'--rune-server={invites}',f'--rune-net-address={a.host}','--rune-net-seconds=65',
+        host=launch('server',[f'--rune-server={invites}',f'--rune-net-address={a.host}','--rune-net-seconds=80',
             '--probe-seed=1',f'--rune-net-native-fixture={a.fixture}',f'--rune-physics={a.physics_mode}'])
         until=time.monotonic()+20
         while not (invites/'player2.rune-invite').exists():
@@ -57,6 +60,13 @@ with tempfile.TemporaryDirectory(prefix='open-rune-native-net-') as folder:
                 link=ImpairedLink((address,int(port)),uplink_ms=a.latency,downlink_ms=a.latency,jitter_ms=8,loss=1,duplicate=1,seed=941+i)
                 links.append(link);lines[1]=f'127.0.0.1 {link.port}';invitation.write_text('\n'.join(lines)+'\n')
             if a.device and i==2:
+                # Keep earlier device captures intact, but never pull stale
+                # masks from a different fixture into this run's evidence.
+                probe=subprocess.run(adb+['shell','run-as','org.runeclassic.port','test','-d','files/native-combat-captures'],capture_output=True,timeout=20)
+                if probe.returncode==0:
+                    prior='files/prior-native-combat-'+str(time.time_ns())
+                    device('run-as','org.runeclassic.port','mv','files/native-combat-captures',prior)
+                elif probe.returncode!=1:raise RuntimeError('Cannot inspect isolated device captures')
                 device('run-as','org.runeclassic.port','mkdir','-p','files/multiplayer')
                 subprocess.run(adb+['shell','run-as','org.runeclassic.port','sh','-c',"'umask 077; cat > files/multiplayer/native-test.rune-invite'"],input=invitation.read_bytes(),check=True)
                 if a.touch_gesture:
@@ -65,12 +75,12 @@ with tempfile.TemporaryDirectory(prefix='open-rune-native-net-') as folder:
                 device('am','force-stop','org.runeclassic.port')
                 device('am','start','-W','-n','org.runeclassic.port/.MainActivity','--es','saveTest','network-native-combat',
                     '--es','networkInvite','native-test.rune-invite',
-                    *(['--es','bloodlustGesture',a.touch_gesture,'--ez','touchProbe','true'] if a.touch_gesture else ['--es','networkNativeFixture',a.fixture]),'--ei','networkSeconds','25',
+                    *(['--es','bloodlustGesture',a.touch_gesture,'--ez','touchProbe','true'] if a.touch_gesture else ['--es','networkNativeFixture',a.fixture]),'--ei','networkSeconds','25','--ei','physicsMode',str(a.physics_mode),'--ei','surfacePercent','100',*(['--ez','physicsTrace','true']if a.puppet_trace else []),
                     '--ez','upscale','false','--ei','msaa','2','--ei','profile','900','--ei','seed','1')
             else:
                 captures=a.output/f'client{i}-frames';captures.mkdir()
-                clients.append(launch(f'client{i}',[f'--rune-join={invitation}','--rune-net-seconds=30',f'--rune-net-native-fixture={a.fixture}',
-                    f'--character={a.characters[i-1].split(":")[0]}',f'--character-skin={a.characters[i-1].split(":")[-1]}',f'--rune-net-native-captures={captures.resolve()}','--render-msaa=2','--maxfps=120','--profile-frames=900']))
+                clients.append(launch(f'client{i}',[f'--rune-join={invitation}','--rune-net-seconds=45',f'--rune-net-native-fixture={a.fixture}',
+                    f'--character={a.characters[i-1].split(":")[0]}',f'--character-skin={a.characters[i-1].split(":")[-1]}',f'--rune-net-native-captures={captures.resolve()}',f'--rune-physics={a.physics_mode}',f'--rune-net-width={a.width}',f'--rune-net-height={a.height}','--render-msaa=2','--maxfps=120','--profile-frames=900']))
         if a.device:
             until=time.monotonic()+55
             while True:
@@ -95,6 +105,8 @@ with tempfile.TemporaryDirectory(prefix='open-rune-native-net-') as folder:
             assert match and int(match[1])&expected==expected,f'Client {i} missed native states'
             assert 'DIRECT_LAUNCH_FAILED' not in text and 'native fatal:' not in text.lower()
         server=(a.output/'server.log').read_text()
+        if a.puppet_trace and a.physics_mode and a.fixture=='dual':
+            assert all('RUNE_PUPPET_VISIBLE' in text and 'replica=1' in text for text in texts),'No remote muscle reached the interactive renderer'
         if a.touch_gesture:
             kind=10 if a.touch_gesture=='leap' else 11
             assert re.search(fr'OPEN_RUNE_ACTION player=2 kind={kind} accepted=1',server),'Android touch move not accepted'

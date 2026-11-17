@@ -1,5 +1,6 @@
 
 #include "Precomp.h"
+#include "RuneShieldTaunt.h"
 #include "RunePhysics.h"
 #include "RuneNavigation.h"
 #include "RuneParticles.h"
@@ -204,7 +205,7 @@ void UActor::Tick(float elapsed)
 	if (engine->LaunchInfo.IsDeusEx())
 		TickBlendAnimation(elapsed);
 
-	if (Role() >= ROLE_SimulatedProxy && IsEventEnabled(EventName::Tick))
+	if (!RuneShieldTaunt::Controls(this) && Role() >= ROLE_SimulatedProxy && IsEventEnabled(EventName::Tick))
 	{
 		CallEvent(this, EventName::Tick, { ExpressionValue::FloatValue(elapsed) });
 	}
@@ -235,7 +236,7 @@ void UActor::Tick(float elapsed)
 				StateFrame->SetLatentState(LatentRunState::Continue);
 		}
 
-        if ((!RunePhysics::Controls(this) || IsA("Carcass")) && Role() >= ROLE_SimulatedProxy && StateFrame->GetLatentState() == LatentRunState::Continue)
+        if (!RuneShieldTaunt::Controls(this) && (!RunePhysics::Controls(this) || IsA("Carcass")) && Role() >= ROLE_SimulatedProxy && StateFrame->GetLatentState() == LatentRunState::Continue)
 		{
 			StateFrame->Tick();
 		}

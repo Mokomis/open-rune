@@ -1,4 +1,5 @@
 #include "RuneBattleLaws.h"
+#include "RunePhysics.h"
 #pragma once
 #include <filesystem>
 #include <memory>
@@ -9,7 +10,7 @@ class Engine;
 struct RuneDesktopHost {
     std::string name="Open Rune match",mode="dm",address="127.0.0.1";
     int bots=0,players=4,teams=2,arenaSize=1,score=20,minutes=10;
-    int physics=0;
+    int physics=RunePhysics::DefaultMode;
     uint32_t laws=RuneBattleLaws::All;
     bool publicGame=true,limbs=false,normalBloodlust=true;
     std::vector<std::string> maps;

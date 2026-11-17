@@ -1,5 +1,6 @@
 #include "Precomp.h"
 #include "RunePhysics.h"
+#include "Animation/RuneIKMath.h"
 #include "RuneRushPose.h"
 #include "RuneBloodlust.h"
 #include "RuneCorpse.h"
@@ -42,13 +43,11 @@ void Rotate(const USkelModel& m,Array<RuneJointPose>& pose,int j,const mat4& wor
 }
 void Arm(const USkelModel& m,Array<RuneJointPose>& pose,bool left,const mat4& wristTarget,vec3 pole){
     int shoulder=Joint(m,left?"lshouldb":"rshouldb"),elbow=Joint(m,left?"lelbow":"relbow"),wrist=Joint(m,left?"lwrist":"rwrist");
+    if(shoulder<1 || elbow<1 || wrist<1)return;
     auto bones=m.JointMatrices(pose);auto start=JointPoint(bones[shoulder]),target=JointPoint(wristTarget);
-    float a=length(pose[elbow].Position),b=length(pose[wrist].Position);
-    if(a<.01f||b<.01f||length(target-start)<.01f)return;
-    auto direction=normalize(target-start);float distance=std::clamp(length(target-start),std::abs(a-b)+.01f,a+b-.01f);
-    target=start+direction*distance;pole-=start;pole-=direction*dot(pole,direction);if(length(pole)<.01f)return;
-    float cosine=std::clamp((a*a+distance*distance-b*b)/(2*a*distance),-1.f,1.f);
-    auto bend=start+direction*(cosine*a)+normalize(pole)*(std::sqrt(1-cosine*cosine)*a);
+    auto solution=RuneIK::TwoBone(start,JointPoint(bones[elbow]),JointPoint(bones[wrist]),target,pole);
+    if(!solution.valid)return;
+    target=solution.end;auto bend=solution.joint;
     Rotate(m,pose,shoulder,Turn(JointPoint(bones[elbow])-start,bend-start)*bones[shoulder],bones);
     bones=m.JointMatrices(pose);Rotate(m,pose,elbow,Turn(JointPoint(bones[wrist])-JointPoint(bones[elbow]),target-JointPoint(bones[elbow]))*bones[elbow],bones);
     bones=m.JointMatrices(pose);Rotate(m,pose,wrist,wristTarget,bones);
@@ -293,10 +292,18 @@ void ApplyPose(const USkelModel& m,UActor* actor,Array<RuneJointPose>& pose) {
     auto actorToMesh=InverseAffine(Coords::Rotation(m.RotationOffset).ToMatrix());
     auto offset=[&](vec3 v){return (actorToMesh*vec4(v,0)).xyz();};
     auto top=JointPoint(bones[head])+offset(vec3(7+16*Windup(p),0,17-4*Windup(p)));
+    auto relaxed=Sample(m,Sequence(m,"neutral_idle"),0);
     for(bool left:{true,false}) {
         int wrist=Joint(m,left?"lwrist":"rwrist");
-        auto target=At(bones[wrist],top+offset(vec3(0,left?-18.f:18.f,0)));
+        // The carry is an overhead palm-up grip, not the world-space hand
+        // rotation from the standing/run animation (which folds hands into
+        // the forearms/body when the elbows are raised).
+        auto fingers=normalize(vec3(.20f,left?1.f:-1.f,.08f));
+        auto y=-fingers,x=normalize(cross(y,vec3(0,0,1))),z=cross(x,y);
+        auto grip=mat4::identity();for(int k=0;k<3;++k){grip[k]=x[k];grip[4+k]=y[k];grip[8+k]=z[k];}
+        auto target=At(actorToMesh*grip,top+offset(vec3(0,left?-18.f:18.f,0)));
         Arm(m,pose,left,target,top+offset(vec3(15,left?-35.f:35.f,-24)));
+        int hand=Joint(m,left?"lhand":"rhand");if(hand>=0)pose[hand].Rotation=relaxed[hand].Rotation;
     }
     auto park=[&](UActor* item,int destination) {
         if(!item || item->bDeleteMe() || item->GetUObject("AttachParent")!=p || destination<0)return;

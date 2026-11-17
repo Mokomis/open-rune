@@ -9,21 +9,23 @@
 #include "Utils/Logger.h"
 #include "Engine.h"
 #include "RuneKick.h"
+#include "RuneLeg.h"
 #include "RuneBash.h"
 
 void UPawn::Tick(float elapsed)
 {
     if(RunePhysics::Controls(this)){UActor::Tick(elapsed);return;}
-    RuneCorpse::Tick(this,elapsed);
+    RuneShieldTaunt::Tick(this,elapsed);
+    const bool spider=RuneSpider::Tick(this,elapsed);
+    if(!spider)RuneCorpse::Tick(this,elapsed);
     RuneSlam::Tick(this,elapsed);
-	RuneBloodlust::Tick(this,elapsed);
-	RuneDualWield::Tick(this,elapsed);
-	RuneTactics::Tick(this,elapsed);
-	RuneBash::Tick(this,elapsed);
-	RuneKick::Tick(this,elapsed);
+    RuneBloodlust::Tick(this,elapsed);
+    if(!spider){RuneDualWield::Tick(this,elapsed);RuneTactics::Tick(this,elapsed);}
+    RuneBash::Tick(this,elapsed);
+    RuneKick::Tick(this,elapsed);
 	MoveTimer() -= elapsed;
 
-	if (StateFrame && !RuneTactics::Controls(this) && !RuneBloodlust::Busy(this))
+	if (StateFrame && !ShieldTaunt.active && !spider && !RuneTactics::Controls(this) && !RuneBloodlust::Busy(this))
 	{
 		LatentRunState latentState = StateFrame->GetLatentState();
 		if (latentState == LatentRunState::MoveTo)
@@ -112,8 +114,8 @@ void UPawn::Tick(float elapsed)
 	}
 
 	UActor::Tick(elapsed);
-	RuneKick::Recoil(this,elapsed);
-    RuneBloodlust::Move(this,elapsed);
+    if(spider)RuneSpider::Move(this,elapsed);
+    else {RuneKick::Recoil(this,elapsed);RuneBloodlust::Move(this,elapsed);}
 
 	if (bIsPlayer() && Role() >= ROLE_AutonomousProxy)
 	{
@@ -387,7 +389,7 @@ float UPawn::GetSpeed()
 	case PHYS_Walking:
 	case PHYS_Falling:
 	case PHYS_Spider:
-		return GroundSpeed();
+		return GroundSpeed()*RuneLeg::SpeedScale(this);
 	case PHYS_Flying:
 		return AirSpeed();
 	case PHYS_Swimming:

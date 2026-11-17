@@ -658,8 +658,9 @@ std::unique_ptr<VulkanPipeline> ComputePipelineBuilder::Create(VulkanDevice* dev
 	stageInfo.pName = "main";
 	pipelineInfo.stage = stageInfo;
 
-	VkPipeline pipeline;
-	vkCreateComputePipelines(device->device, cache ? cache->cache : VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline);
+	VkPipeline pipeline = VK_NULL_HANDLE;
+	VkResult result = vkCreateComputePipelines(device->device, cache ? cache->cache : VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline);
+	device->CheckVulkanError(result, "Could not create compute pipeline");
 	auto obj = std::make_unique<VulkanPipeline>(device, pipeline);
 	if (debugName)
 		obj->SetDebugName(debugName);
@@ -1877,6 +1878,7 @@ std::vector<VulkanCompatibleDevice> VulkanDeviceBuilder::FindDevices(const std::
 		auto& deviceFeatures = dev.Device->Features;
 		enabledFeatures.Features.samplerAnisotropy = deviceFeatures.Features.samplerAnisotropy;
         enabledFeatures.Features.textureCompressionASTC_LDR = deviceFeatures.Features.textureCompressionASTC_LDR;
+        enabledFeatures.Features.shaderStorageImageExtendedFormats = deviceFeatures.Features.shaderStorageImageExtendedFormats;
 		enabledFeatures.Features.fragmentStoresAndAtomics = deviceFeatures.Features.fragmentStoresAndAtomics;
 		enabledFeatures.Features.depthClamp = deviceFeatures.Features.depthClamp;
 		enabledFeatures.Features.shaderClipDistance = deviceFeatures.Features.shaderClipDistance;

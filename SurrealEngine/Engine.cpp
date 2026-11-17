@@ -6,6 +6,13 @@
 #include "RuneSlamVisualProbe.h"
 
 #include "Precomp.h"
+#ifdef __ANDROID__
+#include <android/trace.h>
+#endif
+#include "RuneBreath.h"
+#include "RuneShieldTaunt.h"
+#include "RuneLeg.h"
+#include "RuneSpider.h"
 #include "RunePhysics.h"
 #include "RuneNavigation.h"
 #include "RuneGore.h"
@@ -224,11 +231,16 @@ void Engine::Run()
 
 	bool firstCall = true;
     if(commandline->HasArg("", "--rune-effects"))RuneVisualEffects::Enabled.store(commandline->GetArgInt("", "--rune-effects",1)!=0);
-    if(commandline->HasArg("","--snow"))RuneSnow::Mode=std::clamp(commandline->GetArgInt("","--snow",0),0,2);
+    if(commandline->HasArg("","--snow"))RuneSnow::Mode=RuneSnow::ClampMode(commandline->GetArgInt("","--snow",-1));
     if(commandline->HasArg("","--gore"))RuneGore::Enabled=commandline->GetArgInt("","--gore",1)!=0;
     LogMessage("RUNE_EFFECTS_MODE enabled="+std::to_string(RuneVisualEffects::Enabled.load()));
 	if(commandline->HasArg("", "--rune-tactics"))RuneTactics::Enabled.store(commandline->GetArgInt("", "--rune-tactics", 1)!=0);
 	int remainingFrames = commandline->GetArgInt("", "--maxframes", 0);
+    if(commandline->HasArg("","--snow-weather-test")) {
+        if(remainingFrames<=0 || !commandline->HasArg("","--save-directory"))Exception::Throw("Weather test requires bounded frames and isolated saves");
+        RuneSnow::TestSeed=uint32_t(std::max(1,commandline->GetArgInt("","--snow-weather-seed",1)));
+        RuneSnow::TestPeriodMs=6000;RuneSnow::BeginMap(TotalTime,false);RuneSnow::Mode=RuneSnow::Automatic;
+    }
     const int probeTickHz=commandline->GetArgInt("", "--probe-tick-hz", 0);
     if(probeTickHz && (probeTickHz<10 || probeTickHz>1000 || remainingFrames<=0 ||
         !commandline->HasArg("", "--save-directory")))
@@ -246,6 +258,9 @@ void Engine::Run()
     RuneLocalStairProbe localStairProbe;
     RuneSlamVisualProbe slamProbe;
 	int profileFrames=commandline->GetArgInt("", "--profile-frames", 0);
+#ifdef __ANDROID__
+    const bool traceFrame = commandline->HasArg("", "--frame-benchmark") && profileFrames > 0;
+#endif
 	RuneParticleProfile::Milliseconds = {};
 	std::vector<double> profileTimes;
 	double profileTick=0,profileRender=0,profilePacing=0;
@@ -308,6 +323,10 @@ void Engine::Run()
     if(materialCycle && (remainingFrames<=0 || !commandline->HasArg("","--save-directory")))
         Exception::Throw("Material comparison requires bounded frames and isolated saves");
     std::vector<double> materialTimes;
+    const bool snowCycle=commandline->HasArg("","--probe-snow-cycle");
+    if(snowCycle && (remainingFrames<=0 || !commandline->HasArg("","--save-directory")))
+        Exception::Throw("Snow comparison requires bounded frames and isolated saves");
+    std::vector<double> snowTimes;
     if(materialCycle) {
         // Account for the one-time bake separately from steady frame timing.
         auto* device=window->GetRenderDevice();int saved=device->WorldFeatures;
@@ -456,6 +475,10 @@ void Engine::Run()
             const int modes[]={0,196608,196608,0};
             worldFeatures=(worldFeatures&~196608)|modes[(probeFrame/240)%4];
         }
+        if(snowCycle) {
+            const int modes[]={0,2,3,3,2,0};
+            RuneSnow::Mode=probeFrame<600?3:modes[((probeFrame-600)/600)%6];
+        }
 		window->GetRenderDevice()->WorldFeatures = worldFeatures;
 		if (VisualComparison::AppliedWorldFeatures.exchange(worldFeatures) != worldFeatures)
 			LogMessage("RUNE_WORLD_FEATURES code=" + std::to_string(worldFeatures));
@@ -562,6 +585,9 @@ void Engine::Run()
 			nextFrame = now > nextFrame + effectiveInterval ? now + effectiveInterval : nextFrame + effectiveInterval;
 		}
 		auto profileGameStart=std::chrono::steady_clock::now();
+#ifdef __ANDROID__
+        if (traceFrame) ATrace_beginSection("Rune Simulation");
+#endif
 		// Main game loop should consist of these 4 steps:
 		// Tick everything
 		// Render the scene
@@ -687,15 +713,35 @@ void Engine::Run()
         corpseProbe.Before(*this,probeFrame);
         if(auto* p=viewport->Actor())CameraLocation+=RunePhysics::RenderOffset(p);
         physicsProbe.Before(*this,probeFrame);
+        RuneBreath::Demo(*this,probeFrame);
+        RuneShieldTaunt::Demo(*this,probeFrame);
+        RuneLeg::Demo(*this,probeFrame);
+        RuneSpider::Demo(*this,probeFrame);
         localStairProbe.Before(*this,probeFrame);
         slamProbe.Before(*this,probeFrame);
         RuneStairPresentation::Update(viewport->Actor(),m_GamePaused?0.f:levelElapsed);
 
 		auto profileDrawStart=std::chrono::steady_clock::now();
+#ifdef __ANDROID__
+        if (traceFrame) {
+            ATrace_endSection();
+            ATrace_beginSection("Rune Render");
+        }
+#endif
         {RunePhysics::PresentationScope presentation;
 		render->DrawGame(m_GamePaused?0.f:levelElapsed);
         }
 		auto profileDrawEnd=std::chrono::steady_clock::now();
+#ifdef __ANDROID__
+        if (traceFrame) ATrace_endSection();
+#endif
+        if(commandline->HasArg("","--snow-weather-captures") && commandline->HasArg("","--snow-weather-test"))
+            for(int capture:{90,270,450,630,810,990})if(probeFrame==capture){
+                auto* device=window->GetRenderDevice();int w=device->GetRenderWidth(),h=device->GetRenderHeight();Array<TextureColor> pixels;pixels.resize(size_t(w)*h);
+                auto saved=device->GammaCorrectScreenshots;device->GammaCorrectScreenshots=true;device->ReadPixels(pixels.data());device->GammaCorrectScreenshots=saved;
+                std::ofstream image(commandline->GetArg("","--snow-weather-captures","")+"-"+std::to_string(capture)+".ppm",std::ios::binary);image<<"P6\n"<<w<<" "<<h<<"\n255\n";for(auto c:pixels){image.put(char(c.R));image.put(char(c.G));image.put(char(c.B));}
+            }
+
         goreProbe.After(probeFrame);
         corpseProbe.After(*this,probeFrame);
         physicsProbe.After(*this,probeFrame);
@@ -724,6 +770,19 @@ void Engine::Run()
                     std::to_string((worldFeatures&196608)!=0)+" frames="+std::to_string(materialTimes.size())+
                     " mean_ms="+std::to_string(sum/materialTimes.size())+" fps="+std::to_string(1000.0*materialTimes.size()/sum)+
                     " p95_ms="+std::to_string(materialTimes[(materialTimes.size()-1)*95/100]));
+            }
+        }
+        if(snowCycle && probeFrame>=600) {
+            int local=(probeFrame-600)%600;
+            if(local==0)snowTimes.clear();
+            if(local>=120)snowTimes.push_back(std::chrono::duration<double,std::milli>(profileDrawEnd-profileGameStart).count());
+            if(local==599) {
+                double sum=0;for(double ms:snowTimes)sum+=ms;
+                std::sort(snowTimes.begin(),snowTimes.end());
+                LogMessage("RUNE_SNOW_PERFORMANCE block="+std::to_string((probeFrame-600)/600)+" mode="+
+                    std::to_string(RuneSnow::Mode.load())+" frames="+std::to_string(snowTimes.size())+
+                    " mean_ms="+std::to_string(sum/snowTimes.size())+" fps="+std::to_string(1000.0*snowTimes.size()/sum)+
+                    " p95_ms="+std::to_string(snowTimes[(snowTimes.size()-1)*95/100]));
             }
         }
 		++probeFrame;
@@ -995,6 +1054,20 @@ void Engine::Run()
                     for (const auto& p:pixels) { image.put((char)p.R); image.put((char)p.G); image.put((char)p.B); }
                 };
                 captureFrame(capture);
+                if(commandline->HasArg("","--capture-gore-material-comparison")) {
+                    if(!commandline->HasArg("","--save-directory"))Exception::Throw("Material-cache comparison requires isolated saves");
+                    int saved=RuneGore::MaterialBatchOverride;
+                    for(int block=0;block<4;++block) {
+                        int mode=(block==1||block==2)?1:0;RuneGore::MaterialBatchOverride=mode;
+                        double sum=0;int samples=0;
+                        // Freeze simulation, camera, lighting and animation. Only
+                        // the actor-classification scheduling changes between draws.
+                        for(int i=0;i<90;++i){auto begin=std::chrono::steady_clock::now();render->DrawGame(0);if(i>=10){sum+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-begin).count();++samples;}}
+                        LogMessage("RUNE_GORE_MATERIAL_BENCH block="+std::to_string(block)+" hoisted="+std::to_string(mode)+" mean_ms="+std::to_string(sum/samples));
+                        if(block<2)captureFrame(capture+(mode?"-hoisted.ppm":"-original.ppm"));
+                    }
+                    RuneGore::MaterialBatchOverride=saved;
+                }
                 if(commandline->HasArg("","--capture-gore-comparison") || commandline->HasArg("","--probe-gore-render")) {
                     if(!commandline->HasArg("","--save-directory"))Exception::Throw("Gore comparison requires isolated saves");
                     bool saved=RuneGore::Enabled.load();
@@ -1749,6 +1822,7 @@ void Engine::SaveGameToSlot(int32_t slotNum, const std::string& saveDescription)
 	if (slotNum < -1 || (!packages->IsDeusEx() && slotNum < 0))
 		Exception::Throw("Invalid save slot: " + std::to_string(slotNum));
 
+    RuneSpider::BeforeSave();
     RuneCorpse::BeforeSave();
     RunePhysics::BeforeSave();
     RuneSlam::BeforeSave();

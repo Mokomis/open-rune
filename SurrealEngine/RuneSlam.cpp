@@ -1,5 +1,6 @@
 #include "RuneBattleLaws.h"
 #include "Precomp.h"
+#include "RuneSpider.h"
 #include "RunePhysics.h"
 #include "RuneSlam.h"
 #include "RuneBloodlust.h"
@@ -84,6 +85,7 @@ bool Heavy(UWeapon* w){
         (w->IsA("Sword") || w->IsA("Axe") || w->IsA("Hammer") || w->IsA("PlayerSarkSword") || w->IsA("PlayerSarkAxe") || w->IsA("PlayerSarkHammer"));
 }
 bool Supported(UPawn* p) {
+    if(RuneSpider::Busy(p))return false;
     if(!RuneBattleLaws::Allowed(RuneBattleLaws::Slam) || !Alive(p) || !engine->LaunchInfo.IsRune() || (!p->IsA("RunePlayer") && !p->IsA("Viking")) || (p->HasProperty("bIsBoss") && p->GetBool("bIsBoss")))return false;
     auto* m=UObject::TryCast<USkelModel>(GetRuneDisplayMesh(p));return m && Joint(*m,"lhip")>=0 && Joint(*m,"rhip")>=0 && Joint(*m,"attach_hand")>=0 && Heavy(p->Weapon()) && !RuneDualWield::Equipped(p);
 }

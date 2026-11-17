@@ -17,7 +17,7 @@ struct Column {int x=0,y=0,band=0;bool valid=false,open=false;float bottom=0,top
 struct Weather {
     static constexpr int Width=21,Radius=10;
     std::array<Column,Width*Width> cells{};
-    bool sky=false;unsigned frames=0;double cpu=0;unsigned quads=0,traces=0;
+    bool sky=false;int reported=-1;unsigned frames=0;double cpu=0,fallTime=0,lastTime=-1;unsigned quads=0,traces=0;
 };
 inline Weather weather;
 inline void Reset() {
@@ -64,17 +64,22 @@ inline const std::vector<ivec2>& Offsets() {
 }
 struct Flake {vec3 p;float size,opacity,light,depth;};
 inline void Draw(VisibleFrame* frame) {
-    int mode=std::clamp(Mode.load(),0,2);
-    if(!mode || !weather.sky || frame->ShadowView || frame->PortalDepth || frame->MirrorFlag || !engine->LaunchInfo.IsRune())return;
-    // Opt-in stress preset; shipped Off/Light/Heavy settings are unchanged.
-    const bool blizzard=commandline->HasArg("","--snow-blizzard");
-    const int density=blizzard?120:FlakesPerCell(mode), limit=blizzard?18000:MaxFlakes(mode);
-    const float coverageLimit=blizzard?.55f:CoverageLimit(mode);
+    if(Mode.load()==Original || !weather.sky || frame->ShadowView || frame->PortalDepth || frame->MirrorFlag || !engine->LaunchInfo.IsRune())return;
+    auto conditions=Current(engine->TotalTime);auto style=Style(conditions);int mode=conditions.to;
+    if(Mode.load()!=0 && commandline->HasArg("","--snow-blizzard")){style=Style(Heavy);mode=Heavy;}
+    double now=engine->TotalTime;double dt=weather.lastTime<0?0:std::clamp(now-weather.lastTime,0.0,.25);weather.lastTime=now;
+    // Integrate fall speed: blending wind/snow levels must not teleport flakes.
+    weather.fallTime+=dt*(1+1.3f*style.blizzard);
+    if(commandline->HasArg("","--snow-profile") && weather.reported!=mode){weather.reported=mode;LogMessage("RUNE_WEATHER target="+std::to_string(mode)+" from="+std::to_string(conditions.from)+" seed="+std::to_string(timeline.seed));}
+    if(style.count<=0 || style.coverage<=0)return;
+    const float blizzard=style.blizzard;
+    const int density=int(std::ceil(style.count)),limit=int(std::ceil(style.limit));
+    const float coverageLimit=style.coverage;
     auto started=std::chrono::steady_clock::now();
     const auto eye=frame->ViewLocation.xyz();int cx=int(std::floor(eye.x/64)),cy=int(std::floor(eye.y/64)),band=int(std::floor(eye.z/64));
     const double time=engine->TotalTime;int refresh=8;unsigned drawCount=0;
     const float tanX=std::tan(frame->Frame.FovAngle*3.14159265f/360.f),tanY=tanX*frame->Frame.FY/frame->Frame.FX;
-    std::vector<Flake> flakes;flakes.reserve(blizzard?12000:MaxFlakes(mode));
+    std::vector<Flake> flakes;flakes.reserve(std::min(12000,limit));
     const float gust=std::sin(float(time)*.31f);
     // Immediate conservative shelter for moving trapdoors/lifts. No ray per
     // flake, no delayed roof-cache invalidation, and no collision callbacks.
@@ -95,38 +100,35 @@ inline void Draw(VisibleFrame* frame) {
             // falling phases are world anchored and don't follow camera turns.
             float phase=Unit(h+3)*6.2831853f;
             vec3 p;
-            if(blizzard) {
-                // Strong gusts remain inside the sampled footprint, preserving
-                // roof rejection even during the extreme density test.
-                p.x=x*64.f+29+Unit(h+4)*6+20*std::sin(float(time)*1.8f+phase)+8*gust;
-                p.y=y*64.f+24+Unit(h+5)*16+18*std::cos(float(time)*1.3f+phase);
-                p.z=Height(float(time)*2.3f,h,eye.z);
-            } else {
-                p=vec3(x*64.f+8+Unit(h+4)*48+5*std::sin(float(time)*.7f+phase)+2*gust,
-                    y*64.f+8+Unit(h+5)*48+5*std::cos(float(time)*.53f+phase),Height(float(time),h,eye.z));
-            }
+            auto calm=[&]{return vec3(x*64.f+8+Unit(h+4)*48+5*std::sin(float(time)*.7f+phase)+2*gust,
+                y*64.f+8+Unit(h+5)*48+5*std::cos(float(time)*.53f+phase),0);};
+            auto storm=[&]{return vec3(x*64.f+29+Unit(h+4)*6+20*std::sin(float(time)*1.8f+phase)+8*gust,
+                y*64.f+24+Unit(h+5)*16+18*std::cos(float(time)*1.3f+phase),0);};
+            p=blizzard<=0?calm():blizzard>=1?storm():mix(calm(),storm(),blizzard);
+            p.z=Height(float(weather.fallTime),h,eye.z);
             if(p.z<c.bottom || p.z>c.top)continue;
             bool sheltered=false;for(const auto& roof:roofs)if(p.x>=roof.min.x-2 && p.x<=roof.max.x+2 && p.y>=roof.min.y-2 && p.y<=roof.max.y+2 && p.z<roof.max.z+2){sheltered=true;break;}
             if(sheltered)continue;
             vec3 delta=p-eye;float depth=dot(delta,frame->ViewRotation.XAxis);
             if(depth<35 || depth>650)continue;
-            float size=(.65f+Unit(h+6)*1.35f)*(blizzard?1.45f:1.f);
-            float extent=size*(blizzard?2.5f:1.f);
+            float size=(.65f+Unit(h+6)*1.35f)*(1+.45f*blizzard);
+            float extent=size*(1+1.5f*blizzard);
             if(std::abs(dot(delta,frame->ViewRotation.YAxis))>depth*tanX+extent || std::abs(dot(delta,frame->ViewRotation.ZAxis))>depth*tanY+extent)continue;
             float fade=std::min({std::clamp((depth-35)/45.f,0.f,1.f),std::clamp((650-depth)/160.f,0.f,1.f),std::clamp((384-std::abs(delta.z))/80.f,0.f,1.f),std::clamp((p.z-c.bottom)/15.f,0.f,1.f),std::clamp((c.top-p.z)/20.f,0.f,1.f)});
             if(fade<=.01f)continue;
-            flakes.push_back({p,size,fade*(.5f+.35f*Unit(h+7)),blizzard?std::max(c.light,.78f):c.light,depth});
+            float membership=std::clamp(style.count-float(i),0.f,1.f);
+            flakes.push_back({p,size,fade*membership*(.5f+.35f*Unit(h+7)),std::max(c.light,.78f*blizzard),depth});
         }
     }
     std::sort(flakes.begin(),flakes.end(),[](auto a,auto b){return a.depth>b.depth;});
     auto texture=RuneEffects::Texture(0,false);float coverage=0;
     frame->Device->SetSceneNode(&frame->Frame);
     for(const auto& f:flakes) {
-        float area=f.size*f.size*(blizzard?1.8f:1.f)/(f.depth*f.depth*tanX*tanY);
+        float area=f.size*f.size*(1+.8f*blizzard)/(f.depth*f.depth*tanX*tanY);
         if(drawCount>=unsigned(limit) || coverage+area>coverageLimit)continue;
         coverage+=area;
         auto side=frame->ViewRotation.YAxis*f.size,up=frame->ViewRotation.ZAxis*f.size;
-        if(blizzard)up=up*1.8f+side*.65f;
+        up=up*(1+.8f*blizzard)+side*(.65f*blizzard);
         GouraudVertex v[4];v[0].Point=f.p-side-up;v[1].Point=f.p+side-up;v[2].Point=f.p+side+up;v[3].Point=f.p-side+up;
         v[0].UV={0,0};v[1].UV={128,0};v[2].UV={128,128};v[3].UV={0,128};
         for(auto& vertex:v){vertex.Light=vec3(.88f,.94f,1.f)*f.light;vertex.Fog=vec4(0);vertex.Opacity=f.opacity;}

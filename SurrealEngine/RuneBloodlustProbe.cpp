@@ -20,6 +20,71 @@
 #include "VM/ScriptCall.h"
 #include "VM/Frame.h"
 #include <iostream>
+#include "Utils/CommandLine.h"
+#include "RuneCharacters.h"
+void RunRuneCeilingProbe(Engine& game,UPlayerPawn* p) {
+ auto check=[](bool b,const char* w){if(!b)throw std::runtime_error(std::string("ceiling fixture: ")+w);};
+ RuneBloodlust::Enabled=true;RuneBattleLaws::Campaign=RuneBattleLaws::All;RuneBloodlust::AllowNormal=true;RuneTactics::Enabled=false;RuneKick::Enabled=false;RuneBash::Enabled=false;
+ RunePhysics::RequestedMode=0;p->DisableEvent("PlayerTick");
+ for(auto* cls=p->Class;cls;cls=UObject::TryCast<UClass>(cls->BaseStruct)) {
+  if(auto* state=cls->GetState("EdgeHanging"))for(const auto& [name,fn]:state->Functions)std::cout<<"LEDGE_EVENT class="<<cls->Name.ToString()<<" fn="<<name.ToString()<<std::endl;
+  for(const auto& [name,fn]:cls->Functions){auto n=name.ToString();if(n.find("Edge")!=std::string::npos || n.find("Climb")!=std::string::npos || n.find("Hang")!=std::string::npos)std::cout<<"LEDGE_FUNCTION class="<<cls->Name.ToString()<<" fn="<<n<<std::endl;}
+ }
+ auto tick=[&](int n){for(int i=0;i<n;++i){constexpr float dt=1.f/120;game.LevelInfo->TimeSeconds()+=dt;game.TotalTime+=dt;game.Level->Tick(dt,false);}};
+ if(commandline->HasArg("","--rune-stagger-probe")) {
+  RunePhysics::RequestedMode=1;RuneBash::Enabled=true;
+  auto* attacker=game.LoginNetworkPlayer("ImpactSource");check(attacker,"attacker");attacker->DisableEvent("PlayerTick");attacker->SetCollision(false,false,false);tick(120);
+  auto* v=p;auto reset=[&](){RunePhysics::Release(v);v->SetLocation({-302.682f,964.802f,-213.f});v->Health()=1000;auto* parts=static_cast<int*>(v->GetProperty("BodyPartHealth"));for(int j=0;j<15;++j)parts[j]=1000;v->Bloodlust={};v->Slam={};v->RuneBashPhase=0;v->RuneBashImmunity=0;v->RuneKickActive=false;v->GotoState("PlayerWalking","Begin");v->GetUObject("AnimProxy")->GotoState("Idle","Begin");v->SetPhysics(PHYS_Walking);v->Velocity()=v->Acceleration()=vec3(0);};
+  reset();check(!RuneBash::DamageReaction(v,attacker,8),"light hit not a stun");
+  reset();CallEvent(v,"JointDamaged",{ExpressionValue::IntValue(24),ExpressionValue::ObjectValue(attacker),ExpressionValue::VectorValue(v->Location()+vec3(0,0,20)),ExpressionValue::VectorValue(vec3(0)),ExpressionValue::NameValue("blunt"),ExpressionValue::IntValue(0)});
+  std::cout<<"STAGGER_COMMITTED physics="<<int(v->Physics())<<" vz="<<v->Velocity().z<<" source_health="<<attacker->Health()<<" source_hidden="<<bool(attacker->bHidden())<<" target_hidden="<<bool(v->bHidden())<<" health="<<v->Health()<<" state="<<v->GetStateName().ToString()<<" phase="<<v->RuneBashPhase<<" anim="<<v->AnimSequence().ToString()<<std::endl;
+  check(v->Health()<1000 && v->RuneBashPhase==3,"actual committed heavy hit staggers");
+  check(!RuneBash::DamageReaction(v,attacker,24),"stagger not stacked");tick(90);std::cout<<"STAGGER_RECOVER state="<<v->GetStateName().ToString()<<" phase="<<v->RuneBashPhase<<" age="<<v->RuneBashAge<<" anim="<<v->AnimSequence().ToString()<<" frame="<<v->AnimFrame()<<" rate="<<v->AnimRate()<<std::endl;check(!v->RuneBashPhase && v->GetStateName()=="PlayerWalking","brief recovery");check(!RuneBash::DamageReaction(v,attacker,24),"post-recovery immunity");tick(220);check(RuneBash::DamageReaction(v,attacker,24),"immunity expires");
+  reset();v->SetLocation(v->Location()+vec3(0,0,120));v->SetPhysics(PHYS_Falling);v->Velocity().z=200;check(!RuneBash::DamageReaction(v,attacker,24) && v->Physics()==PHYS_Falling,"airborne hit retains gravity");
+  reset();RunePhysics::RequestedMode=0;check(!RuneBash::DamageReaction(v,attacker,24),"original physics unchanged");RunePhysics::RequestedMode=2;
+  reset();v->Bloodlust.phase=RuneBloodlust::Leaping;check(!RuneBash::DamageReaction(v,attacker,24),"special move not replaced");
+  unsigned avatars=0;for(size_t c=0;c<openrune::Characters.size();++c)for(int skin=0;skin<openrune::Characters[c].skins;++skin){v=game.LoginNetworkPlayer("StaggerRoster",-1,int(c),skin);check(v,"stagger roster");v->DisableEvent("PlayerTick");reset();bool hit=RuneBash::DamageReaction(v,attacker,24);std::cout<<"STAGGER_ROSTER class="<<v->Class->Name.ToString()<<" skin="<<skin<<" hit="<<hit<<std::endl;check(hit,"roster stagger");tick(60);check(!v->RuneBashPhase,"roster recovers");++avatars;v->bHidden()=true;v->SetCollision(false,false,false);v->SetPhysics(PHYS_None);v->GotoState("","");v->Destroy();}
+  std::cout<<"RUNE_CEILING_SCAN_OK RUNE_STAGGER_OK avatars="<<avatars<<" duration=.32 immunity=2 threshold=18"<<std::endl;return;
+ }
+ if(commandline->HasArg("","--rune-ceiling-roster")) {
+  unsigned avatars=0,grabs=0,stuck=0;
+  p->SetCollision(false,false,false);
+  for(size_t c=0;c<openrune::Characters.size();++c)for(int skin=0;skin<openrune::Characters[c].skins;++skin) {
+   auto* v=game.LoginNetworkPlayer("CeilingRoster",-1,int(c),skin);check(v,"roster spawn");v->DisableEvent("PlayerTick");
+   v->Health()=10000;v->Bloodlust={};v->GotoState("PlayerWalking","Begin");v->GetUObject("AnimProxy")->GotoState("Idle","Begin");v->SetPhysics(PHYS_Walking);v->Velocity()=v->Acceleration()=vec3(0);
+   check(v->SetLocation({-302.682f,964.802f,-213.f}),"roster origin");tick(120);v->SetRotation({0,49152,0});v->ViewRotation()=v->Rotation();
+   bool launched=RuneBloodlust::Leap(v,{0,-1,0}),grabbed=false;for(int t=0;t<480;++t){tick(1);grabbed|=v->GetStateName()=="EdgeHanging";}
+   bool hanging=v->GetStateName()=="EdgeHanging" || v->Physics()==PHYS_None || v->Physics()==PHYS_Flying;
+   ++avatars;grabs+=grabbed;stuck+=hanging;
+   std::cout<<"CEILING_ROSTER class="<<v->Class->Name.ToString()<<" skin="<<skin<<" launched="<<launched<<" grab="<<grabbed<<" stuck="<<hanging<<" state="<<v->GetStateName().ToString()<<" physics="<<int(v->Physics())<<" anim="<<v->AnimSequence().ToString()<<" xyz="<<v->Location().x<<","<<v->Location().y<<","<<v->Location().z<<std::endl;
+   v->SetCollision(false,false,false);v->bHidden()=true;v->SetPhysics(PHYS_None);v->DisableEvent("Tick");v->GotoState("","");v->Destroy();
+  }
+  std::cout<<"RUNE_CEILING_SCAN_OK avatars="<<avatars<<" grabs="<<grabs<<" stuck="<<stuck<<std::endl;return;
+ }
+ std::vector<vec3> starts;for(auto* a:game.Level->Actors)if(a && a->IsA("PlayerStart"))starts.push_back(a->Location());
+ starts.push_back({310.360931f,-253.932465f,73.625008f});starts.push_back({-675.404541f,-20.996611f,73.625008f});
+ unsigned launched=0,hanging=0,floating=0,pulled=0;bool stop=false;
+ for(auto start:starts)for(int dir=0;dir<16 && !stop;++dir) {
+  RunePhysics::Release(p);p->Bloodlust={};p->Slam={};p->RuneBashPhase=0;p->RuneKickActive=false;p->Health()=10000;
+  p->GotoState("PlayerWalking","Begin");p->GetUObject("AnimProxy")->GotoState("Idle","Begin");p->SetPhysics(PHYS_Walking);p->Velocity()=p->Acceleration()=vec3(0);
+  if(!p->SetLocation(start))continue;tick(40);if(p->Physics()!=PHYS_Walking)continue;
+  auto origin=p->Location();float angle=dir*6.28318530718f/16;vec3 direction(std::cos(angle),std::sin(angle),0);p->SetRotation(Rotator::FromVector(direction));p->ViewRotation()=p->Rotation();
+  if(!RuneBloodlust::Leap(p,direction)){if(dir==0)std::cout<<"CEILING_REJECT state="<<p->GetStateName().ToString()<<" physics="<<int(p->Physics())<<" ready="<<RuneBloodlust::Readiness(p)<<" proxy="<<p->GetUObject("AnimProxy")->GetStateName().ToString()<<std::endl;continue;}++launched;float high=origin.z;bool grabbed=false;
+  for(int n=0;n<360;++n){tick(1);high=std::max(high,p->Location().z);if(p->GetStateName()=="EdgeHanging"){grabbed=true;break;}}
+  if(grabbed){
+   ++hanging;std::cout<<"CEILING_HANG origin="<<origin.x<<","<<origin.y<<","<<origin.z<<" direction="<<dir<<" xyz="<<p->Location().x<<","<<p->Location().y<<","<<p->Location().z<<" physics="<<int(p->Physics())<<" anim="<<p->AnimSequence().ToString()<<" proxy="<<p->GetUObject("AnimProxy")->GetName("AnimSequence").ToString()<<std::endl;
+   tick(180);std::cout<<"CEILING_WAIT state="<<p->GetStateName().ToString()<<" physics="<<int(p->Physics())<<" anim="<<p->AnimSequence().ToString()<<" xyz="<<p->Location().x<<","<<p->Location().y<<","<<p->Location().z<<std::endl;auto before=p->Location();CallEvent(p,"Jump",{ExpressionValue::FloatValue(0)});tick(180);
+   std::cout<<"CEILING_PULL_RESULT state="<<p->GetStateName().ToString()<<" physics="<<int(p->Physics())<<" moved="<<length(p->Location()-before)<<" z="<<p->Location().z<<std::endl;
+   if(p->GetStateName()!="EdgeHanging")++pulled;
+   if(hanging>=8)stop=true;
+  } else if(p->Physics()==PHYS_None || (p->Physics()==PHYS_Walking && p->Location().z>origin.z+70)){
+   vec3 at,n;bool floor=p->Trace(at,n,p->Location()-vec3(0,0,p->CollisionHeight()+5),p->Location(),false,vec3(p->CollisionRadius(),p->CollisionRadius(),0));
+   if(!floor || n.z<.7f){++floating;std::cout<<"CEILING_FLOAT state="<<p->GetStateName().ToString()<<" physics="<<int(p->Physics())<<" xyz="<<p->Location().x<<","<<p->Location().y<<","<<p->Location().z<<" origin="<<origin.x<<","<<origin.y<<","<<origin.z<<" dir="<<dir<<" high="<<high<<std::endl;}
+  }
+ }
+ std::cout<<"RUNE_CEILING_SCAN_OK launched="<<launched<<" hangs="<<hanging<<" pulled="<<pulled<<" unsupported="<<floating<<std::endl;
+}
+
 void RunRuneBloodlustProbe(Engine& game){
  struct RestoreLaws{uint32_t value=RuneBattleLaws::Campaign.load();~RestoreLaws(){RuneBattleLaws::Campaign=value;}} restoreLaws;
  RuneBattleLaws::Campaign=RuneBattleLaws::All; // Explicit fixture rules; real campaign still rejects leap.

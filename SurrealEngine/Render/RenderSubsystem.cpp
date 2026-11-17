@@ -29,6 +29,7 @@ RenderSubsystem::RenderSubsystem(RenderDevice* renderdevice) : Device(renderdevi
 void RenderSubsystem::DrawGame(float levelTimeElapsed)
 {
     if(RuneDesktopMenu::Draw(*engine))return;
+    const bool drawOverlays = !commandline->HasArg("", "--frame-benchmark");
 	auto profileStart=std::chrono::steady_clock::now();
 	LevelTimeElapsed = levelTimeElapsed;
 	AutoUV += levelTimeElapsed * 64.0f;
@@ -63,13 +64,13 @@ void RenderSubsystem::DrawGame(float levelTimeElapsed)
 	if (engine->LaunchInfo.ue1Version <= 219 || engine->console->bNoDrawWorld() == false)
 	{
 		DrawScene();
-		RenderOverlays();
+		if (drawOverlays) RenderOverlays();
 		if (engine->LaunchInfo.IsDeusEx())
 			PostRenderFlash();
 		Device->EndFlash();
 	}
 
-	PostRender();
+	if (drawOverlays) PostRender();
 
 	auto profileUnlock=std::chrono::steady_clock::now();
     Device->Unlock(true);
@@ -178,6 +179,7 @@ void RenderSubsystem::UpdateTextureInfo(TextureInfo& info, UTexture* texture)
 
 void RenderSubsystem::OnMapLoaded()
 {
+    RuneSnow::BeginMap(engine->TotalTime,engine->NetworkClient);
     RuneSnow::Reset();
     RuneBloodPresentation::Reset();
     RuneGore::Reset();

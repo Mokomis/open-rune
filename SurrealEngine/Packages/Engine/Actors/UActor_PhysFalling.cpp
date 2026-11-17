@@ -1,5 +1,6 @@
 
 #include "Precomp.h"
+#include "RuneLeg.h"
 #include "UActor.h"
 #include "VM/ScriptCall.h"
 #include "Packages/Engine/Actors/Decoration/UDecoration.h"
@@ -28,7 +29,7 @@ void UActor::TickFalling(float elapsed)
 
 	if (pawn)
 	{
-		groundSpeed = pawn->GroundSpeed();
+		groundSpeed = pawn->GroundSpeed()*RuneLeg::SpeedScale(pawn);
 		float maxAccel = engine->LaunchInfo.ue1Version > 219 ? pawn->AirControl() * pawn->AccelRate() : 0.0f;
 		float accel = length(acceleration);
 		if (accel > maxAccel)

@@ -18,7 +18,7 @@ These choices persist separately from campaign preferences. Set them before star
 the server. During a match, Gameplay → Laws of Battle displays the current host's
 rules read-only. Joining and leaving do not overwrite campaign preferences.
 
-Each checklist uses three pages of four entries, with an explanation and the
+Each checklist scrolls vertically through thirteen entries, with an explanation and the
 activating actions. Windows supports mouse, keyboard, controller and page/wheel
 navigation; Android uses touch and controller navigation. Changing a campaign law
 applies immediately; an in-progress carry is safely dropped if its interaction law
@@ -36,12 +36,13 @@ is disabled. Existing launched objects finish their motion.
 | Shield rush | Block + Attack with a shield; stows weapon and charges forward. |
 | Two-handed aerial slam | Jump, tap Jump again in the air, then Attack with a heavy two-handed weapon. |
 | Corpse pickup & throw | Use by an intact finished corpse; Attack/Throw launches it, Use drops it. |
-| Loose prop interaction | Use lifts safe stools, dwarf stools, kegs and buckets; Attack/Throw launches, Use drops; Kick shoves them. Requires Cinematic/Chaos physics. |
-| Physical knockdowns | Strong impacts produce recoverable living ragdolls. Rush can knock down in Original physics too. Off retains non-ragdoll combat effects. |
+| Loose prop interaction | Use lifts safe stools, dwarf stools, kegs and buckets; Attack/Throw launches, Use drops; Kick shoves them. Requires Standard/Cinematic physics. |
+| Physical knockdowns | Strong impacts produce recoverable living ragdolls. Rush can knock down in Legacy physics too. Off retains non-ragdoll combat effects. |
 | Tactical campaign enemies | Existing optional tactical campaign humanoid AI. Campaign-only checkbox; multiplayer bots always run their own planner and obey the other laws. |
 | Special moves without rage | Removes the bloodlust requirement/cost for enabled leap/rush; cooldowns and equipment requirements remain. |
+| Spider Monkeys | Jump toward a wall, then Use to grab. Move to climb/traverse, Jump away, Use/Crouch to drop. Original full-body ledge animations; campaign default Off. |
 
-Physics intensity remains Original / Cinematic / Chaos. This is separate from move
+Physics mode is Legacy / Cinematic / Standard, with Standard as the default. Standard retains the former Chaos behavior; stored values remain 0 / 1 / 2. This is separate from move
 permission. Props remain deliberately limited: tagged, attached, scripted and static
 scenery is protected. This feature does not expand which map objects are props.
 Boss/scripted-state/character-equipment safeguards still apply; a checked box does
@@ -96,7 +97,7 @@ to avoid calculating masks; named switches override the base mask:
 --rune-law-normal-moves=1
 ```
 
-Values must be 0 or 1. `--rune-physics=0`, `1`, `2` selects Original, Cinematic, Chaos.
+Values must be 0 or 1. `--rune-physics=0`, `1`, `2` selects Legacy, Cinematic, Standard. Omitting the option uses Standard.
 The older explicit normal-bloodlust switch is still accepted; named normal-moves
 is the final override. No public host or long-running match is started by these tests.
 
@@ -120,3 +121,40 @@ Mac runtime builds share the rules and are tested; the themed checklist navigati
 belongs to the existing Windows/Android menus. This change does not port the
 Windows menu framework to the Mac. No tablet installation, installed Mac-app
 replacement, Git commit, push or publication is implied by building the feature.
+
+## November 8: scrolling checklist and combat icons (dev.12)
+
+Android and Windows now display one continuous vertical checklist instead of three
+pages. Back and Physics / Begin campaign stay outside the scrolling area. Each
+row has a control-derived combat icon, its activation description and an On/Off
+switch. Dual wield uses two upright blades; crossed block mirrors both sword
+points upward; aerial slam uses a hammer, as requested. Android shares its
+existing vector artwork with the touch controls; Windows uses the same silhouettes.
+
+Android retains the scroll position and stable controller focus when a rule
+changes. Windows supports mouse-wheel scrolling, a draggable scrollbar, Page
+Up/Down and keyboard/controller focus that reveals offscreen rules. The desktop
+menu clips tiles and glyphs to the viewport so rows cannot cover the heading or
+footer. Campaign leap restrictions, host-read-only rules and dual-wield/crossed
+block dependencies are unchanged. No network or gameplay rule revision changes.
+
+Validation: Windows native build and isolated rendered menu probes passed campaign
+and hosting navigation, all twelve rows, toggles and dependency behavior. Android
+model checks passed all 4,096 campaign masks plus host isolation and invitation
+validation; navigation model retains all 52 settings. The original-key dev.12
+Android APK is installed; tablet screenshots cover list top/middle/bottom and
+corrected icons. Original saves and INIs are preserved. These UI checks do not
+constitute new combat or FPS qualification.
+
+Evidence: `C:/OpenRune/outputs/battle-laws-menu-20261108` and controller-side
+`~/OpenRuneArtifacts/BattleLawsMenu-20261108`. Mac's installed menu implementation
+was not extended or redeployed in this UI change. No commit or push implied.
+
+November 8 dev.13 icon correction: Corpse pickup & throw now uses a standing
+carrier holding a limp body overhead, replacing the axe-throw glyph. Android and
+Windows use the same figure layout; the ordinary Throw control keeps its axe.
+No rule or gameplay behavior changed. Native builds passed and the original-key
+Android update is installed, with tablet visual review and data hashes recorded
+in the BattleLawsMenu-20261108/corpse-icon evidence folder.
+
+November9: Spider Monkeys adds bit4096 (mask8191), with matching native/Android/discovery validation. See [wall climbing](SPIDER-MONKEYS.md). Existing saved masks are retained.

@@ -21,6 +21,7 @@
 #include <cmath>
 #include <map>
 #include <mutex>
+#include <set>
 #include <stdexcept>
 
 namespace RuneRigid {
@@ -64,6 +65,7 @@ public:
 class Pairs final : public JPH::ObjectLayerPairFilter {
 public:
   bool ShouldCollide(JPH::ObjectLayer a, JPH::ObjectLayer b) const override {
+    if(a==3 || b==3){auto other=a==3?b:a;return other==0 || other==2;}
     return (a == 1 || b == 1) && (a != 0 || b != 0);
   }
 };
@@ -86,6 +88,9 @@ struct World::Impl final : public JPH::ContactListener {
   JPH::Ref<JPH::GroupFilterTable> groups = new JPH::GroupFilterTable(1);
   std::vector<Handle> handles;
   std::vector<JPH::Ref<JPH::Constraint>> constraints;
+  std::map<Handle,JPH::SwingTwistConstraint*> drives;
+  std::map<Handle,std::array<float,4>> driveLimits;
+  std::set<Handle> cosmetic;
   std::vector<Contact> events;
   double seconds = 0;
   std::map<std::pair<uint64_t, uint64_t>, double> ignored;
@@ -93,6 +98,7 @@ struct World::Impl final : public JPH::ContactListener {
   OnContactValidate(const JPH::Body &a, const JPH::Body &b, JPH::RVec3Arg,
                     const JPH::CollideShapeResult &) override {
     auto av = a.GetUserData(), bv = b.GetUserData();
+    if(av && av==bv)return JPH::ValidateResult::RejectAllContactsForThisBodyPair;
     auto key = std::minmax(av, bv);
     return ignored.contains({key.first, key.second})
                ? JPH::ValidateResult::RejectAllContactsForThisBodyPair
@@ -188,7 +194,7 @@ void World::motion(Handle h, Motion m) {
                     m == Motion::Kinematic ? JPH::EMotionType::Kinematic
                                            : JPH::EMotionType::Dynamic,
                     JPH::EActivation::Activate);
-    b.SetObjectLayer(JPH::BodyID(h), m == Motion::Kinematic ? 2 : 1);
+    b.SetObjectLayer(JPH::BodyID(h), impl->cosmetic.contains(h)?3:m == Motion::Kinematic ? 2 : 1);
   }
 }
 Handle World::create(const Description &d) {
@@ -217,6 +223,8 @@ Handle World::create(const Description &d) {
       motion == JPH::EMotionType::Static      ? 0
       : motion == JPH::EMotionType::Kinematic ? 2
                                               : 1);
+  settings.mAllowDynamicOrKinematic = motion != JPH::EMotionType::Static;
+  if(d.cosmetic)settings.mObjectLayer=3;
   settings.mUserData = d.owner;
   settings.mFriction = d.friction;
   settings.mRestitution = d.restitution;
@@ -239,6 +247,7 @@ Handle World::create(const Description &d) {
     return Invalid;
   auto h = id.GetIndexAndSequenceNumber();
   impl->handles.push_back(h);
+  if(d.cosmetic)impl->cosmetic.insert(h);
   return h;
 }
 bool World::contains(Handle h) const {
@@ -246,6 +255,7 @@ bool World::contains(Handle h) const {
                                    h) != impl->handles.end();
 }
 void World::remove(Handle h) {
+  impl->cosmetic.erase(h);
   if (!contains(h))
     return;
   auto &bi = impl->system.GetBodyInterface();
@@ -253,6 +263,8 @@ void World::remove(Handle h) {
     auto *c = static_cast<JPH::TwoBodyConstraint *>(it->GetPtr());
     if (c->GetBody1()->GetID() == JPH::BodyID(h) ||
         c->GetBody2()->GetID() == JPH::BodyID(h)) {
+      impl->driveLimits.erase(c->GetBody2()->GetID().GetIndexAndSequenceNumber());
+      impl->drives.erase(c->GetBody2()->GetID().GetIndexAndSequenceNumber());
       impl->system.RemoveConstraint(c);
       it = impl->constraints.erase(it);
     } else
@@ -343,6 +355,37 @@ void World::constrain(Handle parent, Handle child, vec3 anchor, vec3 axis,
   auto *c = s.Create(a.GetBody(), b.GetBody());
   impl->constraints.emplace_back(c);
   impl->system.AddConstraint(c);
+  impl->drives[child]=static_cast<JPH::SwingTwistConstraint*>(c);
+  impl->driveLimits[child]={swing,swing,-twist,twist};
+}
+bool World::drive(Handle child, Rotation relative, float frequency, float damping,
+                  float maxTorque, bool relaxLimits) {
+  auto it=impl->drives.find(child);
+  if(it==impl->drives.end()||!contains(child)||!finite(relative)||
+     !std::isfinite(frequency)||!std::isfinite(damping)||!std::isfinite(maxTorque)||
+     frequency<=0||frequency>30||damping<0||damping>4||maxTorque<0||maxTorque>5000)
+    return false;
+  if(maxTorque==0)return releaseDrive(child);
+  auto* joint=it->second;
+  auto limits=relaxLimits?std::array<float,4>{JPH::JPH_PI,JPH::JPH_PI,-JPH::JPH_PI,JPH::JPH_PI}:impl->driveLimits.at(child);
+  joint->SetNormalHalfConeAngle(limits[0]);joint->SetPlaneHalfConeAngle(limits[1]);
+  joint->SetTwistMinAngle(limits[2]);joint->SetTwistMaxAngle(limits[3]);
+  JPH::MotorSettings motor(frequency,damping);motor.SetTorqueLimit(maxTorque);
+  joint->GetSwingMotorSettings()=motor;joint->GetTwistMotorSettings()=motor;
+  joint->SetSwingMotorState(JPH::EMotorState::Position);
+  joint->SetTwistMotorState(JPH::EMotorState::Position);
+  joint->SetTargetOrientationBS(q(relative));
+  impl->system.GetBodyInterface().ActivateBody(JPH::BodyID(child));
+  return true;
+}
+bool World::releaseDrive(Handle child) {
+  auto it=impl->drives.find(child);if(it==impl->drives.end()||!contains(child))return false;
+  auto limits=impl->driveLimits.at(child);auto* joint=it->second;
+  joint->SetNormalHalfConeAngle(limits[0]);joint->SetPlaneHalfConeAngle(limits[1]);
+  joint->SetTwistMinAngle(limits[2]);joint->SetTwistMaxAngle(limits[3]);
+  it->second->SetSwingMotorState(JPH::EMotorState::Off);
+  it->second->SetTwistMotorState(JPH::EMotorState::Off);
+  impl->system.GetBodyInterface().ActivateBody(JPH::BodyID(child));return true;
 }
 void World::ignore(uint64_t a, uint64_t b, float seconds) {
   if (a && b && a != b && seconds > 0) {
