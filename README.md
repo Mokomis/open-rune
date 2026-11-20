@@ -63,6 +63,33 @@ Multiplayer supports **Deathmatch, Team Deathmatch, Arena and HeadBall**, using 
 
 The current participant limit is **16, including bots**. Host and client must have compatible gameplay and network versions. Original Rune servers use a different networking protocol.
 
+## Multiplayer networking
+
+Open Rune's multiplayer uses a new C++ networking layer written for this project. The original Rune gameplay and mode scripts run through an Open Rune host, which decides movement, weapon contacts, damage, blocking, pickups, physics and scoring. This also lets the new combat moves follow the same rules for players and bots.
+
+Clients send their inputs and receive world snapshots and confirmed combat results. Local movement prediction, immediate attack/block presentation and adaptive interpolation keep controls responsive while the host resolves the match. Important events have reliable delivery; current movement and snapshots use update paths that can discard stale information.
+
+Melee keeps its authored attack wind-ups. The host allows up to two simulation ticks, about **33 ms**, for an on-time block that arrives late. Committed damage stays committed.
+
+The networking uses Mbed TLS for authenticated DTLS encryption and HyperDHT for public discovery and peer connections. These libraries provide the security and discovery foundations for Open Rune's own game protocol.
+
+[Networking source](Network) · [Combat timing](Docs/RunePort/NETWORK-RESPONSIVENESS.md) · [Combat animation playback](Docs/RunePort/COMBAT-INTERPOLATION.md)
+
+### How Find games builds the server list
+
+Public hosts advertise their identity through **HyperDHT**, a distributed peer-discovery network. The browser assembles its list by finding those hosts and asking them for their current status. We operate no central Open Rune master directory.
+
+1. Choose **Host game** with public visibility and start the match. Your client or dedicated server announces the host identity to the shared network.
+2. Another player opens **Find games**. Open Rune looks for hosts advertising the compatible protocol.
+3. Each candidate must answer a fresh, authenticated status request before it appears. The browser shows the match name, mode, current map, player count and capacity.
+4. Selecting a host requests a player slot and establishes the encrypted connection. The Open Rune host continues to run the match and decide gameplay.
+
+Refresh checks hosts again, helping filter stale advertisements after a host stops or disconnects. Discovery is best effort; one search may find only some available matches. HyperDHT uses public bootstrap infrastructure to find peers and can attempt NAT traversal. Restricted networks or blocked UDP can still prevent joining.
+
+A hosted match lasts while its host runs. Players can host for a game night or run the Windows dedicated server for longer sessions. Invitation-only matches use shared invitations and stay out of the public list.
+
+[Discovery implementation and hosting details](Tools/RuneDiscovery/README.md)
+
 ## Choose your Laws of Battle
 
 Single-player and multiplayer have separate checklists. Choose campaign rules before starting or change them under **Settings → Gameplay → Laws of Battle**. Hosts choose multiplayer rules before starting their match. Eligible enemies and bots obey the enabled rules.
