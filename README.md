@@ -111,7 +111,7 @@ The themed settings menus group each feature under Video, Audio, Controls, Inter
 | Display | Widescreen framing, a field-of-view slider, selectable frame-rate targets and Off/2×/4× MSAA. Android also has refresh-rate requests and frame pacing. |
 | Android scaling | Native, 75%, 50% or 25% rendering with Hardware Scaling or Snapdragon GSR. The settings show the active resolution and scaling method. |
 | Audio | Environmental reverb, sound muffling and optional headphone spatial audio. |
-| Input and HUD | Keyboard/mouse navigation, controller support, device-dependent rumble, Android has movable/resizable HUD elements, horizontal or vertical meters, two touch sticks and movable/resizable touch buttons. |
+| Input and HUD | Keyboard/mouse navigation, controller support and device-dependent rumble. Android has movable/resizable HUD elements, horizontal or vertical meters, two touch sticks and movable/resizable touch buttons. |
 
 Touch controls hide when a physical controller is connected, while Menu stays available. Double-tapping the center of the right touch stick also jumps.
 
@@ -125,7 +125,7 @@ Crest and ambient occlusion remain experimental and can be expensive on mobile G
 
 Select either WIP tier under **Video → Textures & surfaces**. Open Rune shows the download size and asks permission. **Cancel** keeps your current artwork. **Download** prepares the pack on an unmetered connection, then applies the selected tier. You can play with Original while it installs.
 
-The shared pack contains **542 approved remaster masters**, covering **698 in-game texture entries** at both resolutions. Assets without a replacement use their original artwork. The artwork combines local AI upscaling and generative remaster work, with color calibration, mipmaps and material maps.
+The shared pack contains **542 approved remasters**, covering **698 in-game texture entries** at both resolutions. Assets without a replacement use their original artwork. The artwork combines local AI upscaling and generative remaster work, with color calibration, mipmaps and material maps.
 
 | Platform | Download | Installed pack |
 | --- | --- | --- |
