@@ -64,6 +64,7 @@ probe supplies that evidence. This is bounded regression/visual coverage, not
 all-character/all-map human playtesting or a new sustained performance claim.
 
 Evidence: `C:/OpenRune/outputs/kick-counter-20261109` and controller
+`/Users/rwillmore/OpenRuneArtifacts/KickCounter-20261109`. Failed intermediate
 logs are retained; use final probe and deployment receipts for actual results.
 Original game packages, ordinary saves/settings and previous builds are preserved.
 No upstream contribution, commit or push is part of this change.

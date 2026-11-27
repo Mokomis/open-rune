@@ -4,6 +4,7 @@
 #include "RunePhysics.h"
 #include "Render/ShadowSettings.h"
 #include "RuneDesktopMenu.h"
+#include "RuneHud.h"
 #include "RuneDesktopSession.h"
 #include "RuneMenuSections.h"
 #include "Engine.h"
@@ -141,6 +142,7 @@ struct State {
   RuneMultiplayer::ShowPlayerNames=v("playerNames");RuneMultiplayer::Diagnostics=v("networkDiagnostics");RuneMultiplayer::AdaptiveSmoothing=v("networkSmoothing");VisualComparison::RequestedUpscale=v("resolution");VisualComparison::RequestedMode=v("bloom");VisualComparison::RequestedClarity=v("sharp")|(v("filter")<<2)|(v("shadow")<<3);
   int lighting=v("pixelLighting");VisualComparison::RequestedWorldFeatures=v("environment")|(v("hrtf")<<3)|(v("detail")?2:0)|(v("depth")?4:0)|(v("detail")<<4)|(v("depth")<<6)|(lighting==2?768:lighting<<8)|(v("materialMaps")<<10)|(v("water")?2048:0)|(v("water")==2?8192:0)|((v("shadowLights")>0?1:0)<<12)|(v("ambientOcclusion")<<14)|(v("materialLighting")<<16)|(v("environmentProbes")<<17);
   VisualComparison::RequestedTexturePack=v("texturePack");RuneMenu::Antialias=v("aa");RuneMenu::TargetFps=v("fps");RuneMenu::Pacing=v("pacing");RuneMenu::Master=v("master");RuneMenu::Music=v("music");RuneMenu::Effects=v("effects");RuneMenu::Difficulty=v("difficulty");
+  RuneHud::Enabled=v("hudStyle")!=0;
   RuneView::FieldOfView=v("fov");RuneView::AutomaticAspect=v("wideView");RunePhysics::RequestedMode=commandline->GetArgInt("","--rune-physics",v("physics"));RuneKick::Enabled=true;RuneBash::Enabled=true;RuneBloodlust::Enabled=true;RuneBloodlust::AllowNormal=true;RuneDualWield::Enabled=true;RuneTactics::Enabled=true;RuneVisualEffects::Enabled=v("fireEffects");RuneGore::Enabled=v("gore");RuneSnow::Mode=v("snow")-1;GameFeedback::SetEnabled(v("rumble")!=0);
   if(comparing){VisualComparison::RequestedMode=0;VisualComparison::RequestedClarity=0;VisualComparison::RequestedWorldFeatures=v("environment")|(v("hrtf")<<3);VisualComparison::RequestedTexturePack=0;RuneVisualEffects::Enabled=false;RuneGore::Enabled=false;RuneSnow::Mode=RuneSnow::Original;}
   if(fullscreen!=(v("fullscreen")!=0)){game->window->ToggleWindowFullscreen(fullscreen?Size(1280,800):Size(game->window->GetNativePixelWidth(),game->window->GetNativePixelHeight()));fullscreen=v("fullscreen")!=0;}

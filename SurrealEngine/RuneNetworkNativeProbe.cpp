@@ -1,3 +1,5 @@
+#include "RuneFinisher.h"
+#include "RuneLeg.h"
 #include "RuneCorpse.h"
 #include "RuneSlam.h"
 #include "RuneBattleLaws.h"
@@ -78,7 +80,7 @@ void RunRuneNetworkNativeProbe(Engine& game)
     RuneBloodlust::AllowNormal=false; // Explicit legacy-mode baseline before normal-combat cases.
     RuneDualWield::Enabled=true;RuneBloodlust::Enabled=true;RuneTactics::Enabled=false;
     game.NetworkAuthority=true;
-    auto url=game.GetDefaultURL("DM-Hildir.run");url.AddOrReplaceOption("game=RuneI.RuneMultiPlayer");game.LoadMap(url);
+    auto url=game.GetDefaultURL("DM-Hildir.run");url.AddOrReplaceOption(commandline->GetArg("","--fin-case","")=="friendly"?"game=RuneI.TeamGame":"game=RuneI.RuneMultiPlayer");game.LoadMap(url);
     auto* p=game.LoginNetworkPlayer("NativeOne");auto* target=game.LoginNetworkPlayer("NativeTwo");game.viewport->Actor()=p;
     RuneNetworkAuthority authority(game);check(authority.bind(1,p,1)&&authority.bind(2,target,1),"bind players");
     uint64_t tickId=0,now=1000,actionId=0,snapshotId=0;
@@ -112,7 +114,8 @@ void RunRuneNetworkNativeProbe(Engine& game)
         p->ViewRotation()=p->Rotation();target->ViewRotation()=target->Rotation();
     };
     auto give=[&](UPlayerPawn* a,const char* type,bool acquire){
-        auto* item=a->Spawn(game.packages->GetPackage("RuneI")->GetClass(type),{},{},a->Location()+vec3(0,0,100),{});check(item,"spawn item");
+        auto* klass=std::string(type).find('.')==std::string::npos?game.packages->GetPackage("RuneI")->GetClass(type):game.packages->FindClass(type);
+        auto* item=a->Spawn(klass,{},{},a->Location()+vec3(0,0,100),{});check(item,"spawn item");
         item->SetFloat("RespawnTime",0);auto* copy=CallEvent(item,"SpawnCopy",{ExpressionValue::ObjectValue(a)}).ToObject();check(copy==item,"real inventory item");
         if(acquire)CallEvent(a,"AcquireInventory",{ExpressionValue::ObjectValue(copy)});copy->GotoState("Active","Begin");return copy;
     };
@@ -122,8 +125,10 @@ void RunRuneNetworkNativeProbe(Engine& game)
         AdmittedAction a{{actionId,actionId,input.createdMs,input.life,kind},input,input.createdMs};return authority.action(peer,a,now);
     };
     RuneNetworkReplica replica;std::set<uint32_t> spawned;
+    const bool oldSwipeHost=commandline->HasArg("","--rune-swipe-old-host");
     auto snapshot=[&](){
         World world;check(authority.capture(world),"capture native world");
+        if(oldSwipeHost)for(auto& entity:world)if(entity.kind==EntityKind::Weapon)entity.flags&=~uint8_t(4);
         uint64_t released=0;
         for(const auto& event:authority.pendingActors()) {
             if(event.operation==ActorOperation::Spawn) {check(replica.spawn(game,event)!=nullptr,"spawn presentation actor");spawned.insert(event.ref.id);}
@@ -137,6 +142,35 @@ void RunRuneNetworkNativeProbe(Engine& game)
         check(replica.install(decoded),"install native world");replica.present(1);
         return UObject::TryCast<UPlayerPawn>(replica.actor(authority.identity(p)));
     };
+    if(commandline->HasArg("","--rune-swipe-replica-probe")) {
+        RuneDualWield::Enabled=false;reset(240);give(p,"VikingShortSword",true);
+        auto* remote=snapshot();check(remote && remote->Weapon(),"replica equipped for swipe");
+        replica.tickEffects(1.f/60);check(!remote->Weapon()->GetUObject("Swipe"),"no idle swipe");
+        check(action(1,ActionKind::Attack),"real sword swing for swipe");
+        int hostFrames=0,clientFrames=0,overlap=0;float maxArea=0;
+        for(int i=0;i<100;++i) {
+            tick(1);
+            if(i%2==0)remote=snapshot();
+            replica.tickEffects(1.f/60);
+            bool host=p->Weapon()->GetUObject("Swipe") || p->Weapon()->GetStateName()=="Swinging";
+            auto* swipe=UObject::TryCast<UActor>(remote->Weapon()->GetUObject("Swipe"));
+            bool visible=false;
+            if(swipe && swipe->GetBool("IsLoaded")) {
+                check(swipe->Class->Name=="WeaponSwipeBlue","authored swipe color");
+                RuneParticles::ArrayView particles(swipe);
+                for(int j=0;j<int(swipe->GetByte("ParticleCount"));++j)if(particles.Valid(j)) {
+                    auto pt=[&](int k){return particles.Ref<vec3>(j,RuneParticles::Field::Points,k);};
+                    float area=length(cross(pt(1)-pt(0),pt(3)-pt(0)));
+                    maxArea=std::max(maxArea,area);visible|=area>1.f;
+                }
+            }
+            hostFrames+=host;clientFrames+=visible;overlap+=visible && host;
+            if(i==99)check(!visible,"swipe fades after swing");
+        }
+        std::cout<<"REPLICA_SWIPE host="<<hostFrames<<" visible="<<clientFrames<<" overlap="<<overlap<<" area="<<maxArea<<std::endl;
+        check(hostFrames && overlap && maxArea>1.f,"replica blade sweeps a visible strip during the real attack");
+        return;
+    }
     if(commandline->HasArg("","--rune-ceiling-recovery-probe")) {
       reset(150);p->SetLocation(origin+vec3(0,0,100));p->GotoState("EdgeHanging","Begin");p->SetPhysics(PHYS_Flying);
       p->AnimSequence()="intropullupA";p->AnimFrame()=.99f;p->AnimRate()=0;
@@ -163,7 +197,238 @@ void RunRuneNetworkNativeProbe(Engine& game)
       check(!RuneBash::DamageReaction(target,p,24),"authority immunity prevents repeat stun");
       std::cout<<"RUNE_STAGGER_NETWORK_OK replicated=1 control_restored=1 immunity=1"<<std::endl;return;
     }
-    reset(150);give(p,"VikingShortSword",true);auto* off=UObject::TryCast<UWeapon>(give(p,"HandAxe",false));
+    if(commandline->HasArg("","--rune-finisher-probe")){
+        auto type=commandline->GetArg("","--rune-finisher-probe","VikingShortSword");
+        auto mode=commandline->GetArg("","--fin-case","rear");
+        std::string second="RomanSword";
+        if(mode.starts_with("pairtorso-")){second=mode.substr(10); mode="pairtorso";}
+        if(type=="roster"){
+            auto package=commandline->GetArg("","--fin-case","RuneI");
+            auto all=game.packages->GetPackage(package=="list"?"RuneI":package)->GetAllObjects<UClass>();
+            for(auto* c:all){
+                for(auto* base=static_cast<UStruct*>(c);base;base=base->BaseStruct)if(base->Name=="Weapon"){
+                    std::cout<<"FIN_WEAPON "<<c->Name.ToString()<<" damage="<<c->GetDefaultObject<UWeapon>()->GetInt("Damage")<<std::endl;
+                    break;
+                }
+            }
+            return;
+        }
+        bool pinTest=mode=="pinattack" || mode=="pinmove" || mode=="pinbot" || mode=="pindestroy";
+        RuneDualWield::Enabled=mode=="pair" || mode=="pairtorso" || mode=="cross";
+        reset(45);
+        auto* w=UObject::Cast<UWeapon>(give(p,type.c_str(),true));
+        if(mode=="pair" || mode=="pairtorso"){
+            auto* spare=UObject::Cast<UWeapon>(give(p,second.c_str(),false));
+            check(RuneDualWield::Equip(p,spare),"equip finisher pair");
+        }
+        check(w==p->Weapon(),"finisher fixture weapon equipped");
+        auto faceAway=[&](){target->SetRotation(Rotator::FromVector(direction));target->ViewRotation()=target->Rotation();};
+        if(mode=="rear" || mode=="pair" || mode=="off" || mode=="sweep" || mode=="sever" || mode=="leg" || mode=="bot" || mode=="throw" || mode=="pairtorso" || pinTest)faceAway();
+        if(mode=="off")RuneBattleLaws::Campaign=RuneBattleLaws::All&~RuneBattleLaws::Finishers;
+        if(mode=="stun")target->RuneBashPhase=2;
+        if(mode=="natural" || mode=="ability")target->Health()=1;
+        if(mode=="miss" || mode=="expired" || mode=="riposte"){
+            give(target,"VikingShortSword",true);
+            reset(240);
+            check(action(2,ActionKind::Attack),"defender swings outside reach");
+            int n=0;
+            while(target->finisherMissUntil<=game.TotalTime && n++<110)tick(1);
+            std::cout<<"FIN_MISS start="<<target->finisherSwingStart<<" end="<<target->finisherMissUntil<<" now="<<game.TotalTime<<std::endl;
+            check(target->finisherMissUntil>game.TotalTime,"actual missed swing opens a response");
+            check(target->SetLocation(origin+direction*45.f),"close on recovery");
+            if(mode=="expired")tick(22);
+            World observed;check(authority.capture(observed),"capture missed swing opening");
+            auto it=std::find_if(observed.begin(),observed.end(),[&](const Entity& e){return e.ref==authority.identity(target);});
+            check(it!=observed.end() && bool(it->flags&FinisherOpeningFlag)==(mode!="expired"),"bot sees actual whiff interval only");
+        }
+        if(mode=="friendly"){
+            faceAway();game.GameInfo->SetFloat("FriendlyFireScale",0);
+            for(auto* fighter:{p,target})fighter->GetUObject("PlayerReplicationInfo")->SetByte("Team",0);
+        }
+        if(mode=="cross"){
+            give(target,"VikingShortSword",true);check(RuneDualWield::Equip(target,UObject::Cast<UWeapon>(give(target,"RomanSword",false))),"crossed guard fixture");
+            tick(2);check(action(2,ActionKind::RaiseShield,2),"real crossed guard input");tick(18);
+            check(RuneDualWield::Blocks(target,p),"crossed guard ready");
+            target->finisherMissUntil=game.TotalTime+.20; // Expose a frontal opening to challenge the defense.
+        }
+        if(mode=="block"){give(target,"VikingShield",true);check(action(2,ActionKind::RaiseShield,2),"raise shield");tick(20);}
+        auto* m=UObject::Cast<USkelModel>(GetRuneDisplayMesh(target));
+        int joint=-1;for(size_t j=0;j<m->Joints.size();++j)if(m->Joints[j].Name==(mode=="sever"?"head":mode=="leg"?"lknee":"chest"))joint=int(j);
+        check(joint>=0 && joint<32,"fixture hit joint");
+        int initial=target->Health();
+        if(mode=="kickopening" || mode=="kickwounded"){
+            faceAway();
+            target->RuneBashPhase=2;
+            if(mode=="kickwounded")target->Health()=1;
+            initial=target->Health();
+            check(RuneFinisher::Opening(p,target),"kick fixture has a genuine finisher opening");
+            RuneKick::CommitImpact(p,target,false);
+            std::cout<<"KICK_ORDINARY before="<<initial<<" after="<<target->Health()<<" hands="<<RuneFinisher::Hands(p)<<std::endl;
+            check(target->Health()<initial && (target->Health()<=0)==(mode=="kickwounded"),"kick uses ordinary damage");
+            check(!RuneFinisher::Hands(p) && !p->finisherCut,"kick cannot start a kill move");
+            return;
+        }
+        if(mode=="ability" || mode=="abilityfront"){
+            CallEvent(target,"JointDamaged",{ExpressionValue::IntValue(12),ExpressionValue::ObjectValue(p),ExpressionValue::VectorValue(target->Location()),ExpressionValue::VectorValue(direction*1200.f),ExpressionValue::NameValue("Blunt"),ExpressionValue::IntValue(0)});
+        }else if(mode=="bot"){
+            RuneBot::Brain brain(717,1);MatchStatus status;status.mode=GameMode::Deathmatch;status.phase=MatchPhase::Playing;
+            bool attacked=false;
+            for(int attempt=0;attempt<35 && !attacked;++attempt){
+                tick(3);snapshot();World seen;check(authority.capture(seen),"bot sees combatants");
+                for(auto* a:game.Level->Actors)if(a && a->NetworkReplica)game.Level->Collision.RemoveFromCollision(a);
+                auto d=brain.think(game,replica,seen,status,authority.identity(p),now);
+                if(!d.action)continue;
+                auto input=d.input;input.sequence=++actionId;input.createdMs=now;
+                AdmittedAction request{{actionId,actionId,now,input.life,*d.action},input,now};
+                bool admitted=authority.action(1,request,now);
+                attacked=admitted && *d.action==ActionKind::Attack;
+            }
+            check(attacked,"multiplayer bot selects and commits real Attack");
+        }else if(mode=="throw" || mode=="throwfront"){
+            w->SetOwner(p);w->GotoState("Throw","Begin");w->Velocity()=direction*700.f;
+            CallEvent(w,"Touch",{ExpressionValue::ObjectValue(target)});
+        }else if(mode=="sweep" || mode=="pair" || mode=="riposte"){
+            check(action(1,ActionKind::Attack),"real attack action");
+        }else{
+            CallEvent(w,"StartAttack");
+            CallEvent(w,"DoWeaponSwipe",{ExpressionValue::ObjectValue(target),ExpressionValue::IntValue(1u<<joint),ExpressionValue::IntValue(0),
+                ExpressionValue::VectorValue(target->Location()),ExpressionValue::VectorValue(vec3(0,0,1)),ExpressionValue::VectorValue(direction*100.f)});
+        }
+        bool lethal=mode!="off" && mode!="front" && mode!="expired" && mode!="block" && mode!="throwfront" && mode!="friendly" && mode!="cross" && mode!="abilityfront";
+        const bool ordinaryWeapon=w->IsA("Torch") || w->IsA("LimbWeapon");
+        if(ordinaryWeapon)lethal=mode=="natural" || mode=="ability";
+        bool physical=false,shown=false,severed=false;int delay=-1;
+        for(int i=0;i<75;++i){
+            tick(1);
+            if(target->Health()>0)continue;
+            if(delay<0)delay=i;
+            unsigned bodies=0;UActor* body=nullptr;
+            for(auto* a:game.Level->Actors)if(a && !a->NetworkReplica && !a->bDeleteMe() && a->IsA("RuneCarcass") && RunePhysics::Controls(a)){
+                physical=true;++bodies;body=a;
+                if(mode=="sever" && a->HasProperty("SkelGroupFlags"))severed=static_cast<int*>(target->GetProperty("BodyPartHealth"))[5]<=0;
+            }
+            if(i==delay){
+                auto* remote=snapshot();
+                shown=remote && RuneFinisher::Hands(remote)==((mode=="pair" || mode=="pairtorso")?3:(mode=="throw" || mode=="ability" || ordinaryWeapon)?0:1);
+                check(remote->finisherCut==p->finisherCut,"remote finisher motion matches hit region");
+                check(physical && bodies==1,"single articulated corpse on kill tick");
+                auto* copy=replica.actor(authority.identity(body));
+                check(copy && RunePhysics::Controls(copy),"remote articulated body on first death snapshot");
+            }
+            if(i==delay+6 && (mode=="pairtorso" || (mode=="pair" && !p->finisherCut))){
+                check(!p->finisherCut,"torso impale");
+                auto* model=UObject::Cast<USkelModel>(GetRuneDisplayMesh(p));auto bones=model->ActorJointMatrices(p);
+                for(auto* blade:{p->Weapon(),p->Dual.offhand}){
+                    auto grip=GetRuneMeshToWorld(p)*RuneDualWield::Attachment(*model,p,blade,bones);
+                    float side=blade==p->Weapon()?1.f:-1.f;auto family=RuneFinisher::Style(blade);
+                    vec3 aim=family==RuneFinisher::Family::Sword?vec3(1,-side*.08f,0):family==RuneFinisher::Family::Axe?vec3(.5f,-side*.75f,-.45f):vec3(.55f,-side*.20f,-.82f);
+                    vec3 expected=direction*aim.x+vec3(-direction.y,direction.x,0)*aim.y+vec3(0,0,aim.z);
+                    float alignment=dot(normalize((grip*vec4(blade->GetVector("SweepVector"),0)).xyz()),normalize(expected));
+                    std::cout<<"FIN_BLADE_FORWARD "<<alignment<<std::endl;
+                    check(alignment>.80f,"both rendered weapons follow their own finishing motion");
+                }
+            }
+            if(i>delay+6)break;
+        }
+        std::cout<<"FIN_RESULT weapon="<<type<<" mode="<<mode<<" before="<<initial<<" after="<<target->Health()<<" delay="<<delay<<" physical="<<physical<<" remote="<<shown<<" sever="<<severed<<std::endl;
+        check(lethal==(target->Health()<=0),"lethality");
+        if(pinTest){
+            tick(78);
+            auto* copy=snapshot();
+            check(p->finisherHeld && copy && copy->finisherHeld,"held pose still replicated well after attack");
+            check(length((copy->finisherAimWorld-copy->Location())-(p->finisherAimWorld-p->Location()))<.25f,
+                  "remote and late snapshots carry the exact blade contact");
+            UActor* corpse=nullptr;
+            for(auto* a:game.Level->Actors)if(a && RunePhysics::Impaled(a))corpse=a;
+            check(corpse && RunePhysics::Controls(corpse) && !RuneCorpse::Throwable(corpse),"supported ragdoll cannot be picked up");
+            int hp=target->Health();
+            if(mode=="pinbot"){
+                RuneBot::Brain brain(717,1);MatchStatus status;status.mode=GameMode::Deathmatch;status.phase=MatchPhase::Playing;
+                World observed;check(authority.capture(observed),"bot observes active impale");
+                auto d=brain.think(game,replica,observed,status,authority.identity(p),now);
+                check(d.action && *d.action==ActionKind::Attack,"bot chooses to pull the blade free");
+                check(action(1,*d.action),"bot releases through host Attack");
+            }else if(mode=="pinattack")check(action(1,ActionKind::Attack),"next deliberate attack withdraws");
+            else if(mode=="pinmove"){
+                for(auto* a:game.Level->Actors)if(a && a->NetworkReplica)game.Level->Collision.RemoveFromCollision(a);
+                check(p->SetLocation(p->Location()+direction*12.f),"lean into the blade");tick(2);
+                check(p->finisherHeld,"forward movement keeps the body supported");
+                check(p->SetLocation(p->Location()-direction*22.f),"step away from the body");
+            }else {
+                corpse->Destroy();
+            }
+            tick(2);copy=snapshot();
+            check(!p->finisherHeld && !copy->finisherHeld && !RunePhysics::Impaled(corpse),"authority and client release");
+            check(target->Health()==hp,"withdrawal does not deal damage twice");
+            if(mode!="pindestroy")check(RunePhysics::Controls(corpse),"released body stays the same articulated corpse");
+            tick(14);
+            check(!RuneFinisher::Hands(p) && !RuneFinisher::Hands(copy),"both arms leave the pin pose");
+        }
+        if(ordinaryWeapon && target->Health()>0){
+            snapshot();auto* shownTarget=UObject::TryCast<UPawn>(replica.actor(authority.identity(target)));
+            check(shownTarget && shownTarget->Health()==target->Health() && !RuneFinisher::Hands(p),"ordinary weapon health replicates without a finishing pose");
+        }
+        if(mode=="leg"){
+            unsigned detached=0;for(auto* a:game.Level->Actors)if(a && !a->NetworkReplica && !a->bDeleteMe() && RuneLeg::Detached(a))++detached;
+            check(detached==(RuneFinisher::Style(w)==RuneFinisher::Family::Hammer?0:1),"leg cut for edged hit only");
+            if(detached){
+                UActor* leg=nullptr;
+                for(auto* a:game.Level->Actors)if(a && !a->NetworkReplica && !a->bDeleteMe() && RuneLeg::Detached(a))leg=a;
+                int upright=0,turning=0;bool flat=false;
+                for(int f=0;f<120;++f){
+                    tick(1);snapshot();
+                    auto* copy=replica.actor(authority.identity(leg));
+                    check(copy && RuneLeg::Detached(copy),"replicated leg mesh");
+                    int angle=std::abs(int(int16_t(leg->Rotation().Roll)));
+                    check(std::abs(int(int16_t(copy->Rotation().Roll-leg->Rotation().Roll)))<=1,"replicated leg tilt");
+                    if(leg->Physics()==PHYS_Rotating && angle==0)++upright;
+                    if(angle>0 && angle<16384)++turning;
+                    if(leg->Physics()==PHYS_None && angle==16384){flat=true;break;}
+                }
+                std::cout<<"LEG_FALL upright_ticks="<<upright<<" tipping_ticks="<<turning<<" flat="<<flat<<std::endl;
+                check(upright>=4 && turning>=4 && flat,"detached leg balances, tips and rests");
+            }
+        }
+        if(lethal)check(physical && shown && (mode!="sever" || severed),"physical finisher and replica");
+        else if(mode=="friendly" || mode=="block")check(target->Health()==initial,"full protection");
+        else check(target->Health()<initial,"ordinary damage");
+        return;
+    }
+    reset(150);give(p,"VikingShortSword",true);auto* off=UObject::TryCast<UWeapon>(give(p,commandline->HasArg("","--rune-dual-followup-probe") && !commandline->HasArg("","--follow-axe")?"VikingShortSword":"HandAxe",false));
+    if(commandline->HasArg("","--rune-dual-followup-probe")) {
+        give(p,"VikingShield",true);
+        auto series=[&](bool dual,float distance) {
+            RuneDualWield::Enabled=dual;
+            int total=0,firstRight=0;
+            for(int i=0;i<8;++i) {
+                reset(distance);
+                tick(1);
+                check(RuneDualWield::Equipped(p)==dual,"requested equipment");
+                int before=target->Health();
+                check(action(1,ActionKind::Attack),"committed swing");
+                if(dual && distance==45 && i==2) {
+                    int elapsed=0;
+                    while(elapsed<80 && !p->Dual.followAvailable){tick(1);++elapsed;}
+                    auto* remote=snapshot();
+                    check(remote && remote->Dual.followAvailable && !remote->Dual.left,"paired cut reaches remote player");
+                    tick(80-elapsed);
+                } else tick(80);
+                int damage=before-target->Health();
+                std::cout<<"FOLLOW_STRIKE dual="<<dual<<" distance="<<distance<<" swing="<<i+1<<" damage="<<damage<<std::endl;
+                if(i==0)firstRight=damage;
+                if(dual && distance==45 && i==2)check(damage>firstRight,"third attack lands both weapons");
+                total+=damage;
+            }
+            return total;
+        };
+        int distance=commandline->GetArgInt("","--follow-distance",45);
+        int single=series(false,distance);
+        int paired=series(true,distance);
+        check(single>0 && paired>single && paired<2*single,"offhand damage advantage below double");
+        check(series(true,300)==0,"both weapons miss outside reach");
+        std::cout<<"FOLLOW_BALANCE_OK shield="<<single<<" dual="<<paired<<std::endl;
+        return;
+    }
     // Native eligibility and execution gates, not just menu-model checks.
     {
       auto original=RuneBattleLaws::Campaign.load();RuneBattleLaws::Campaign=0;

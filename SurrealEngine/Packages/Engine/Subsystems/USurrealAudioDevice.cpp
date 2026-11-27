@@ -11,6 +11,7 @@
 #include "Engine.h"
 #include "Package/PackageManager.h"
 #include "Package/IniProperty.h"
+#include "Utils/CommandLine.h"
 #include "Packages/Engine/UViewport.h"
 #include "Packages/Engine/Actors/UActor.h"
 #include "Packages/Engine/Actors/Pawn/UPlayerPawn.h"
@@ -420,7 +421,10 @@ void USurrealAudioDevice::UpdateSounds(const mat4& listener)
                 if (Playing.Occluded != (target > 0.5f))
                 {
                     Playing.Occluded = target > 0.5f;
-                    LogMessage("RUNE_AUDIO_OCCLUSION channel="+std::to_string(i)+" blocked="+std::to_string(Playing.Occluded));
+                    // Diagnostic only: in normal play this was >99% of all log lines.
+                    static const bool logOcclusion = commandline && commandline->HasArg("", "--rune-audio-occlusion-log");
+                    if (logOcclusion)
+                        LogMessage("RUNE_AUDIO_OCCLUSION channel="+std::to_string(i)+" blocked="+std::to_string(Playing.Occluded));
                 }
                 Playing.Obstruction += (target - Playing.Obstruction) * 0.5f;
                 m_Device->SetObstruction((int)i, EnvironmentEnabled ? Playing.Obstruction : 0.0f);

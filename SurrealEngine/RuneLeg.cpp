@@ -33,7 +33,14 @@
 #include <iostream>
 
 namespace RuneLeg { namespace {
-struct Anatomy {int hip[2]{-1,-1},knee[2]{-1,-1},ankle[2]{-1,-1};uint16_t groups[2]{};bool valid=false;std::vector<uint8_t> faces[4];vec3 center[2]{};bool centered[2]{};};
+constexpr int QuarterTurn=16384, SupportSteps=16;
+constexpr float LegCollisionHeight=15.f;
+struct LegFootprint {
+ bool ready=false;
+ vec3 pivot{};
+ float lift[SupportSteps+1]{};
+};
+struct Anatomy {int hip[2]{-1,-1},knee[2]{-1,-1},ankle[2]{-1,-1};uint16_t groups[2]{};bool valid=false;std::vector<uint8_t> faces[4];LegFootprint foot[2];};
 std::map<std::tuple<const USkelModel*,const USkelModel*,int>,Anatomy> rigs;
 ULevelInfo* rigLevel=nullptr;
 thread_local Contact current,replayed;
@@ -90,13 +97,15 @@ UActor* detach(UPawn* p,int side){
  auto* source=static_cast<int*>(p->GetProperty("SkelGroupFlags"));auto* flags=static_cast<int*>(limb->GetProperty("SkelGroupFlags"));
  auto** from=static_cast<UObject**>(p->GetProperty("SkelGroupSkins"));auto** skins=static_cast<UObject**>(limb->GetProperty("SkelGroupSkins"));
  for(int g=0;g<16;++g){flags[g]=source[g];skins[g]=from[g];}
- limb->SetCollision(false,false,false);limb->SetCollisionSize(8,15);limb->bCollideWorld()=true;
+ limb->SetCollision(false,false,false);limb->SetCollisionSize(8,LegCollisionHeight);limb->bCollideWorld()=true;
  limb->GotoState("FallingGib","Begin");limb->AnimSequence()="neutral_idle";limb->AnimFrame()=0;limb->AnimRate()=0;limb->bAnimLoop()=false;
  mark(limb,3+side);
+ limb->bFixedRotationDir()=false;limb->RotationRate()={0,0,0};
+ limb->SetRotation(Rotator(0,p->Rotation().Yaw,0));
  limb->Velocity()=p->Velocity()*.3f+vec3(0,0,100);limb->SetPhysics(PHYS_Falling);limb->LifeSpan()=25;
  return limb;
 }
-void sever(Contact c){
+void sever(Contact c,bool finisher=false){
  auto* p=c.target;auto r=anatomy(p);if(!r.valid)return;
  // Create the detached representation first; failed allocation leaves the leg intact.
  auto* limb=detach(p,c.side);if(!limb)return;
@@ -104,6 +113,7 @@ void sever(Contact c){
  auto* flags=static_cast<int*>(p->GetProperty("SkelGroupFlags"));for(int g=0;g<16;++g)if(r.groups[c.side]&(1u<<g))flags[g]|=PF_Invisible;
  auto* joints=static_cast<uint8_t*>(p->GetProperty("JointFlags"));auto* model=UObject::Cast<USkelModel>(GetRuneDisplayMesh(p));
  for(size_t j=0;j<model->Joints.size() && j<50;++j)if(descendant(*model,int(j),r.hip[c.side]))joints[j]&=~uint8_t(1);
+ if(finisher)return; // Death already owns the victim's animation and physics.
  p->RuneKickActive=p->RuneKickPending=false;
  auto* proxy=UObject::TryCast<UActor>(p->GetUObject("AnimProxy"));if(proxy)proxy->GotoState("Idle","Begin");
  if(p->GetStateName()=="Uninterrupted")p->GotoState(UObject::TryCast<UPlayerPawn>(p)?"PlayerWalking":"Fighting","Begin");
@@ -111,6 +121,9 @@ void sever(Contact c){
  if(p->AnimSequence()=="neutral_kick")p->LoopAnim("neutral_idle",1,.1f,0);
  LogMessage("RUNE_KICK_COUNTER actor="+p->Class->Name.ToString()+" side="+std::to_string(c.side)+" health="+std::to_string(p->Health())+" limb="+limb->Name.ToString());
 }
+}
+void SeverForFinisher(UPawn* victim,int side){
+ if(side>=0 && side<=1 && !protectedPawn(victim) && !marker(victim))sever({nullptr,nullptr,victim,side},true);
 }
 int Missing(UActor* a){
  auto* p=UObject::TryCast<UPawn>(a);if(!p || p->Health()<=0 || !p->HasProperty("BodyPartHealth"))return -1;
@@ -192,12 +205,69 @@ void ApplyPose(const USkelModel& m,UActor* a,Array<RuneJointPose>& pose){
  for(int j:{r.hip[good],r.knee[good],r.ankle[good]})pose[j]=BlendRunePose(pose[j],rest[j],amount);
  pose[r.knee[good]].Rotation.Roll+=int((1-wave)*1100.f*amount);
 }
+bool LandDetached(UActor* leg,UActor* support){
+ if(leg->NetworkReplica || !Detached(leg))return false;
+ leg->GotoState("","");
+ leg->SetPhysics(PHYS_Rotating);
+ leg->SetBase(support,true);
+ leg->Velocity()=leg->Acceleration()=vec3(0);
+ leg->RotationRate()=Rotator(0,0,0);
+ // The actor timer and angular velocity already round-trip through campaign saves.
+ leg->TimerCounter()=0;leg->TimerRate()=.22f;leg->bTimerLoop()=false;
+ return true;
+}
+bool TipDetached(UActor* leg,float dt){
+ int side=loose(leg);if(side<0)return false;
+ if(leg->NetworkReplica || leg->TimerRate()>0)return true;
+ // Gravity accelerates the tip; authority sends normal actor angles to clients.
+ float speed=std::min(75000.f,float(leg->RotationRate().Roll)+180000.f*dt);
+ leg->RotationRate().Roll=int(speed);
+ int old=std::abs(int(int16_t(leg->Rotation().Roll)));
+ int angle=std::min(QuarterTurn,old+int(std::lround(speed*dt)));
+ leg->Rotation().Roll=side?angle:-angle;
+ if(angle==QuarterTurn){leg->RotationRate().Roll=0;leg->SetPhysics(PHYS_None);}
+ return true;
+}
 bool LooseTransform(UActor* a,mat4& out){
- int side=loose(a);if(side<0)return false;auto r=anatomy(a);auto* model=UObject::Cast<USkelModel>(GetRuneDisplayMesh(a));auto* geo=GetRuneGeometry(a);int variant=a->GetByte("SkelMesh");if(variant>=int(geo->Meshes.size()))variant=0;
- size_t seq=0;for(size_t i=0;i<model->Sequences.size();++i)if(model->Sequences[i].Info.Name=="neutral_idle"){seq=i;break;}
- auto bones=model->JointMatrices(model->DecodeFrame(seq,0));vec3 low(1e20f),high(-1e20f);
- const auto& mesh=geo->Meshes[variant];for(const auto& tri:mesh.Triangles)if(r.faces[2+side][size_t(&tri-mesh.Triangles.data())])for(auto i:tri.Index){const auto& v=mesh.Vertices[i];auto q=(bones[v.Joint[0]]*vec4(v.Point[0],1)).xyz()*v.Weight;if(v.Weight!=1)q+=(bones[v.Joint[1]]*vec4(v.Point[1],1)).xyz()*(1-v.Weight);for(int k=0;k<3;++k){low[k]=std::min(low[k],q[k]);high[k]=std::max(high[k],q[k]);}}
- out=mat4::translate(a->Location())*Coords::Rotation(a->Rotation()).ToMatrix()*mat4::scale(a->DrawScale())*Coords::Rotation(model->RotationOffset).ToMatrix()*mat4::translate(-(low+high)*.5f);return true;
+ int side=loose(a);if(side<0)return false;
+ auto& rig=anatomy(a);if(!rig.valid)return false;
+ auto* model=UObject::Cast<USkelModel>(GetRuneDisplayMesh(a));
+ auto basis=Coords::Rotation(model->RotationOffset).ToMatrix();
+ auto& foot=rig.foot[side];
+ if(!foot.ready){
+  auto* geo=GetRuneGeometry(a);int variant=a->GetByte("SkelMesh");
+  if(variant>=int(geo->Meshes.size()))variant=0;
+  const auto& mesh=geo->Meshes[variant];size_t seq=0;
+  for(size_t i=0;i<model->Sequences.size();++i)if(model->Sequences[i].Info.Name=="neutral_idle"){seq=i;break;}
+  auto bones=model->JointMatrices(model->DecodeFrame(seq,0));
+  std::vector<vec3> points;
+  vec3 low(1e20f),high(-1e20f);std::vector<bool> seen(mesh.Vertices.size());
+  for(size_t t=0;t<mesh.Triangles.size();++t)if(rig.faces[2+side][t])for(auto i:mesh.Triangles[t].Index){
+   if(seen[i])continue;seen[i]=true;
+   const auto& v=mesh.Vertices[i];
+   auto q=(bones[v.Joint[0]]*vec4(v.Point[0],1))*v.Weight;
+   if(v.Weight!=1)q+=(bones[v.Joint[1]]*vec4(v.Point[1],1))*(1-v.Weight);
+   auto point=(basis*q).xyz();points.push_back(point);
+   for(int k=0;k<3;++k){low[k]=std::min(low[k],point[k]);high[k]=std::max(high[k],point[k]);}
+  }
+  if(points.empty())return false;
+  foot.pivot=(low+high)*.5f;foot.pivot.z=low.z;
+  for(int i=0;i<=SupportSteps;++i){
+   auto tilt=Coords::Rotation(Rotator(0,0,(side?1:-1)*i*QuarterTurn/SupportSteps)).ToMatrix();
+   float bottom=1e20f;
+   for(auto p:points)bottom=std::min(bottom,(tilt*vec4(p-foot.pivot,0)).z);
+   foot.lift[i]=-bottom;
+  }
+  foot.ready=true;
+ }
+ // Rotate about the foot. The mesh support height keeps the boot and cut end
+ // on the floor as they take turns bearing the weight.
+ float fraction=std::min(1.f,std::abs(float(int16_t(a->Rotation().Roll)))/QuarterTurn)*SupportSteps;
+ int i=std::min(int(fraction),SupportSteps-1);
+ float lift=foot.lift[i]+(foot.lift[i+1]-foot.lift[i])*(fraction-i);
+ vec3 at=a->Location()+vec3(0,0,lift*a->DrawScale()-LegCollisionHeight);
+ out=mat4::translate(at)*Coords::Rotation(a->Rotation()).ToMatrix()*mat4::scale(a->DrawScale())*mat4::translate(-foot.pivot)*basis;
+ return true;
 }
 namespace {
 struct Wound {UPawn* pawn=nullptr;double dropAt=0,markAt=0;};

@@ -29,6 +29,29 @@
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
+#include <fstream>
+#include <iterator>
+#include <cstring>
+
+// The engine reports fatal errors only to native-run.log (stdout/stderr). Copy the
+// reason to launch-error.txt so MainActivity can show it instead of closing silently.
+static void WriteLaunchError(const std::string& files,std::string reason)
+{
+	std::fflush(stdout);std::fflush(stderr);
+	std::ifstream in(files+"/native-run.log",std::ios::binary);
+	if(in) {
+		in.seekg(0,std::ios::end);const std::streamoff size=in.tellg();
+		in.seekg(size>65536?size-65536:0);
+		const std::string tail((std::istreambuf_iterator<char>(in)),std::istreambuf_iterator<char>());
+		for(const char* key:{"DIRECT_LAUNCH_FAILED: ","ANDROID_LAUNCH_FAILED: "}) {
+			const auto at=tail.rfind(key);if(at==std::string::npos)continue;
+			const auto begin=at+std::strlen(key),end=tail.find('\n',begin);
+			reason=tail.substr(begin,end==std::string::npos?std::string::npos:end-begin);break;
+		}
+	}
+	std::ofstream out(files+"/launch-error.txt",std::ios::binary|std::ios::trunc);
+	out<<reason;
+}
 
 extern "C" JNIEXPORT void JNICALL Java_org_runeclassic_port_MainActivity_nativeSetEnhanced(JNIEnv*, jclass, jboolean enabled)
 {
@@ -254,9 +277,11 @@ extern "C" __attribute__((visibility("default"))) int SDL_main(int argc,char** a
 			if (args.back() == "--frame-pacing=0") setenv("SURREAL_ANDROID_FRAME_PACING", "0", 1);
 		}
 		GameApp app;
-		return app.main(std::move(args));
+		const int result=app.main(std::move(args));
+		if(result!=0)WriteLaunchError(files,"The game stopped with error code "+std::to_string(result)+".");
+		return result;
 	}
-	catch(const std::exception& e){std::cerr << "ANDROID_LAUNCH_FAILED: " << e.what() << '\n';return 1;}
+	catch(const std::exception& e){std::cerr << "ANDROID_LAUNCH_FAILED: " << e.what() << '\n';WriteLaunchError(files,e.what());return 1;}
 }
 
 extern "C" JNIEXPORT jint JNICALL Java_org_runeclassic_port_RuneHostService_nativeRun(JNIEnv* env,jclass,jstring root,jstring run,jobjectArray arguments)

@@ -36,6 +36,13 @@ public:
     int RuneKickHits=0, RuneKickBlocks=0;
 
     // Native-only bash state; pending impacts and stun protection reset on load.
+    // Transient combat clocks; a new life cannot inherit a missed swing.
+    double finisherSwingStart=-1, finisherContact=-1, finisherMissUntil=-1, finisherPoseStart=-1;
+    unsigned char finisherHands=0;
+    bool finisherCut=false;
+    vec3 finisherAimWorld{};
+    double finisherAimTime=-1, finisherWithdraw=-1;
+    bool finisherHeld=false;
     int RuneBashPhase=0, RuneBashHits=0, RuneBashBlocks=0, RuneBashStuns=0;
     bool RuneBashPending=false;
     float RuneBashImpactAt=-1000, RuneBashImpactStrength=0; // transient confirmed-hit presentation

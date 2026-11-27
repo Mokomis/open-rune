@@ -16,6 +16,7 @@ public:
 	UActor* Actor = nullptr;
 	BspNode* Node = nullptr;
 	BspNode* NodeHead = nullptr;
+	int Joint = -1; // Rune collision joint that stopped the move, when one did
 };
 
 class CollisionHitList

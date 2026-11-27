@@ -67,6 +67,7 @@ version0.1.0-dev.16/build16 require matching host/client builds.
 ## Evidence
 
 Task artifacts: C:/OpenRune/outputs/spider-monkeys-20261109 and controller
+/Users/rwillmore/OpenRuneArtifacts/SpiderMonkeys-20261109. Use final checkpoint and
 receipts; rejected visual prototypes and failed intermediate logs are preserved.
 Tests include actual BSP wall movement, sideways travel, jumping/dropping, law/save
 release, collision-clear top traversal, actual Jump/Use admission, serialized
@@ -78,3 +79,4 @@ preserve limb rotations, scales and local positions. Mac rendering uses native28
 This is not an all-map human playtest or a sustained cross-platform FPS claim.
 
 Alternating-cycle follow-up evidence: C:/OpenRune/outputs/spider-alternating-20261109
+and controller /Users/rwillmore/OpenRuneArtifacts/SpiderAlternating-20261109.

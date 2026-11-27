@@ -2,6 +2,7 @@
 #include "Precomp.h"
 #include "RunePhysics.h"
 #include "RuneKick.h"
+#include "RuneFinisher.h"
 #include "RuneLeg.h"
 #include "RuneSpider.h"
 #include "RuneDualWield.h"
@@ -139,7 +140,10 @@ void CommitImpact(UPawn* p,UPawn* target,bool blocked)
         target->RuneKickRecoil=d*(6.0f*weight);target->RuneKickRecoilTime=.12f;
         CallEvent(target->GetUObject("Shield"),"PlayHitSound",{ExpressionValue::NameValue("blunt")});
     }else{
-        CallEvent(target,"JointDamaged",{ExpressionValue::IntValue(5),ExpressionValue::ObjectValue(p),ExpressionValue::VectorValue(target->Location()),ExpressionValue::VectorValue(vec3(0)),ExpressionValue::NameValue("blunt"),ExpressionValue::IntValue(0)});
+        {
+            RuneFinisher::KickContact ordinaryKick(target);
+            CallEvent(target,"JointDamaged",{ExpressionValue::IntValue(5),ExpressionValue::ObjectValue(p),ExpressionValue::VectorValue(target->Location()),ExpressionValue::VectorValue(vec3(0)),ExpressionValue::NameValue("blunt"),ExpressionValue::IntValue(0)});
+        }
         if(crossed) { target->RuneKickRecoil=d*(24.f*weight);target->RuneKickRecoilTime=.18f;RuneDualWield::BreakGuard(target,.3f); }
         else if(Alive(target))CallEvent(target,"AddVelocity",{ExpressionValue::VectorValue(d*(440.0f*weight)+vec3(0,0,110.0f*weight))});
     }

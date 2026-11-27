@@ -101,6 +101,8 @@ public:
     bool unbind(openrune::net::EntityRef);
     bool referencesRetired(const openrune::net::Snapshot&) const;
     bool install(const openrune::net::Snapshot&);
+    // Why the last install() returned false (empty after success). For failure reports only.
+    std::string rejection;
     CombatApply applyCombat(const openrune::net::CombatOutcome&);
     bool queueCombat(const openrune::net::CombatOutcome&,uint64_t localNow);
     CombatQueue flushCombat(uint64_t localNow);
@@ -151,3 +153,7 @@ openrune::net::MatchContract MakeRuneMatchContract(Engine&,const std::string& ma
 bool StepRunePredictedMovement(Engine&,UPlayerPawn*,openrune::net::MovementPose&,
     const openrune::net::Input&,const openrune::net::MovementAck&,float);
 void PresentRunePredictedMovement(UPlayerPawn*,const openrune::net::MovementPose&);
+// Diagnostics only: floor height one body-width ahead, relative to the floor here,
+// measured with the player's own collision capsule. No movement is performed.
+struct RuneStepProbe { float x=0,y=0,z=0,limit=0,ahead=0; bool found=false; };
+RuneStepProbe ProbeRuneStepAhead(Engine&,UPlayerPawn*);

@@ -90,7 +90,29 @@ RenderPassManager::RenderPassManager(VulkanRenderDevice* renderer) : renderer(re
 RenderPassManager::~RenderPassManager()
 {
     specializedLighting.erase(this);
-    if (!pipelineCache) return;
+    SavePipelineCache("shutdown");
+}
+
+VulkanPipelineCache* RenderPassManager::CachedPipelines()
+{
+    if (pipelineCache) {
+        pipelineCacheDirty = true;
+        lastPipelineCreated = std::chrono::steady_clock::now();
+    }
+    return pipelineCache.get();
+}
+
+void RenderPassManager::SavePipelineCacheWhenIdle()
+{
+    if (!pipelineCacheDirty || std::chrono::steady_clock::now() - lastPipelineCreated < std::chrono::seconds(3)) return;
+    SavePipelineCache("idle");
+}
+
+void RenderPassManager::SavePipelineCache(const char* reason)
+{
+    if (!pipelineCache || !pipelineCacheDirty) return;
+    // Clear first: a failed save is not retried every frame. New pipelines re-arm it.
+    pipelineCacheDirty = false;
     try {
         const auto bytes = pipelineCache->GetCacheData();
         if (bytes.size() <= sizeof(VkPipelineCacheHeaderVersionOne) || bytes.size() > 16 * 1024 * 1024) return;
@@ -100,7 +122,7 @@ RenderPassManager::~RenderPassManager()
         try {
             File::write_all_bytes(temp.string(), bytes.data(), bytes.size());
             std::filesystem::rename(temp, pipelineCachePath);
-            LogMessage("RUNE_PIPELINE_CACHE_SAVED bytes=" + std::to_string(bytes.size()));
+            LogMessage("RUNE_PIPELINE_CACHE_SAVED reason=" + std::string(reason) + " bytes=" + std::to_string(bytes.size()));
         } catch (...) {
             std::error_code ignored;
             std::filesystem::remove(temp, ignored);
@@ -308,7 +330,7 @@ void RenderPassManager::CreatePipelines()
 			builder.DebugName(debugName);
 
 			auto& target=crest?pipelines.CrestOpaque:water?(variant==33?pipelines.WaterOpaque:pipelines.WaterTransparent):cameraFade?pipelines.CameraFade[variant-35]:pipelines.Pipeline[i];
-            target.Pipeline = builder.Cache(pipelineCache.get()).Create(renderer->Device.get());
+            target.Pipeline = builder.Cache(CachedPipelines()).Create(renderer->Device.get());
 		}
 
 		if(specialized)continue; // Lines/points keep the generic, mode-independent path.
@@ -345,7 +367,7 @@ void RenderPassManager::CreatePipelines()
 			builder.RasterizationSamples(renderer->Textures->Scene->SceneSamples);
 			builder.DebugName(debugName);
 
-			pipelines.LinePipeline[i].Pipeline = builder.Cache(pipelineCache.get()).Create(renderer->Device.get());
+			pipelines.LinePipeline[i].Pipeline = builder.Cache(CachedPipelines()).Create(renderer->Device.get());
 
 			if (i == 0)
 			{
@@ -386,7 +408,7 @@ void RenderPassManager::CreatePipelines()
 			builder.RasterizationSamples(renderer->Textures->Scene->SceneSamples);
 			builder.DebugName(debugName);
 
-			pipelines.PointPipeline[i].Pipeline = builder.Cache(pipelineCache.get()).Create(renderer->Device.get());
+			pipelines.PointPipeline[i].Pipeline = builder.Cache(CachedPipelines()).Create(renderer->Device.get());
 
 			if (i == 0)
 			{
@@ -497,7 +519,7 @@ void RenderPassManager::CreatePresentPipeline()
 			.Layout(Present.PipelineLayout.get())
 			.RenderPass(Present.RenderPass.get())
 			.DebugName("PresentPipeline")
-			.Cache(pipelineCache.get()).Create(renderer->Device.get());
+			.Cache(CachedPipelines()).Create(renderer->Device.get());
 	}
     LogPipelineTiming("present", start);
 }
@@ -514,7 +536,7 @@ void RenderPassManager::CreateScreenshotPipeline()
 			.Layout(Present.PipelineLayout.get())
 			.RenderPass(Postprocess.RenderPass.get())
 			.DebugName("ScreenshotPipeline")
-			.Cache(pipelineCache.get()).Create(renderer->Device.get());
+			.Cache(CachedPipelines()).Create(renderer->Device.get());
 	}
 }
 
@@ -557,7 +579,7 @@ void RenderPassManager::CreateBloomPipeline()
 		.Layout(Bloom.PipelineLayout.get())
 		.RenderPass(Postprocess.RenderPass.get())
 		.DebugName("Bloom.Extract")
-		.Cache(pipelineCache.get()).Create(renderer->Device.get());
+		.Cache(CachedPipelines()).Create(renderer->Device.get());
 
 	Bloom.Combine = GraphicsPipelineBuilder()
 		.AddVertexShader(renderer->Shaders->Postprocess.VertexShader)
@@ -568,7 +590,7 @@ void RenderPassManager::CreateBloomPipeline()
 		.Layout(Bloom.PipelineLayout.get())
 		.RenderPass(Postprocess.RenderPass.get())
 		.DebugName("Bloom.Combine")
-		.Cache(pipelineCache.get()).Create(renderer->Device.get());
+		.Cache(CachedPipelines()).Create(renderer->Device.get());
 
 	Bloom.Scale = GraphicsPipelineBuilder()
 		.AddVertexShader(renderer->Shaders->Postprocess.VertexShader)
@@ -578,7 +600,7 @@ void RenderPassManager::CreateBloomPipeline()
 		.Layout(Bloom.PipelineLayout.get())
 		.RenderPass(Postprocess.RenderPass.get())
 		.DebugName("Bloom.Copy")
-		.Cache(pipelineCache.get()).Create(renderer->Device.get());
+		.Cache(CachedPipelines()).Create(renderer->Device.get());
 
 	Bloom.BlurVertical = GraphicsPipelineBuilder()
 		.AddVertexShader(renderer->Shaders->Postprocess.VertexShader)
@@ -588,7 +610,7 @@ void RenderPassManager::CreateBloomPipeline()
 		.Layout(Bloom.PipelineLayout.get())
 		.RenderPass(Postprocess.RenderPass.get())
 		.DebugName("Bloom.BlurVertical")
-		.Cache(pipelineCache.get()).Create(renderer->Device.get());
+		.Cache(CachedPipelines()).Create(renderer->Device.get());
 
 	Bloom.BlurHorizontal = GraphicsPipelineBuilder()
 		.AddVertexShader(renderer->Shaders->Postprocess.VertexShader)
@@ -598,5 +620,5 @@ void RenderPassManager::CreateBloomPipeline()
 		.Layout(Bloom.PipelineLayout.get())
 		.RenderPass(Postprocess.RenderPass.get())
 		.DebugName("Bloom.BlurHorizontal")
-		.Cache(pipelineCache.get()).Create(renderer->Device.get());
+		.Cache(CachedPipelines()).Create(renderer->Device.get());
 }

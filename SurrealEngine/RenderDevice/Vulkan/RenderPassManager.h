@@ -21,6 +21,9 @@ public:
 
 	void CreateRenderPass();
 	void CreatePipelines();
+	// Persist driver-compiled pipelines once creation has been quiet for a few
+	// seconds. Android usually kills the process without running the destructor.
+	void SavePipelineCacheWhenIdle();
 	VulkanRenderPass* GetScenePass(bool continuation, bool discardHit, bool noHit = false) const;
 
 	void CreatePresentRenderPass();
@@ -87,6 +90,10 @@ private:
     std::unique_ptr<VulkanPipelineCache> pipelineCache;
     std::filesystem::path pipelineCachePath;
     size_t pipelineCacheBytesRead = 0;
+    bool pipelineCacheDirty = false;
+    std::chrono::steady_clock::time_point lastPipelineCreated{};
+    VulkanPipelineCache* CachedPipelines();
+    void SavePipelineCache(const char* reason);
 
 
 	VulkanRenderDevice* renderer = nullptr;

@@ -1878,6 +1878,9 @@ std::vector<VulkanCompatibleDevice> VulkanDeviceBuilder::FindDevices(const std::
 		auto& deviceFeatures = dev.Device->Features;
 		enabledFeatures.Features.samplerAnisotropy = deviceFeatures.Features.samplerAnisotropy;
         enabledFeatures.Features.textureCompressionASTC_LDR = deviceFeatures.Features.textureCompressionASTC_LDR;
+        // BC (DXT) textures are only valid when this feature is enabled; previously they were used without it.
+        enabledFeatures.Features.textureCompressionBC = deviceFeatures.Features.textureCompressionBC;
+        enabledFeatures.Features.textureCompressionETC2 = deviceFeatures.Features.textureCompressionETC2;
         enabledFeatures.Features.shaderStorageImageExtendedFormats = deviceFeatures.Features.shaderStorageImageExtendedFormats;
 		enabledFeatures.Features.fragmentStoresAndAtomics = deviceFeatures.Features.fragmentStoresAndAtomics;
 		enabledFeatures.Features.depthClamp = deviceFeatures.Features.depthClamp;

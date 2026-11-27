@@ -27,6 +27,7 @@ Temporary fine-grained profiling was removed from the release source. Clean buil
 
 The fix is in primary `C:/OpenRune/work/OpenRune-main` and the isolated Crest worktree. Main binary: `build-windows/SurrealEngine.exe`. Crest remains experimental and is not merged into main. Android/Mac defaults and installed clients were not changed. Existing primary uncommitted work, game data, configuration and saves are preserved. No commit or push.
 
+Evidence: `C:/OpenRune/outputs/windows-walk-optimization-20261108`, with controller copy `/Users/rwillmore/OpenRuneArtifacts/WindowsWalkOptimization-20261108`. `profile-results.json`, `deep-results.json`, `cached-results.json`, `qualification/summary.json`, `qualification/pixel-checks.json`, `qualification/acceptance.json` and `release/results.json` distinguish diagnostic, controlled and clean-build checks. The corresponding scripts and baseline binary/source backups are retained. The waterwheel still has substantial other CPU preparation cost; this change does not establish120FPS across all scenes.
 
 ## Earlier waterwheel FPS context
 

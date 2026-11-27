@@ -1,10 +1,12 @@
 
 #include "Precomp.h"
 #include "UActor.h"
+#include "RuneLeg.h"
 #include "VM/ScriptCall.h"
 
 void UActor::TickRotating(float elapsed)
 {
+    if (Physics()==PHYS_Rotating && IsA("Gib") && RuneLeg::TipDetached(this,elapsed))return;
 	if (bRotateToDesired())
 	{
 		if (Rotation() != DesiredRotation())

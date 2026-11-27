@@ -15,6 +15,7 @@
 #include "RuneKick.h"
 #include "RuneLeg.h"
 #include "RuneSpider.h"
+#include "RuneFinisher.h"
 #include "RuneBash.h"
 #include "RuneDualWield.h"
 #include "RuneBloodlust.h"
@@ -214,6 +215,8 @@ void RuneNetworkAuthority::synchronizeLives()
         else if(p->Health()>0 && player.diedAt) {
             if(player.life==UINT32_MAX){combatFault=true;continue;}
             ++player.life;player.diedAt=0;
+            p->finisherSwingStart=p->finisherContact=p->finisherMissUntil=p->finisherPoseStart=-1;
+            p->finisherHands=0;p->finisherCut=false;p->finisherAimTime=-1;p->finisherHeld=false;p->finisherWithdraw=-1;
             defenses.erase(p);pendingCombatActions.erase(p);
             p->Dual={};p->Bloodlust={};p->Slam={};player.lastJump=0;
             player.pendingInput=player.physicsInput=player.heldTicks=player.guardInput=0;
@@ -448,6 +451,10 @@ bool RuneNetworkAuthority::action(uint64_t peer,const AdmittedAction& a,uint64_t
         if(a.action.kind==ActionKind::Use){RuneCorpse::Drop(p);return true;}
         return a.action.kind==ActionKind::LowerShield;
     }
+    if(p->finisherHeld){
+        if(a.action.kind==ActionKind::Attack)return RunePhysics::ReleaseImpale(p);
+        return a.action.kind==ActionKind::LowerShield;
+    }
     switch(a.action.kind)
     {
     case ActionKind::Attack:
@@ -646,13 +653,18 @@ bool RuneNetworkAuthority::deferWeaponCall(UObject* instance,const NameString& n
     // Queue the damage plus its effect once; never repeat the collision query
     // at a later pose or retain VM stack references.
     if(!swipe)return true;
+    attacker->finisherContact=game.TotalTime;
     int low=args[1].ToInt(),high=args[2].ToInt();vec3 location=args[3].ToVector(),normal=args[4].ToVector(),momentum=args[5].ToVector();
     auto* shield=object(target,"Shield");bool hitShield=struck==shield;
     // The same frontal shield rule applies before and during the grace window;
     // deliberately delivering a block late must not grant extra shield coverage.
     bool blocked=hitShield || (struck==target && RuneKick::ShieldBlocks(target,attacker));
+    auto opening=RuneFinisher::Opening(attacker,target);
     auto legContact=RuneLeg::Exposure(weapon,target,uint32_t(low),uint32_t(high),location);
-    return deferContact(attacker,target,blocked,weapon,[weapon,struck,shield,low,high,location,normal,momentum,hitShield,legContact](bool defended){
+    auto* followWeapon=attacker->Dual.followAvailable && !attacker->Dual.left && attacker->Dual.offhand==weapon?attacker->Dual.offhand:nullptr;
+    return deferContact(attacker,target,blocked,weapon,[weapon,struck,shield,low,high,location,normal,momentum,hitShield,legContact,followWeapon,opening,attacker,target](bool defended){
+        RuneDualWield::FollowupDamageScope followupDamage(followWeapon);
+        RuneFinisher::ReplayScope finisher(weapon,target,opening,defended || RuneDualWield::Blocks(target,attacker));
         RuneLeg::ReplayScope legReplay(defended?RuneLeg::Contact{}:legContact);
         auto* hit=defended&&!hitShield?shield:struck;
         if(!hit || hit->bDeleteMe())return;
@@ -724,13 +736,21 @@ bool RuneNetworkAuthority::capture(World& out)
     {
         Entity e; e.ref=identity(a); e.kind=kind(a); e.flags=a->Physics()==PHYS_Walking?2:0;
         if(a->bHidden())e.flags|=32;
-        if(a->IsA("Weapon") && a->GetBool("bPoweredUp"))e.flags|=128;
+        if(e.kind==EntityKind::Weapon) {
+            if(a->GetBool("bPoweredUp"))e.flags|=128;
+            // Bit 2 is kind-specific (guard on pawns, carried on corpses).
+            if(a->GetStateName()=="Swinging" || a->GetUObject("Swipe"))e.flags|=4;
+        }
         // Flag 4 is guard for pawns, and centred relaxed presentation for corpses.
         if(e.kind==EntityKind::Corpse && a->CorpseBody.active)e.flags|=4;
         auto* pawn=UObject::TryCast<UPawn>(a);
         int health=pawn?pawn->Health():(a->HasProperty("Health")?a->GetInt("Health"):0);
         if (health<INT16_MIN || health>INT16_MAX) return fault("health bounds",a);
-        e.health=int16_t(health); e.life=pawn?life(pawn):1; if (pawn && health>0) e.flags|=1;
+        e.health=int16_t(health); e.life=pawn?life(pawn):1; if (pawn && health>0) {
+            e.flags|=1;
+            if(RuneBattleLaws::Allowed(RuneBattleLaws::Finishers) && !pawn->bHidden() && (pawn->RuneBashPhase==2 || pawn->finisherMissUntil>game.TotalTime))
+                e.flags|=FinisherOpeningFlag;
+        }
         // Carcass InitFor inherits the dying pawn's PrePivot; its authored
         // collision resize later changes Location and PrePivot together. The
         // presentation replica retains its class-default pivot (no local VM).
@@ -776,7 +796,12 @@ bool RuneNetworkAuthority::capture(World& out)
             auto& c=e.combat;const auto& d=pawn->Dual;const auto& b=pawn->Bloodlust;
             bool dual=RuneDualWield::Equipped(pawn) && !RuneSpider::Busy(pawn);
             c.offhand=dual?identity(d.offhand):EntityRef{};
-            c.flags=(dual && d.left?1:0)|(dual && d.guard?2:0)|(RuneBloodlust::Active(pawn)?4:0)|(b.phase && b.rushing?8:0)|(RuneSpider::Busy(pawn)?16:0);
+            c.flags=(RuneFinisher::PoseCode(pawn)<<6)|(dual && d.followAvailable && !d.left && !d.guard?32:0)|(dual && d.left?1:0)|(dual && d.guard?2:0)|(RuneBloodlust::Active(pawn)?4:0)|(b.phase && b.rushing?8:0)|(RuneSpider::Busy(pawn)?16:0);
+            if(pawn->finisherHeld && ((c.flags>>6)==1 || (c.flags>>6)==3) && pawn->Health()>0){
+                auto relative=pawn->finisherAimWorld-pawn->Location();
+                auto& aim=c.impaleAim.emplace();
+                for(int axis=0;axis<3;++axis)aim[axis]=int16_t(std::lround(std::clamp(relative[axis],-256.f,256.f)*8.f));
+            }
             c.guard=dual?uint8_t(std::lround(std::clamp(d.guardBlend,0.f,1.f)*255)):0;
             c.meter=uint8_t(std::clamp(pawn->IsA("RunePlayer")?100.f*pawn->GetInt("Strength")/std::max(1,(int)pawn->GetInt("MaxStrength")):b.rage,0.f,100.f));
             c.phase=uint8_t(b.phase);c.age=b.phase?uint16_t(std::lround(std::clamp(b.age,0.f,10.f)*1000)):0;
@@ -931,18 +956,29 @@ bool RuneNetworkReplica::referencesRetired(const Snapshot& snapshot) const
 }
 bool RuneNetworkReplica::install(const Snapshot& s)
 {
-    if (!s.id || s.id<=current.id || !s.tick || s.tick<current.tick || !validWorld(s.world)) return false;
+    rejection.clear();
+    auto reject=[&](std::string why){rejection=std::move(why);return false;};
+    if (!s.id || s.id<=current.id || !s.tick || s.tick<current.tick)
+        return reject("order id="+std::to_string(s.id)+" current="+std::to_string(current.id)+" tick="+std::to_string(s.tick)+" current_tick="+std::to_string(current.tick));
+    if (!validWorld(s.world)) return reject("invalid world entities="+std::to_string(s.world.size()));
     for (auto& e:s.world)
     {
+        const auto who=[&](UActor* a){return " entity="+std::to_string(e.ref.id)+" kind="+std::to_string(int(e.kind))+(a?" class="+a->Class->Name.ToString()+" name="+a->Name.ToString():std::string());};
         auto it=actors.find(e.ref.id);
-        if (it==actors.end() || it->second.first!=e.ref) return false;
+        if (it==actors.end() || it->second.first!=e.ref) return reject(std::string(it==actors.end()?"unbound":"stale generation")+who(nullptr));
         auto* actor=it->second.second;
-        if (actor->bDeleteMe() || !actor->NetworkReplica || kind(actor)!=e.kind || !RunePhysics::ValidateReplica(actor,e.physical) || !validAnimation(actor,e.bodyAnimation) || !validAnimation(object(actor,"AnimProxy"),e.torsoAnimation)) return false;
+        if (actor->bDeleteMe()) return reject("deleted"+who(actor));
+        if (!actor->NetworkReplica) return reject("not replica"+who(actor));
+        if (kind(actor)!=e.kind) return reject("kind mismatch local="+std::to_string(int(kind(actor)))+who(actor));
+        if (!RunePhysics::ValidateReplica(actor,e.physical)) return reject("physics"+who(actor));
+        if (!validAnimation(actor,e.bodyAnimation)) return reject("body animation"+who(actor));
+        if (!validAnimation(object(actor,"AnimProxy"),e.torsoAnimation)) return reject("torso animation"+who(actor));
         if(e.attachmentJoint!=255)
         {
             auto parent=actors.find(e.owner.id);
             auto* model=parent==actors.end()?nullptr:UObject::TryCast<USkelModel>(GetRuneDisplayMesh(parent->second.second));
-            if(!model || e.attachmentJoint>=model->Joints.size())return false;
+            if(!model || e.attachmentJoint>=model->Joints.size())
+                return reject("attachment joint="+std::to_string(e.attachmentJoint)+" owner="+std::to_string(e.owner.id)+(model?" joints="+std::to_string(model->Joints.size()):" no model")+who(actor));
         }
     }
     // All potentially failing validation precedes writes. Assignment below invokes
@@ -976,7 +1012,13 @@ bool RuneNetworkReplica::install(const Snapshot& s)
             const auto* prior=findEntity(previous.world,e.ref);
             double lastWholeBody=prior && prior->life==e.life && prior->combat.offhand==c.offhand?p->Dual.lastWholeBody:-1;
             p->Dual={};p->Dual.lastWholeBody=lastWholeBody;p->Dual.offhand=c.offhand.id?UObject::TryCast<UWeapon>(actors.at(c.offhand.id).second):nullptr;
-            p->Dual.left=(c.flags&1)!=0;p->Dual.guard=(c.flags&2)!=0;p->Dual.guardBlend=float(c.guard)/255;
+            RuneFinisher::PresentHands(p,c.flags>>6,c.impaleAim.has_value());
+            if(c.impaleAim){
+                auto& q=*c.impaleAim;
+                p->finisherAimWorld=p->Location()+vec3(float(q[0]),float(q[1]),float(q[2]))*.125f;
+                p->finisherAimTime=p->finisherPoseStart;
+            }
+            p->Dual.followAvailable=(c.flags&32)!=0;p->Dual.left=(c.flags&1)!=0;p->Dual.guard=(c.flags&2)!=0;p->Dual.guardBlend=float(c.guard)/255;
             p->Bloodlust={};p->Bloodlust.active=(c.flags&4)!=0;p->Bloodlust.rushing=(c.flags&8)!=0;
             p->Bloodlust.phase=c.phase;p->Bloodlust.age=float(c.age)/1000;p->Bloodlust.cooldown=float(c.cooldown)/1000;
             p->Slam={};if(c.phase>=6){p->Slam.phase=c.phase-5;p->Slam.age=float(c.age)/1000;p->Bloodlust.phase=0;p->Bloodlust.age=0;}
@@ -1441,8 +1483,89 @@ bool StepRunePredictedMovement(Engine& game,UPlayerPawn* player,MovementPose& po
     pose.mode=MovementWalking;
     return true;
 }
+namespace {
+// Network pawns receive animation phases directly and never run attack notifies.
+// Read the authored swipe interval without dispatching combat scripts on a replica.
+bool swipeWindow(UActor* actor,uint16_t sequence,UWeapon* weapon)
+{
+    if(!actor || !sequence || !weapon || actor->bAnimLoop() || actor->AnimFrame()<0)return false;
+    auto* model=UObject::TryCast<USkelModel>(GetRuneDisplayMesh(actor));
+    if(!model || sequence>model->Sequences.size())return false;
+    const auto& info=model->Sequences[sequence-1].Info;
+    if(info.Name!=actor->AnimSequence())return false;
+    // Original RunePlayerProxy also starts the swipe on entry to Attacking.
+    // Older hosts send the equipped weapon and animation but no blade-state bit.
+    static const NameString attacks[]={"A_AttackA","A_AttackB","A_AttackC","A_AttackD",
+        "A_AttackStandA","A_AttackStandB","A_AttackBackupA","A_AttackBackupB",
+        "A_AttackStrafeRight","A_AttackStrafeLeft","A_JumpAttack"};
+    bool active=false;
+    for(auto& field:attacks)if(weapon->GetName(field)==info.Name){active=true;break;}
+    for(const auto& notify:info.Notifys) {
+        if(notify.Time>actor->AnimFrame())continue;
+        if(notify.Function=="SwipeEffectStart")active=true;
+        if(notify.Function=="SwipeEffectEnd")active=false;
+    }
+    return active;
+}
+void presentBladeSwipe(UWeapon* weapon,bool active,float dt)
+{
+    if(!weapon || !weapon->NetworkReplica)return;
+    auto* swipe=object(weapon,"Swipe");
+    if(!active && (!swipe || !swipe->GetBool("IsLoaded")))return;
+    auto* cls=UObject::TryCast<UClass>(weapon->GetUObject(weapon->GetBool("bPoweredUp")?"PoweredUpSwipeClass":"SwipeClass"));
+    if(swipe && swipe->Class!=cls){weapon->SetObject("Swipe",nullptr);swipe=nullptr;}
+    if(!active && !swipe)return;
+    if(active && !swipe) {
+        UStruct* base=cls;
+        while(base && base->Name!="WeaponSwipe")base=base->BaseStruct;
+        if(!base)return;
+        swipe=UObject::Cast<UActor>(engine->packages->GetTransientPackage()->NewObject("RemoteSwipe",cls,ObjectFlags::Transient));
+        swipe->XLevel()=weapon->XLevel();swipe->Level()=weapon->Level();swipe->Owner()=weapon;
+        swipe->SetByte("BaseJointIndex",weapon->GetInt("SweepJoint1"));
+        swipe->SetByte("OffsetJointIndex",weapon->GetInt("SweepJoint2"));
+        swipe->SetBool("IsLoaded",false);weapon->SetObject("Swipe",swipe);
+    }
+    const auto elapsed=ExpressionValue::FloatValue(dt);
+    // This particle object is drawn with its weapon, outside the gameplay actor list.
+    // Reuse its short strip of authored quads and let released strips fade normally.
+    if(active) {
+        vec3 origin=weapon->Owner()->Location();
+        if(!swipe->GetBool("IsLoaded") || swipe->GetFloat("SystemLifeSpan")>=0 || dt>.12f || length(origin-swipe->Location())>96.f)
+            CallEvent(swipe,"SystemInit");
+        swipe->Location()=origin;
+        swipe->SetFloat("SystemLifeSpan",-1.f);
+        CallEvent(swipe,"SwipeSystemTick",{elapsed});
+    } else swipe->SetFloat("SystemLifeSpan",0.f);
+    CallEvent(swipe,"SwipeTick",{elapsed});
+    if(!active) {
+        RuneParticles::ArrayView particles(swipe);
+        for(int i=0;i<std::min(64,int(swipe->GetByte("ParticleCount")));++i)if(particles.Valid(i))return;
+        swipe->SetBool("IsLoaded",false);
+    }
+}
+}
 void RuneNetworkReplica::tickEffects(float dt) {
     if(!std::isfinite(dt) || dt<=0)return;
+    for(const auto& e:current.world) {
+        if(e.kind!=EntityKind::Weapon)continue;
+        auto* w=UObject::TryCast<UWeapon>(actor(e.ref));
+        if(!w)continue;
+        auto* pawn=UObject::TryCast<UPawn>(w->Owner());
+        if(w->bHidden() || !pawn || pawn->Health()<=0 || pawn->bHidden() ||
+           (w!=pawn->Weapon() && w!=pawn->Dual.offhand)) {
+            if(auto* swipe=object(w,"Swipe"))swipe->SetBool("IsLoaded",false);
+            continue;
+        }
+        const auto* owner=findEntity(current.world,e.owner);
+        bool active=(e.flags&4)!=0;
+        if(!active && owner && !owner->combat.phase && !(owner->combat.flags&2) &&
+           (pawn->Dual.left ? w==pawn->Dual.offhand : w==pawn->Weapon())) {
+            auto* proxy=object(pawn,"AnimProxy");
+            active=swipeWindow(proxy,owner->torsoAnimation,pawn->Weapon()) ||
+                   (!owner->torsoAnimation && swipeWindow(pawn,owner->bodyAnimation,pawn->Weapon()));
+        }
+        presentBladeSwipe(w,active,dt);
+    }
     for(const auto& [id,item]:actors) {
         auto* a=item.second;if(kind(a)!=EntityKind::Effect || a->bDeleteMe())continue;
         auto& state=effectAges[id];state+=dt;
@@ -1451,6 +1574,21 @@ void RuneNetworkReplica::tickEffects(float dt) {
         RuneParticles::Tick(a,std::min(dt,.1f));
         if(a->bHidden())state=5.f; // Keep expired emitters hidden until server despawn.
     }
+}
+RuneStepProbe ProbeRuneStepAhead(Engine& game,UPlayerPawn* p)
+{
+    RuneStepProbe out;if(!p || !game.Level)return out;
+    const auto at=p->Location();out.x=at.x;out.y=at.y;out.z=at.z;out.limit=p->MaxStepHeight();
+    const float yaw=p->Rotation().YawRadians(),reach=std::max(4.f,out.limit);
+    const vec3 forward(std::cos(yaw),std::sin(yaw),0);
+    // Capsule centre heights on both floors; their difference is the floor step.
+    auto here=PredictionSweep(game,p,at,vec3(0,0,-reach*2));
+    if(here.Fraction>=1)return out;
+    const float floorHere=at.z-reach*2*here.Fraction;
+    const vec3 start=vec3(at.x,at.y,floorHere)+forward*(p->CollisionRadius()*2+4)+vec3(0,0,reach*3);
+    auto down=PredictionSweep(game,p,start,vec3(0,0,-reach*5));
+    if(down.Fraction<=0 || down.Fraction>=1)return out;
+    out.ahead=(start.z-reach*5*down.Fraction)-floorHere;out.found=true;return out;
 }
 void PresentRunePredictedMovement(UPlayerPawn* player,const MovementPose& pose)
 {

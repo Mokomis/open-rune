@@ -17,12 +17,15 @@ bool Observing();
 void AfterDamage(UPawn*,UPawn*,int damage,int before,int joint);
 void AfterScriptCall(UFunction*,UObject*,const ArrayView<ExpressionValue>&);
 const std::vector<uint8_t>* TriangleMask(UActor*);
+void SeverForFinisher(UPawn*,int side);
 int Missing(UActor*); // -1 intact, 0 left leg, 1 right leg
 void ReplicaAppearance(UActor*);
 float SpeedScale(UPawn*);
 void ApplyPose(const USkelModel&,UActor*,Array<RuneJointPose>&);
 bool LooseTransform(UActor*,mat4&);
 bool Detached(UActor*);
+bool LandDetached(UActor* leg,UActor* support);
+bool TipDetached(UActor* leg,float elapsed);
 void Draw(VisibleFrame*);
 void Probe(Engine&);
 void Demo(Engine&,int frame);

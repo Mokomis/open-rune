@@ -40,7 +40,7 @@ inline bool Clip(const vec4* planes, const vec3& start, const vec3& end,
 
 // Returns whether joint collision handled this actor, independently of a hit.
 inline bool Trace(UActor* actor, const vec3& start, const vec3& end, const vec3& extent,
-    float& fraction, vec3& normal)
+    float& fraction, vec3& normal, int* hitJoint=nullptr)
 {
     if(!engine->LaunchInfo.IsRune() || !actor->GetBool("bJointsBlock") || actor->DrawScale()==0) return false;
     auto* model=UObject::TryCast<USkelModel>(GetRuneDisplayMesh(actor));
@@ -51,7 +51,7 @@ inline bool Trace(UActor* actor, const vec3& start, const vec3& end, const vec3&
     if(!handled) return false;
     auto bones=model->ActorJointMatrices(actor);
     auto world=GetRuneMeshToWorld(actor);
-    fraction=1;normal=vec3(0);
+    fraction=1;normal=vec3(0);if(hitJoint)*hitJoint=-1;
     for(size_t j=0;j<model->Joints.size() && j<50;j++) if(flags[j]&0x10) {
         mat4 transform=world*bones[j];
         mat3 normals=mat3::transpose(mat3::inverse(mat3(transform)));
@@ -66,7 +66,7 @@ inline bool Trace(UActor* actor, const vec3& start, const vec3& end, const vec3&
         }
         float candidate;vec3 candidateNormal;
         if(Clip(planes,start,end,extent,candidate,candidateNormal) && candidate<fraction) {
-            fraction=candidate;normal=candidateNormal;
+            fraction=candidate;normal=candidateNormal;if(hitJoint)*hitJoint=int(j);
         }
     }
     return true;

@@ -49,7 +49,7 @@ function invitation(text) {
       !/^\d{1,3}(\.\d{1,3}){3}$/.test(t[1]) || t[1].split('.').some(n=>+n>255) || +t[1].split('.')[0] >=224 || t[1]==='0.0.0.0' ||
       !integer(t[2],1,65535) || !MAP.test(t[3]) || !integer(t[4],1,16) || !integer(t[5],1,4294967295) ||
       !/^[0-9a-f]{32}$/.test(t[6]) || !KEY.test(t[7]) || !integer(t[8],2,16) || +t[4]>+t[8] ||
-      !integer(t[9],1,4) || !integer(t[10],2,4) || !integer(t[11],1,4) || !integer(t[12],0,1) || !integer(t[13],0,8191)) throw new Error('Invalid invitation.')
+      !integer(t[9],1,4) || !integer(t[10],2,4) || !integer(t[11],1,4) || !integer(t[12],0,1) || !integer(t[13],0,16383)) throw new Error('Invalid invitation.')
   return t
 }
 function encode(t) { return t[0]+'\n'+t[1]+' '+t[2]+'\n'+t.slice(3).join('\n')+'\n' }

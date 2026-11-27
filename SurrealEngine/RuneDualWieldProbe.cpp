@@ -2,6 +2,9 @@
 #include "Engine.h"
 #include "Utils/CommandLine.h"
 #include "RuneDualWield.h"
+#include "RuneFinisher.h"
+#include "RuneBattleLaws.h"
+#include "RunePhysics.h"
 #include "RuneKick.h"
 #include "RuneBash.h"
 #include "RuneTactics.h"
@@ -55,12 +58,103 @@ void RunRuneDualWieldProbe(Engine& game) {
   player->SetRotation(Rotator::FromVector(forward));player->ViewRotation()=player->Rotation();enemy->SetRotation(Rotator::FromVector(-forward));
  };
  reset(150);
- give(player,"VikingShortSword",true);auto* off=give(player,"HandAxe",false);
+ give(player,"VikingShortSword",true);auto* off=give(player,commandline->HasArg("","--fin-campaign")?"RomanSword":"HandAxe",false);
  check(RuneDualWield::Equip(player,off),"player equip");
- give(enemy,"VikingShortSword",true);auto* enemyOff=give(enemy,"HandAxe",false);
+ give(enemy,"VikingShortSword",true);auto* enemyOff=give(enemy,commandline->HasArg("","--fin-campaign")?"RomanSword":"HandAxe",false);
  check(RuneDualWield::Equip(enemy,enemyOff),"Viking equip");
  check(!RuneDualWield::OneHanded(give(player,"DwarfBattleSword",false)),"two handed exclusion");
  std::cout<<"DUAL_EQUIPMENT_OK player="<<player->Weapon()->Name.ToString()<<" left="<<off->Name.ToString()<<" enemy="<<enemyOff->Name.ToString()<<std::endl;
+
+ if(commandline->HasArg("","--fin-campaign")){
+  RuneBattleLaws::Campaign=RuneBattleLaws::All;
+  auto species=commandline->GetArg("","--fin-species","");
+  if(!species.empty()){
+    reset(180);
+    auto* type=game.packages->GetPackage("RuneI")->GetClass(species);
+    check(type,"species class");
+    auto* creature=UObject::TryCast<UPawn>(player->Spawn(type,{},{},origin+forward*50.f,Rotator::FromVector(forward)));
+    check(creature,"species spawn");creature->Health()=1000;creature->SetRotation(Rotator::FromVector(forward));
+    auto* weapon=player->Weapon();CallEvent(weapon,"StartAttack");
+    CallEvent(weapon,"DoWeaponSwipe",{ExpressionValue::ObjectValue(creature),ExpressionValue::IntValue(1),ExpressionValue::IntValue(0),
+        ExpressionValue::VectorValue(creature->Location()),ExpressionValue::VectorValue(vec3(0,0,1)),ExpressionValue::VectorValue(forward*100.f)});
+    int bodies=0,physical=0;
+    for(auto* b:game.Level->Actors)if(b && !b->bHidden() && !b->bDeleteMe() && b->IsA("Carcass")){
+        ++bodies;physical+=RunePhysics::Controls(b);
+    }
+    std::cout<<"FIN_CREATURE species="<<species<<" hp="<<creature->Health()<<" bodies="<<bodies<<" physical="<<physical<<" state="<<creature->GetStateName().ToString()<<std::endl;
+    bool boss=creature->HasProperty("bIsBoss") && creature->GetBool("bIsBoss");
+    if(boss)check(creature->Health()>0 && bodies==0 && !RuneFinisher::Hands(player),"boss retains authored damage and survival");
+    else check(creature->Health()<=0 && bodies==1 && physical==1,"species immediate physical death");
+    if(!boss){
+        tick(90);
+        bool continuing=false;for(auto* b:game.Level->Actors)if(b && !b->bDeleteMe() && b->IsA("Carcass") && RunePhysics::Controls(b))
+            continuing=std::isfinite(b->Location().x+b->Location().y+b->Location().z) && length(b->Location()-origin)<1000;
+        check(continuing,"creature ragdoll stays finite and in the arena");
+    }
+    return;
+  }
+  auto scenario=commandline->GetArg("","--fin-campaign","player");
+  bool goblinAttack=scenario=="goblin";
+  bool npc=scenario=="npc" || scenario=="npc-duel" || goblinAttack;
+  UPawn* attacker=npc?enemy:static_cast<UPawn*>(player);
+  UPawn* victim=npc?static_cast<UPawn*>(player):enemy;
+  reset(45);
+  if(scenario=="npc-duel" || goblinAttack){
+    check(player->SetLocation(origin+forward*145.f),"clear lane for NPC duel");
+    victim=UObject::TryCast<UPawn>(player->Spawn(game.packages->GetPackage("RuneI")->GetClass("GoblinWarrior"),{},{},origin,{}));
+    check(victim,"spawn second campaign NPC");
+    victim->SetCollision(true,false,false);victim->Health()=10000;victim->GotoState("Waiting","Begin");
+    victim->DisableEvent("SeePlayer");victim->DisableEvent("Bump");victim->DisableEvent("HearNoise");
+    victim->SetPhysics(PHYS_None);
+    if(goblinAttack){
+      std::swap(attacker,victim);
+      give(attacker,"VikingShortSword",true);
+      attacker->SetPhysics(PHYS_Walking);
+    }
+  }
+  auto yaw=Rotator::FromVector(npc && !goblinAttack?-forward:forward);
+  attacker->SetRotation(yaw); victim->SetRotation(yaw);
+  if(npc){attacker->Enemy()=victim;attacker->GotoState("Fighting","Begin");RuneTactics::Enabled=true;}
+  else {enemy->DisableEvent("SeePlayer");enemy->DisableEvent("Bump");enemy->DisableEvent("HearNoise");
+        enemy->SetPhysics(PHYS_None);CallEvent(player->GetUObject("AnimProxy"),"Attack");}
+  bool physical=false;
+  const bool checkHold=commandline->HasArg("","--pin-campaign");
+  for(int i=0;i<900 && victim->Health()>0;++i){
+   if(checkHold && attacker->Weapon()->GetStateName()=="Swinging"){
+     // Isolate the hold lifecycle at confirmed torso contact. The ordinary
+     // campaign scenarios above use the unfiltered weapon sweep.
+     auto* rig=UObject::Cast<USkelModel>(GetRuneDisplayMesh(victim));
+     int chest=-1;
+     for(auto name:{"chest","spinec","torso","base_torso"}){
+       for(size_t j=0;j<rig->Joints.size() && j<31;++j)if(rig->Joints[j].Name==name)chest=int(j);
+       if(chest>=0)break;
+     }
+     check(chest>=0,"campaign torso contact joint");
+     CallEvent(attacker->Weapon(),"DoWeaponSwipe",{ExpressionValue::ObjectValue(victim),
+         ExpressionValue::IntValue(1u<<chest),ExpressionValue::IntValue(0),ExpressionValue::VectorValue(victim->Location()),
+         ExpressionValue::VectorValue(vec3(0,0,1)),ExpressionValue::VectorValue(forward*100.f)});
+   }
+   if(!npc || scenario=="npc-duel" || goblinAttack)victim->StateFrame->SetLatentState(LatentRunState::Stop);
+   victim->SetRotation(yaw);victim->DesiredRotation()=yaw;if(victim==player)player->ViewRotation()=yaw;tick(1);
+  }
+  int count=0;
+  for(auto* body:game.Level->Actors)if(body && !body->bDeleteMe() && !body->bHidden() && body->IsA("RuneCarcass")){
+     ++count;physical|=RunePhysics::Controls(body);
+  }
+  std::cout<<"FIN_CAMPAIGN npc="<<npc<<" victim="<<victim->Class->Name.ToString()<<" hp="<<victim->Health()<<" bodies="<<count<<" ragdoll="<<physical<<" hands="<<RuneFinisher::Hands(attacker)<<std::endl;
+  check(victim->Health()<=0 && RuneFinisher::Hands(attacker)==(goblinAttack?1:3) && physical && count==1,"campaign paired finish and immediate single ragdoll");
+  if(checkHold){
+    check(attacker->finisherHeld,"torso hit holds the campaign corpse");
+    UActor* corpse=nullptr;for(auto* a:game.Level->Actors)if(a && RunePhysics::Impaled(a))corpse=a;
+    check(corpse,"articulated campaign body is on the swords");
+    tick(150);
+    check(attacker->finisherHeld!=npc,"campaign AI withdraws while the player can keep holding");
+    if(!npc)check(RunePhysics::ReleaseImpale(attacker),"campaign player withdraws");
+    check(!RunePhysics::Impaled(corpse) && RunePhysics::Controls(corpse),"same free ragdoll after campaign withdrawal");
+    std::cout<<"CAMPAIGN_PIN_OK npc="<<npc<<std::endl;
+  }
+  return;
+ }
  if(commandline->HasArg("","--probe-dual-motion")) {
   auto* m=UObject::Cast<USkelModel>(GetRuneDisplayMesh(player));
   for(auto& j:m->Joints)std::cout<<"DUAL_JOINT name="<<j.Name.ToString()<<" parent="<<j.Parent<<" group="<<j.Group<<" flags="<<j.Flags<<'\n';
@@ -120,6 +214,8 @@ void RunRuneDualWieldProbe(Engine& game) {
  player->Dual.left=false;player->Dual.lastWholeBody=-1;
  proxyActor->AnimSequence()=player->AnimSequence()=player->Weapon()->GetName("A_AttackStandA");
  proxyActor->AnimFrame()=player->AnimFrame()=.25f;
+ // Compare the same paired attack on both sides of the transition.
+ player->Dual.followAvailable=player->Dual.followPrimed;
  auto cleanRight=model->ActorJointMatrices(player);
  player->Dual.lastWholeBody=game.TotalTime;player->Dual.nextLeft=false;
  RuneDualWield::BeginSwing(player);
@@ -184,7 +280,8 @@ void RunRuneDualWieldProbe(Engine& game) {
  reset(85);player->SetByte("bAltFire",1);tick(24);player->SetRotation(Rotator::FromVector(-forward));check(!RuneDualWield::Blocks(player,enemy),"rear attack blocked");
  std::cout<<"DUAL_GUARD_OK full="<<full<<" chip="<<chip<<std::endl;
  reset(65);player->SetByte("bAltFire",1);tick(24);check(RuneDualWield::Blocks(player,enemy),"kick guard fixture");
- RuneKick::CommitImpact(enemy,player,false);check(length(player->Velocity().xy())<100 && player->Dual.recovery>0,"crossed kick launches or lacks opening");
+ RuneKick::Enabled=true;RuneKick::CommitImpact(enemy,player,false);RuneKick::Enabled=false;
+ check(length(player->Velocity().xy())<100 && player->Dual.recovery>0,"crossed kick launches or lacks opening");
  check(!RuneBash::Start(player),"dual wield must not shield bash");
  std::cout<<"DUAL_KICK_OK recoil="<<length(player->RuneKickRecoil)<<std::endl;
  // An intact owned shield is retained, hidden and cold; toggling off restores it.
@@ -212,7 +309,14 @@ void RunRuneDualWieldProbe(Engine& game) {
  std::cout<<"DUAL_THROW_OK\n";
  // Exercise a real Viking attack through tactical behavior with both hands.
  reset(45);player->DisableEvent("PlayerTick");enemy->Enemy()=player;enemy->EnableEvent("SeePlayer");enemy->EnableEvent("FrameNotify");enemy->GotoState("Fighting","Begin");RuneTactics::Enabled=true;
- int before=player->Health();tick(1600);
+ int before=player->Health();bool pairedCut=false;
+ for(int i=0;i<1600;++i){
+  tick(1);
+  if(enemy->Dual.followAvailable && enemy->Dual.offhand && enemy->Weapon() &&
+     enemy->Weapon()->GetStateName()=="Swinging" && enemy->Dual.offhand->GetStateName()=="Swinging")pairedCut=true;
+ }
+ check(pairedCut,"Viking did not activate a real trailing cut");
+ std::cout<<"DUAL_VIKING_FOLLOWUP_OK"<<std::endl;
  std::cout<<"DUAL_VIKING right="<<enemy->Dual.rightSwings<<" left="<<enemy->Dual.leftSwings<<" damage="<<before-player->Health()<<std::endl;
  check(enemy->Dual.rightSwings>0 && enemy->Dual.leftSwings>0,"Viking did not alternate");
  check(player->Health()<before,"Viking did not hit");

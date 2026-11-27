@@ -572,6 +572,10 @@ CollisionHit UActor::TryMove(const vec3& delta, bool dryRun, bool isOwnBaseBlock
 			CallEvent(blockingHit.Actor, EventName::Bump, { ExpressionValue::ObjectValue(this) });
 			CallEvent(this, EventName::Bump, { ExpressionValue::ObjectValue(blockingHit.Actor) });
 		}
+		// Rune: a move stopped by a collision joint of an actor with bJointsTouch
+		// notifies that actor (e.g. a Tarp flexes and queues PostTouch to toss).
+		if (engine->LaunchInfo.IsRune() && blockingHit.Joint >= 0 && blockingHit.Actor->GetBool("bJointsTouch") && !blockingHit.Actor->bDeleteMe())
+			CallEvent(blockingHit.Actor, "JointTouchedBy", { ExpressionValue::ObjectValue(this), ExpressionValue::IntValue(blockingHit.Joint) });
 	}
 
 	// Send touch notifications for anything we crossed while moving

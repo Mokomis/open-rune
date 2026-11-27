@@ -152,6 +152,7 @@ launch paths accept the fourth value.
 
 Current native/4xAA Mac comparison evidence and limitations are recorded under
 `C:/OpenRune/outputs/blizzard-20261109` and controller
+`/Users/rwillmore/OpenRuneArtifacts/Blizzard-20261109`. Historical October figures
 above are not current measurements. No tablet deployment is implied.
 
 ### Current DM-Seaside result
@@ -190,6 +191,7 @@ pass. Android source includes Blizzard but was not built or installed in this ta
 
 ## Automatic-weather validation
 
+Evidence: controller `/Users/rwillmore/OpenRuneArtifacts/VariableSnow-20261109`
 and Windows `C:/OpenRune/outputs/variable-snow-20261109`. Seed14 with a bounded,
 isolated6-second test interval renders Clear→Light→Heavy→Blizzard→Light→Clear
 on DM-Seaside at actual native2816x1762/4samples. This accelerates the clock only

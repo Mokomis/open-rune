@@ -75,18 +75,23 @@ bool validRef(EntityRef r) { return bool(r.id) == bool(r.generation); }
 bool validEntity(const Entity& e)
 {
     if (!e.ref.id || !e.ref.generation || e.kind < EntityKind::Pawn || e.kind > EntityKind::Effect ||
-        (e.flags & ~191) || ((e.flags&128) && e.kind!=EntityKind::Weapon) || !e.life || e.animationPhase==INT16_MIN || e.torsoPhase==INT16_MIN ||
+        (e.flags & ~191) || ((e.flags & FinisherOpeningFlag) && e.kind!=EntityKind::Weapon && (e.kind!=EntityKind::Pawn || !(e.flags&1) || e.health<=0)) || !e.life || e.animationPhase==INT16_MIN || e.torsoPhase==INT16_MIN ||
         !validRef(e.owner) || !validRef(e.weapon) || !validRef(e.shield) ||
         ((e.combat.flags&16) && (e.kind!=EntityKind::Pawn || !(e.flags&1) || (e.flags&2) || e.combat.phase || e.combat.offhand.id || e.combat.guard)) ||
-        !validRef(e.combat.offhand) || (e.combat.flags&~31) || e.combat.meter>100 ||
+        !validRef(e.combat.offhand) || ((e.combat.flags>>6) && (!e.weapon.id || ((e.combat.flags>>6)==3 && !e.combat.offhand.id))) || ((e.combat.flags&32) && (e.combat.flags&3)) || e.combat.meter>100 ||
         e.combat.phase>7 || e.combat.age>10000 || e.combat.cooldown>4000 || e.combat.ready>3 ||
         (e.combat.phase>=6 && (e.combat.offhand.id || (e.combat.flags&11) || e.combat.guard)) ||
         e.combat.runeCapacity>200 || e.combat.runePower>e.combat.runeCapacity ||
         (e.kind!=EntityKind::Pawn && e.combat!=NativeCombat{}) ||
-        (!e.combat.offhand.id && ((e.combat.flags&3) || e.combat.guard)) ||
+        (!e.combat.offhand.id && ((e.combat.flags&35) || e.combat.guard)) ||
         (!e.combat.phase && (e.combat.age || (e.combat.flags&8))) ||
         (e.combat.ready && (e.combat.phase || e.combat.cooldown)) ||
         (e.attachmentJoint!=255 && !e.owner.id)) return false;
+    if(e.combat.impaleAim){
+        auto hands=e.combat.flags>>6;
+        if(e.kind!=EntityKind::Pawn || !(e.flags&1) || e.health<=0 || (hands!=1 && hands!=3))return false;
+        for(auto value:*e.combat.impaleAim)if(std::abs(int(value))>2048)return false;
+    }
     if(e.physical.kind>3 || e.physical.joints.size()>64 || e.physical.basis.size()>64)return false;
     if(!e.physical.kind && e.physical!=PhysicalPose{})return false;
     if((e.physical.kind==1 || e.physical.kind==3) && ((e.kind!=EntityKind::Pawn&&e.kind!=EntityKind::Corpse)||e.physical.joints.empty()||e.physical.rotation!=std::array<int16_t,4>{}))return false;
@@ -127,7 +132,8 @@ void writeEntity(Writer& w,const Entity& e)
     if(e.physical.kind)writePhysical(w,e.physical);
     if(e.combat!=NativeCombat{}) {
         const auto& c=e.combat;w.ref(c.offhand);w.put(c.flags);w.put(c.guard);w.put(c.meter);
-        w.put(c.phase);w.put(c.age);w.put(c.cooldown);w.put(c.ready);w.put(c.runePower);w.put(c.runeCapacity);
+        w.put(c.phase);w.put(c.age);w.put(c.cooldown);w.put(uint8_t(c.ready|(c.impaleAim?128:0)));w.put(c.runePower);w.put(c.runeCapacity);
+        if(c.impaleAim)for(auto value:*c.impaleAim)w.put(value);
     }
 }
 Entity readEntity(Reader& r)
@@ -144,6 +150,10 @@ Entity readEntity(Reader& r)
         e.flags&=~64;auto& c=e.combat;c.offhand=r.ref();c.flags=r.get<uint8_t>();c.guard=r.get<uint8_t>();
         c.meter=r.get<uint8_t>();c.phase=r.get<uint8_t>();c.age=r.get<uint16_t>();c.cooldown=r.get<uint16_t>();c.ready=r.get<uint8_t>();
         c.runePower=r.get<uint8_t>();c.runeCapacity=r.get<uint8_t>();
+        if(c.ready&128){
+            c.ready&=127;
+            for(auto& value:c.impaleAim.emplace())value=r.get<int16_t>();
+        }
         if(c==NativeCombat{})r.ok=false; // Canonical optional representation.
     }
     return e;

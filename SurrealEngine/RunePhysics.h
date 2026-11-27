@@ -54,6 +54,10 @@ mat4 MeshToWorld(UActor *);
 vec3 RenderOffset(UActor *);
 bool Ragdoll(UActor *, vec3 velocity, UPawn *instigator = nullptr,
              bool living = false);
+bool FinishCorpse(UActor*,vec3 velocity);
+bool PinImpale(UPawn* holder,UActor* corpse);
+bool ReleaseImpale(UPawn* holder);
+bool Impaled(UActor* corpse);
 bool Knockdown(UPawn *, UPawn *instigator, vec3 velocity, float strength = 1);
 // Shield-rush knockdowns also run in Original mode without enabling ambient props/corpses.
 bool ShieldRushKnockdown(UPawn *, UPawn *instigator, vec3 velocity);

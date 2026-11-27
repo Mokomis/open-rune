@@ -97,6 +97,8 @@ void UActor::TickFalling(float elapsed)
 
 		if (hit.Fraction < 1.0f)
 		{
+            if (hit.Normal.z >= .7071f && velocity.z <= 0 && IsA("Gib") &&
+                !hit.Actor->IsA("Pawn") && RuneLeg::LandDetached(this,hit.Actor)) return;
 			if (hit.Actor->IsA("Pawn"))
 			{
 				// So projectiles don't think they hit a wall.

@@ -218,6 +218,60 @@ int GameApp::main(Array<std::string> args)
                 if(commandline->HasArg("","--rune-shield-taunt-probe")){Engine game(GameFolderSelection::GetLaunchInfo(0));RuneShieldTaunt::Probe(game);return 0;}
                 if(commandline->HasArg("","--rune-breath-probe")){Engine game(GameFolderSelection::GetLaunchInfo(0));RuneBreath::Probe(game);return 0;}
 				if(commandline->HasArg("","--rune-physics-probe")){Engine physics(GameFolderSelection::GetLaunchInfo(0));RunePhysics::RunProbe(physics);return 0;}
+				// Drops a player onto each tarp of one map and reports the toss it receives.
+				if(commandline->HasArg("","--rune-tarp-bounce-probe")){
+					Engine game(GameFolderSelection::GetLaunchInfo(0));
+					std::string map=commandline->GetArg("","--rune-tarp-bounce-probe","DM-seaside");
+					auto url=game.GetDefaultURL(map+".run");url.AddOrReplaceOption("game=RuneI.RuneMultiPlayer");game.NetworkAuthority=true;game.LoadMap(url);
+					auto* p=game.LoginNetworkPlayer("Tarp test");
+					int tested=0,bounced=0;
+					for(auto* tarp:game.Level->Actors) {
+						if(!tarp || !tarp->HasProperty("TossVelocity") || tarp->bDeleteMe())continue;++tested;
+						const float toss=tarp->GetFloat("TossVelocity");
+						p->Velocity()=vec3(0);p->Acceleration()=vec3(0);
+						bool placed=p->SetLocation(tarp->Location()+vec3(0,0,150));
+						p->SetPhysics(PHYS_Falling);p->Velocity()=vec3(0,0,-300);
+						float peakUp=0,start=p->Location().z,top=start;int frame=0,bouncedAt=-1;
+						for(;frame<180;++frame) {
+							p->Tick(1.f/60);tarp->Tick(1.f/60);
+							if(p->Velocity().z>peakUp){peakUp=p->Velocity().z;if(bouncedAt<0&&peakUp>100)bouncedAt=frame;}
+							top=std::max(top,p->Location().z);
+						}
+						// Tilted tarps throw sideways: compare with the vertical part of the toss.
+						const float k=6.2831853f/65536.f,upward=toss*std::cos(tarp->Rotation().Pitch*k)*std::cos(tarp->Rotation().Roll*k);
+						const bool ok=upward>0 && std::abs(peakUp-upward)<=std::max(25.f,upward*.1f);bounced+=ok;
+						std::cout<<"RUNE_TARP_BOUNCE map="<<map<<" name="<<tarp->Name.ToString()<<" placed="<<placed<<" toss="<<toss
+							<<" expected_up="<<upward<<" peak_up="<<peakUp<<" frame="<<bouncedAt<<" rise="<<top-start<<" ok="<<ok<<std::endl;
+					}
+					std::cout<<"RUNE_TARP_BOUNCE_SUMMARY map="<<map<<" tarps="<<tested<<" bounced="<<bounced<<std::endl;
+					return tested>0 && bounced==tested?0:1;
+				}
+				// Lists every tarp (bounce pad) in the given maps with its launch and collision settings.
+				if(commandline->HasArg("","--rune-tarp-probe")){
+					Engine tarps(GameFolderSelection::GetLaunchInfo(0),true);
+					std::string list=commandline->GetArg("","--rune-tarp-probe","");
+					for(size_t start=0;start<list.size();) {
+						size_t end=list.find(',',start);if(end==std::string::npos)end=list.size();
+						std::string map=list.substr(start,end-start);start=end+1;if(map.empty())continue;
+						auto* level=UObject::Cast<ULevel>(tarps.packages->LoadMap(map)->GetUObject("Level","MyLevel"));
+						int count=0;
+						for(auto* a:level->Actors) {
+							if(!a || !a->HasProperty("TossVelocity"))continue;++count;
+							auto* flags=static_cast<uint8_t*>(a->GetProperty("JointFlags"));int collision=0,spring=0;
+							for(int i=0;i<50;i++){collision+=(flags[i]&0x10)!=0;spring+=(flags[i]&0x04)!=0;}
+							std::cout<<"RUNE_TARP map="<<map<<" name="<<a->Name.ToString()<<" class="<<a->Class->Name.ToString()
+								<<" loc="<<a->Location().x<<","<<a->Location().y<<","<<a->Location().z
+								<<" rot="<<a->Rotation().Pitch<<","<<a->Rotation().Yaw<<","<<a->Rotation().Roll
+								<<" toss="<<a->GetFloat("TossVelocity")<<" maxApplied="<<a->GetFloat("MaxAppliedVelocity")
+								<<" jointsBlock="<<a->GetBool("bJointsBlock")<<" jointsTouch="<<a->GetBool("bJointsTouch")
+								<<" collideActors="<<a->GetBool("bCollideActors")<<" blockPlayers="<<a->GetBool("bBlockPlayers")
+								<<" radius="<<a->CollisionRadius()<<" height="<<a->CollisionHeight()
+								<<" collisionJoints="<<collision<<" springJoints="<<spring<<"\n";
+						}
+						std::cout<<"RUNE_TARP_MAP map="<<map<<" tarps="<<count<<"\n";
+					}
+					return 0;
+				}
                 Engine probe(GameFolderSelection::GetLaunchInfo(0), true);
 				IniFile originalUser(probe.LaunchInfo.gameRootFolder+"/System/User.ini");
 				if (originalUser.GetValue("Engine.Input","W")!="MoveForward" || originalUser.GetValue("DefaultPlayer","Name")!="Ragnar")

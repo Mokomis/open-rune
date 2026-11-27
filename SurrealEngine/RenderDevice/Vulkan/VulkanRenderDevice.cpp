@@ -24,6 +24,8 @@
 #include <bit>
 #include "CrestWater.h"
 #include <fstream>
+#include "TextureUploader.h"
+#include "Packages/Engine/Resources/Textures/UTexture.h"
 
 VulkanRenderDevice::VulkanRenderDevice(Widget* InViewport)
 {
@@ -64,6 +66,17 @@ VulkanRenderDevice::VulkanRenderDevice(Widget* InViewport)
 
 		if (!supportsBindless)
 			throw std::runtime_error("VulkanDrv requires a GPU that supports bindless textures!");
+
+		// Most Mali/PowerVR GPUs can't sample BC (DXT). Use the original uncompressed
+		// mips when a texture has them, and decode BC1-BC3 on the CPU otherwise.
+		// --render-disable-bc forces this path for testing on BC-capable GPUs.
+		const bool bcSupported = Device->EnabledFeatures.Features.textureCompressionBC && !commandline->HasArg("", "--render-disable-bc");
+		UTexture::PreferUncompressed = !bcSupported;
+		TextureUploader::DecodeBC = !bcSupported;
+		// Test hook: keep the compressed mips but decode them on the CPU.
+		if (commandline->HasArg("", "--render-force-bc-decode")) { UTexture::PreferUncompressed = false; TextureUploader::DecodeBC = true; }
+		LogMessage("RUNE_TEXTURE_BC supported=" + std::to_string(bcSupported ? 1 : 0) +
+			" device=" + std::to_string(Device->EnabledFeatures.Features.textureCompressionBC ? 1 : 0));
 
         // Packed positive HDR halves scene/bloom bandwidth. Android is validated
         // with it; other platforms keep their existing format until tested.
@@ -487,6 +500,7 @@ void VulkanRenderDevice::Unlock(bool Blit)
 	int windowHeight = Viewport->GetNativePixelHeight();
 
 	SubmitFrame(Blit ? true : false, windowWidth, windowHeight, Viewport->IsFullscreen());
+	RenderPasses->SavePipelineCacheWhenIdle();
     if (Blit) {
         auto dimension=[](int value) { return uint64_t(clamp(value,0,32767)); };
         VisualComparison::ScalingSnapshot.store(dimension(Textures->Scene->Width) |

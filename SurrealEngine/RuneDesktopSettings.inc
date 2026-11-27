@@ -37,6 +37,7 @@ add("sensitivity","Look sensitivity","Mouse and right-stick camera speed.",{"Ver
 add("invert","Invert vertical look","Reverse vertical mouse and right-stick look.",{"Off","On"},0,0,1);
 add("rumble","Rumble","Impact feedback on connected Windows XInput controllers.",{"Off","On"},1,0,1);
 add("rumbleStrength","Rumble intensity","Scales both controller motors.",{},65,0,100);
+add("hudStyle","Gameplay HUD","Choose the health, shield and power meters shown during play.",{"Original","Open Rune"},1,0,1);
 add("counter","Show FPS","Displays engine FPS; actual display timing is measured separately.",{"Off","On"},1,0,1);
 add("networkDiagnostics","Network diagnostics","Multiplayer frame times, acknowledged round-trip time, snapshot gaps and transport timeouts. Timeouts are not a packet-loss measurement.",{"Off","On"},0,0,1);
 add("playerNames","Player names","Show names above players and bots. Team markers stay visible when names are hidden. The scoreboard always shows names and bot labels.",{"Off","On"},1,0,1);

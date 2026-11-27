@@ -36,6 +36,10 @@ public:
     size_t buffered() const;
     const Stats& stats() const { return counters; }
     bool failed() const { return stopped; }
+    // Milliseconds poll() may safely wait before it could transmit something:
+    // 0 when unsent data is queued (poll sends one packet per call), otherwise
+    // the earliest ACK or retransmission deadline, bounded by cap.
+    uint64_t idleMs(uint64_t now, uint64_t cap) const;
 private:
     struct Pending { Message message; std::optional<uint64_t> lastSent; uint32_t attempts = 0; };
     struct Sent { uint64_t time; size_t bytes; Lane lane; uint64_t message; };

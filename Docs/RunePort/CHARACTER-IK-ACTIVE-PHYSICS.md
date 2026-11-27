@@ -59,6 +59,7 @@ isolated save directory is supplied. These flags do not change normal preference
 Evidence is kept outside Git under:
 
 - Windows: `C:/OpenRune/outputs/character-physics-20261109`
+- Mac: `/Users/rwillmore/OpenRuneArtifacts/CharacterPhysics-20261109`
 
 The native math test covers 40,000 random reachable/unreachable and degenerate
 cases. The Jolt muscle test runs at 60 and 120 Hz, including impulses, release,

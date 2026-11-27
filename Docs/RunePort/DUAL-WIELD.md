@@ -24,7 +24,13 @@ Hand Axe, Goblin Axe and Rusty Mace. Large swords, large hammers, special
 non-stow items, bosses and incompatible skeletons are excluded.
 
 Attack uses the original attack/recovery rhythm, alternating committed strikes
-between hands. Returning to the ready position is not another strike. Block
+between hands. After the first left-hand strike, each right-hand attack also
+swings the offhand two animation frames behind the lead. The trailing cut uses
+half the offhand weapon’s base damage, rounded up, and its own reach and collision
+checks. Either blade can miss or be blocked. The first right-hand strike and
+ordinary left-hand strikes deal their usual damage. Players and eligible AI use
+the same rule in campaign and multiplayer. The host resolves both contacts and
+replicates the paired animation. Returning to ready ends the attack. Block
 raises both weapons into an X. No extra touch or controller button is required.
 Kick remains available; shield bash requires a visible equipped shield and
 cannot use the shield stored while dual wielding.
@@ -68,13 +74,17 @@ restore the pair; loading cancels a pending left-hand attack instead of replayin
 an untracked hit. Existing save formats and original game assets are unchanged.
 
 [Multiplayer integration](NETWORK-NATIVE-COMBAT.md) now replicates the real
-offhand, handedness and guard state under server authority. Multiplayer menus
+offhand, handedness, paired cuts and guard state under server authority. Multiplayer menus
 say **Host rules**; clients do not run damage or equipment simulation. Mixed weapons
-currently use the primary weapon's authored attack rhythm with the striking
-weapon's own damage; bespoke paired combos and a dedicated offhand picker are
-not implemented.
+use the primary weapon’s authored attack rhythm. Each weapon uses its own base
+damage, with the half-damage adjustment on the trailing cut.
 
 ## Validation
+
+The native network combat probe accepts `--rune-dual-followup-probe` to compare
+eight attack inputs with a shield against the same inputs with two short swords.
+It checks the third attack, the remote player’s paired state and misses outside
+weapon reach. Add `--follow-axe` to run the same comparison with a hand axe.
 
 `--rune-tactics-probe=dual` requires an isolated absolute `--save-directory`.
 The desktop runtime fixture uses owned DM-Hildir assets and verifies:

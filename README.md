@@ -9,11 +9,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Mokomis/open-rune/releases/download/v1.0.1/open-rune-1.0.1-windows-x64-client.zip"><strong>Download for Windows</strong></a>
+  <a href="https://github.com/Mokomis/open-rune/releases/download/v1.0.2/open-rune-1.0.2-windows-x64-client.zip"><strong>Download for Windows</strong></a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/Mokomis/open-rune/releases/download/v1.0.1/open-rune-1.0.1-android-arm64.apk"><strong>Download for Android</strong></a>
+  <a href="https://github.com/Mokomis/open-rune/releases/download/v1.0.2/open-rune-1.0.2-android-arm64.apk"><strong>Download for Android</strong></a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/Mokomis/open-rune/releases/tag/v1.0.1">Release notes</a>
+  <a href="https://github.com/Mokomis/open-rune/releases/tag/v1.0.2">Release notes</a>
 </p>
 
 [![Ragnar dual wielding a Viking short sword and Roman sword on Thorstadt, with WIP 4× character and scenery textures](screenshots/ragnar-dual-swords-wip-4x.jpg)](screenshots/ragnar-dual-swords-wip-4x.jpg)
@@ -28,13 +28,13 @@ Open Rune grew into a native Windows client and dedicated server, an Android por
 
 ## Start playing
 
-**Current release — Open Rune 1.0.1, build 27**
+**Current release — Open Rune 1.0.2, build 38**
 
 | Platform | Download | First launch |
 | --- | --- | --- |
-| Windows x64 | [Client ZIP, about 22 MB](https://github.com/Mokomis/open-rune/releases/download/v1.0.1/open-rune-1.0.1-windows-x64-client.zip) | Extract the ZIP and run **Start Open Rune.cmd**. |
-| Android ARM64 | [APK, about 116 MB](https://github.com/Mokomis/open-rune/releases/download/v1.0.1/open-rune-1.0.1-android-arm64.apk) | Install the APK and open **Open Rune**. |
-| Windows dedicated server | [Server ZIP](https://github.com/Mokomis/open-rune/releases/download/v1.0.1/open-rune-1.0.1-windows-x64-dedicated-server.zip) | Extract it and follow the included hosting README. |
+| Windows x64 | [Client ZIP, about 21 MB](https://github.com/Mokomis/open-rune/releases/download/v1.0.2/open-rune-1.0.2-windows-x64-client.zip) | Extract the ZIP and run **Start Open Rune.cmd**. |
+| Android ARM64 | [APK, about 130 MB](https://github.com/Mokomis/open-rune/releases/download/v1.0.2/open-rune-1.0.2-android-arm64.apk) | Install the APK and open **Open Rune**. |
+| Windows dedicated server | [Server ZIP](https://github.com/Mokomis/open-rune/releases/download/v1.0.2/open-rune-1.0.2-windows-x64-dedicated-server.zip) | Extract it and follow the included hosting README. |
 
 1. Choose **Use an existing Rune installation** in the setup screen. It also offers a Steam purchase link.
 2. Select the complete Rune Classic folder. On Android, copy that folder into accessible device storage first.

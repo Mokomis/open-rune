@@ -1,4 +1,5 @@
 #include "Precomp.h"
+#include "RuneFinisher.h"
 #include "RunePhysics.h"
 #include "RuneBreath.h"
 #include "RuneShieldTaunt.h"
@@ -431,6 +432,7 @@ Array<RuneJointPose> USkelModel::DecodeFrame(size_t sequence, int frame, bool va
 			}
 		}
 		RuneDualWield::ApplyPose(*this,actor,result);
+        RuneFinisher::ApplyPose(*this,actor,result);
 		ApplyDynamicPose(actor,result);
 		for (size_t i=0;i<result.size() && i<50;i++) result[i].Rotation+=actor->RuneJointOffsets[i];
         RuneRushPose::Apply(*this,actor,result);
@@ -507,6 +509,7 @@ Array<RuneJointPose> USkelModel::ActorPose(UActor* actor) const
         }
     }
     RuneDualWield::ApplyPose(*this,actor,pose);
+    RuneFinisher::ApplyPose(*this,actor,pose);
     ApplyDynamicPose(actor,pose);
     for(size_t j=0;j<pose.size() && j<50;j++) pose[j].Rotation+=actor->RuneJointOffsets[j];
     RuneRushPose::Apply(*this,actor,pose);

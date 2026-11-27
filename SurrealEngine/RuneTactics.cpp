@@ -1,5 +1,6 @@
 #include "RuneBattleLaws.h"
 #include "Precomp.h"
+#include "RuneFinisher.h"
 #include "RuneTactics.h"
 #include "RuneDualWield.h"
 #include "RuneTacticsPolicy.h"
@@ -277,6 +278,7 @@ void Tick(UPawn* p,float elapsed) {
         if(along>0 && along<distance && length(offset-direction*along)<ally->CollisionRadius()+p->CollisionRadius()*.7f)
             observation.crowded=true;
     }
+    observation.finisher=Armed(p) && RuneFinisher::CanFinish(p->Weapon()) && RuneFinisher::Opening(p,enemy);
     auto choice=Decide(observation,temperament,s.defenseRoll);
     switch(choice) {
     case Choice::Attack: Attack(p);break;

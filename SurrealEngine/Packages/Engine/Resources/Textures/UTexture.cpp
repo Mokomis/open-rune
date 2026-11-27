@@ -1,6 +1,7 @@
 
 #include "Precomp.h"
 #include "UTexture.h"
+#include "Utils/Logger.h"
 
 void UTexture::Load(ObjectStream* stream)
 {
@@ -43,11 +44,21 @@ void UTexture::Load(ObjectStream* stream)
 		UsedFormat = (TextureFormat)GetByte("CompFormat");
 		UsedMipmaps = CompressedMipmaps;
 	}
-	else
+	if (HasProperty("bHasComp") && GetBool("bHasComp") && PreferUncompressed && !UncompressedMipmaps.empty())
 	{
 		UsedFormat = (TextureFormat)GetByte("Format");
 		UsedMipmaps = UncompressedMipmaps;
 	}
+	else if (!(HasProperty("bHasComp") && GetBool("bHasComp")))
+	{
+		UsedFormat = (TextureFormat)GetByte("Format");
+		UsedMipmaps = UncompressedMipmaps;
+	}
+	// Compressed textures are rare in Rune data; record which path each one takes.
+	if (HasProperty("bHasComp") && GetBool("bHasComp"))
+		LogMessage("RUNE_COMPRESSED_TEXTURE name=" + Name.ToString() + " comp_format=" + std::to_string(GetByte("CompFormat")) +
+			" comp_mips=" + std::to_string(CompressedMipmaps.size()) + " uncomp_mips=" + std::to_string(UncompressedMipmaps.size()) +
+			" used_format=" + std::to_string(int(UsedFormat)));
 }
 
 void UTexture::Save(PackageStreamWriter* stream)

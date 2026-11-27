@@ -96,6 +96,7 @@ claim of Crest feature parity or a finished ocean simulation is intended.
 ## Evidence and deployment
 
 Windows: `C:/OpenRune/outputs/water-rebuild-20261108`.
+Mac recovery/evidence: `/Users/rwillmore/OpenRuneArtifacts/WaterRebuild-20261108`.
 Versioned v4/v5 folders preserve final comparisons and GPU logs; earlier failed
 compile/shader attempts and prototype captures are retained separately.
 

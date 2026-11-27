@@ -2603,7 +2603,7 @@ void Engine::UpdateInput(float timeElapsed)
 			viewport->Actor()->SetFloat(it.first, it.second.Value);
 		}
 	}
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(_WIN32)
     if (LaunchInfo.IsRune())
     {
         const auto pad = RuneMenu::Open.load() ? RuneController::Axes{} : RuneController::Get();
@@ -3022,9 +3022,11 @@ void Engine::InputCommand(const std::string& commands, EInputKey key, int delta)
 			std::string command = args[0];
 			for (char& c : command) c = std::tolower(c);
 
-			if (command == "button" && args.size() == 2)
+			if(command=="fire" && LaunchInfo.IsRune() && !activeInputButtons.count("bFire") && RunePhysics::ReleaseImpale(viewport->Actor()))return;
+            if (command == "button" && args.size() == 2)
 			{
-				if(LaunchInfo.IsRune() && args[1]=="bFire" && !activeInputButtons.count(args[1]) && activeInputButtons.count("bAltFire") && RuneBloodlust::Charge(viewport->Actor()))continue;
+				if(LaunchInfo.IsRune() && args[1]=="bFire" && !activeInputButtons.count(args[1]) && RunePhysics::ReleaseImpale(viewport->Actor()))return;
+                if(LaunchInfo.IsRune() && args[1]=="bFire" && !activeInputButtons.count(args[1]) && activeInputButtons.count("bAltFire") && RuneBloodlust::Charge(viewport->Actor()))continue;
                 if(LaunchInfo.IsRune() && !activeInputButtons.count(args[1]))runePendingButtons.insert(args[1]);
 				if(LaunchInfo.IsRune() && args[1]=="bAltFire" && activeInputButtons.find(args[1])==activeInputButtons.end())
                     RuneBash::BlockPressed(viewport->Actor());

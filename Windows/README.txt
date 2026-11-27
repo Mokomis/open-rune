@@ -14,6 +14,7 @@ single-configuration layout as well as the existing CMake project.
 Start a host and local player:
   .\Windows\Start-Multiplayer.ps1
 Headless host:
+  .\Windows\Start-Multiplayer.ps1 -Headless -Address 192.168.68.52 -Mode dm -Maps DM-Hildir
 Join an invitation:
   .\Windows\Start-Multiplayer.ps1 -Invitation C:\path\player2.rune-invite
 Discoverable host (Node.js and npm ci in Tools/RuneDiscovery required):

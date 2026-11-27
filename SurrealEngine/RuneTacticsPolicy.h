@@ -13,6 +13,7 @@ inline Temperament ForDifficulty(int difficulty) {
     return values[std::clamp(difficulty,0,3)];
 }
 struct Observation {
+    bool finisher=false;
     bool visible=false, facing=false, threat=false, shield=false;
     bool kick=false, bash=false, targetBlocking=false, crowded=false;
     bool wounded=false, repositionReady=false, counterOpening=false;
@@ -30,6 +31,7 @@ inline Choice Decide(const Observation& o, const Temperament& t, float defenseRo
     if(o.distance>o.reach*.90f)return Choice::Approach;
     if(!o.facing)return Choice::Wait;
     if(o.targetBlocking && o.blockingFor<t.reaction)return Choice::Wait;
+    if(o.finisher && !o.targetBlocking)return Choice::Attack;
     if(o.distance<=o.contact && o.blockingFor>=t.reaction && o.targetBlocking && o.bash)return Choice::Bash;
     if(o.distance<o.reach*.60f && o.distance<=o.contact && o.kick && !o.targetBlocking)return Choice::Kick;
     if(o.distance<o.reach*.52f)return Choice::Retreat;

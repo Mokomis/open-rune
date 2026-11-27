@@ -8,19 +8,33 @@
 #include <random>
 class Engine;
 class UPlayerPawn;
+class UPawn;
 class UNavigationPoint;
 class ULevel;
 class UActor;
 class UBrush;
 namespace RuneBot {
 struct Decision { openrune::net::Input input; std::optional<openrune::net::ActionKind> action; };
+// --rune-bot-brain=classic keeps the pre-weapon-awareness combat rules, for A/B measurement.
+bool ClassicRulesRequested();
+// A weapon's measured melee reach from the wielder's centre and its swing timing (seconds).
+struct WeaponProfile { float reach=0,windup=0,duration=0; bool valid=false; };
+WeaponProfile ProfileWeapon(UPawn*,UActor* weapon);
 // A normal authenticated client: no authority, damage, teleport or input-reading privileges.
 class Brain {
 public:
     explicit Brain(uint32_t seed, int difficulty=1):rng(seed),difficulty(std::clamp(difficulty,0,3)){}
     Decision think(Engine&,RuneNetworkReplica&,const openrune::net::World&,const openrune::net::MatchStatus&,openrune::net::EntityRef,uint64_t);
     bool debug=false,limbsScore=false;
+    bool classic=ClassicRulesRequested();
     uint64_t maxThinkUs=0;
+    unsigned punishes=0,legCounters=0,throws=0,spacing=0,guardPunishes=0,guardEscapes=0,thirdParty=0,woundedTargets=0,targetOverrides=0,earlySwings=0,swingHolds=0;
+    // Keep match-long usage counters when the brain is rebuilt for a new map/round.
+    void carryCounters(const Brain& o){
+        punishes+=o.punishes;legCounters+=o.legCounters;throws+=o.throws;spacing+=o.spacing;guardPunishes+=o.guardPunishes;guardEscapes+=o.guardEscapes;thirdParty+=o.thirdParty;woundedTargets+=o.woundedTargets;targetOverrides+=o.targetOverrides;earlySwings+=o.earlySwings;swingHolds+=o.swingHolds;
+        decisions+=o.decisions;attacks+=o.attacks;defenses+=o.defenses;specials+=o.specials;objectives+=o.objectives;routes+=o.routes;supportMoves+=o.supportMoves;
+        powers+=o.powers;bashes+=o.bashes;crossBlocks+=o.crossBlocks;leaps+=o.leaps;charges+=o.charges;maxThinkUs=std::max(maxThinkUs,o.maxThinkUs);
+    }
     unsigned decisions=0,attacks=0,defenses=0,specials=0,objectives=0,routes=0,supportMoves=0,powers=0,bashes=0,crossBlocks=0,leaps=0,charges=0;
 private:
     friend struct TraversalFixture;
@@ -33,6 +47,8 @@ private:
     vec3 ledgePosition{};
     uint16_t leapYaw=0;
     uint64_t slamAt=0,slamCooldown=0;
+    uint64_t foeRecoveredAt=0,throwAt=0,spacingSince=0,swingWindupUntil=0;
+    bool guardSawSwing=false;
     uint8_t slamStage=0;
     float defenseRoll=1;
     bool wasThreat=false,partialRoute=false;

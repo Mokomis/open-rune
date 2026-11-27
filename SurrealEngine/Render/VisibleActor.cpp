@@ -109,13 +109,20 @@ void VisibleActor::Process(VisibleFrame* frame, UActor* actor)
 	}
 }
 
+static UActor* replicaSwipe(VisibleFrame* frame,UActor* weapon)
+{
+    if(frame->ShadowView || !weapon->NetworkReplica || !weapon->IsA("Weapon"))return nullptr;
+    auto* swipe=UObject::TryCast<UActor>(weapon->GetUObject("Swipe"));
+    return swipe && swipe->GetBool("IsLoaded")?swipe:nullptr;
+}
+
 void VisibleActor::DrawOpaque(VisibleFrame* frame)
 {
 	if (Type == DT_Mesh)
 	{
 		VisibleMesh vismesh;
 		bool translucent=vismesh.DrawMesh(frame, Actor, false, false);
-		if (translucent || HasBloodlustHalo(frame,Actor))
+		if (translucent || HasBloodlustHalo(frame,Actor) || replicaSwipe(frame,Actor))
 		{
 			vec3 v = Actor->Location() - frame->ViewLocation.xyz();
 			frame->Translucents.emplace_back(*this, dot(v, v));
@@ -149,6 +156,7 @@ void VisibleActor::DrawTranslucent(VisibleFrame* frame)
 		VisibleMesh vismesh;
 		vismesh.DrawMesh(frame, Actor, false, true);
         DrawBloodlustHalo(frame,Actor);
+        if(auto* swipe=replicaSwipe(frame,Actor))DrawRuneParticles(frame,swipe);
 	}
 	else if (Type == DT_Sprite || Type == DT_SpriteAnimOnce)
 	{

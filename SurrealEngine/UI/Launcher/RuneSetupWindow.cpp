@@ -96,14 +96,11 @@ int SelectGame(){
     if(!commandline->GetItems().empty())for(size_t i=0;i<GameFolderSelection::Games.size();++i)if(GameFolderSelection::Games[i].IsRune())return (int)i;
     try {
         RuneGameFiles::Validate(DataRoot());auto game=GameFolderSelection::ExamineFolder(DataRoot().string());
-        if(game.IsRune()){
-            GameFolderSelection::Games={game};return 0;
-        }
+        if(game.IsRune()){GameFolderSelection::Games={game};return 0;}
     }catch(const std::exception&){}
     auto screen=Widget::GetScreenSize();auto window=std::make_unique<Window>();
     window->SetFrameGeometry((screen.width-800)/2,(screen.height-620)/2,800,620);window->Show();
     std::cout<<"RUNE_SETUP: Waiting for original game files.\n"<<std::flush;
-    DisplayWindow::RunLoop();
-    return window->result;
+    DisplayWindow::RunLoop();return window->result;
 }
 }

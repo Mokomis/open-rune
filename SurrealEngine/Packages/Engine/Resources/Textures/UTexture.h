@@ -29,6 +29,10 @@ public:
 
 	TextureFormat UsedFormat = TextureFormat::P8;
 	Array<UnrealMipmap> UsedMipmaps, UncompressedMipmaps, CompressedMipmaps;
+
+	// Set by the renderer when the GPU can't sample BC/DXT: textures that carry both
+	// compressed and original uncompressed mips then use the original ones.
+	static inline bool PreferUncompressed = false;
 	bool TextureModified = false;
 	int RealtimeChangeCount = 0;
 

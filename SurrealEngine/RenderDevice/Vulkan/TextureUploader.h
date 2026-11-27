@@ -20,6 +20,10 @@ public:
 
 	static TextureUploader* GetUploader(TextureFormat format);
 
+	// Set once at device creation: true when the GPU lacks textureCompressionBC
+	// (most Mali/PowerVR). BC1-BC3 are then decoded to RGBA8 on the CPU.
+	static bool DecodeBC;
+
 private:
 	VkFormat Format;
 };
@@ -91,6 +95,22 @@ public:
 
 private:
 	int BytesPerBlock;
+};
+
+// CPU fallback for S3TC/DXT blocks (BC1, BC2, BC3) on GPUs without BC sampling.
+class TextureUploader_DecodeBC : public TextureUploader
+{
+public:
+	TextureUploader_DecodeBC(int bcVersion) : TextureUploader(VK_FORMAT_R8G8B8A8_UNORM), Version(bcVersion) { }
+
+	int GetUploadSize(int x, int y, int w, int h) override;
+	void UploadRect(void* dst, UnrealMipmap* mip, int x, int y, int w, int h, TextureColor* palette, bool masked) override;
+
+	// Decodes one 4x4 block to 16 RGBA8 texels, row-major.
+	static void DecodeBlock(int bcVersion, const uint8_t* block, uint8_t rgba[64]);
+
+private:
+	int Version;
 };
 
 class TextureUploader_2DBlock : public TextureUploader

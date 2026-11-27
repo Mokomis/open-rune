@@ -1,10 +1,14 @@
 #include "openrune/net/UdpSocket.h"
+#include <algorithm>
 #include <stdexcept>
 #include <iostream>
+#include <vector>
 #ifdef _WIN32
 #include <mswsock.h>
 #else
 #include <arpa/inet.h>
+#include <poll.h>
+#include <time.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <cerrno>
@@ -50,11 +54,17 @@ UdpSocket::UdpSocket(const std::string& address,uint16_t requestedPort,bool clie
         if(flags<0 || fcntl(fd,F_SETFL,flags|O_NONBLOCK)<0)fail("nonblocking",lastError());
 #endif
         if(bind(fd,reinterpret_cast<sockaddr*>(&local),sizeof(local)))fail("bind",lastError());
+#ifdef _WIN32
+        // Optional readiness signal for waitAny(). Without it the wait is a timed pause.
+        readEvent=WSACreateEvent();
+        if(readEvent!=WSA_INVALID_EVENT && WSAEventSelect(fd,readEvent,FD_READ)) {WSACloseEvent(readEvent);readEvent=WSA_INVALID_EVENT;}
+#endif
     } catch(...) {close();throw;}
 }
 void UdpSocket::close() noexcept {
 #ifdef _WIN32
     if(fd!=INVALID_SOCKET){closesocket(fd);fd=INVALID_SOCKET;}
+    if(readEvent!=WSA_INVALID_EVENT){WSACloseEvent(readEvent);readEvent=WSA_INVALID_EVENT;}
     if(winsock){WSACleanup();winsock=false;}
 #else
     if(fd>=0){::close(fd);fd=-1;}
@@ -82,6 +92,47 @@ bool UdpSocket::sendDatagram(std::span<const uint8_t> bytes,const sockaddr_in& p
     }
     if(size_t(n)!=bytes.size())throw std::runtime_error("Open Rune short UDP datagram send");
     return true;
+}
+void UdpSocket::rearmReadSignal() noexcept {
+#ifdef _WIN32
+    // FD_READ is re-posted by any later recvfrom that leaves data queued and by
+    // every arrival after a WSAEWOULDBLOCK, so resetting before draining cannot
+    // lose a datagram that arrives during or after the drain.
+    if(readEvent!=WSA_INVALID_EVENT)WSAResetEvent(readEvent);
+#endif
+}
+void UdpSocket::waitAny(std::span<UdpSocket* const> sockets,uint64_t timeoutMicroseconds) {
+    timeoutMicroseconds=std::min<uint64_t>(timeoutMicroseconds,1000000);
+    if(!timeoutMicroseconds)return;
+#ifdef _WIN32
+    struct Timer {
+        HANDLE handle=CreateWaitableTimerExW(nullptr,nullptr,CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,TIMER_MODIFY_STATE|SYNCHRONIZE);
+        ~Timer(){if(handle)CloseHandle(handle);}
+    };
+    thread_local Timer timer;
+    HANDLE handles[MAXIMUM_WAIT_OBJECTS];DWORD count=0;
+    for(auto* socket:sockets)
+        if(socket && socket->readEvent!=WSA_INVALID_EVENT && count<MAXIMUM_WAIT_OBJECTS-1)handles[count++]=socket->readEvent;
+    LARGE_INTEGER due;due.QuadPart=-static_cast<LONGLONG>(timeoutMicroseconds)*10;
+    if(timer.handle && SetWaitableTimer(timer.handle,&due,0,nullptr,nullptr,FALSE)) {
+        handles[count++]=timer.handle;
+        WaitForMultipleObjects(count,handles,FALSE,INFINITE);
+        CancelWaitableTimer(timer.handle);
+        return;
+    }
+    const DWORD milliseconds=DWORD((timeoutMicroseconds+999)/1000);
+    if(count)WaitForMultipleObjects(count,handles,FALSE,milliseconds);
+    else Sleep(milliseconds);
+#else
+    std::vector<pollfd> fds;fds.reserve(sockets.size());
+    for(auto* socket:sockets)if(socket && socket->fd>=0)fds.push_back(pollfd{socket->fd,POLLIN,0});
+#if defined(__linux__) || defined(__ANDROID__)
+    timespec timeout{time_t(timeoutMicroseconds/1000000),long(timeoutMicroseconds%1000000)*1000};
+    ppoll(fds.data(),nfds_t(fds.size()),&timeout,nullptr);
+#else
+    poll(fds.data(),nfds_t(fds.size()),int((timeoutMicroseconds+999)/1000));
+#endif
+#endif
 }
 int UdpSocket::read(std::span<uint8_t> bytes,sockaddr_in& source) {
     AddressLength size=sizeof(source);

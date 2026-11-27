@@ -6,7 +6,11 @@
 
 // UI reads a copy only. Live UObject pointers and draw scopes stay on the engine thread.
 namespace RuneHud {
+#ifdef _WIN32
+inline std::atomic<bool> Enabled{true};
+#else
 inline std::atomic<bool> Enabled{false};
+#endif
 inline std::mutex Mutex;
 inline std::array<float, 12> Values{}; // mask, five current/max pairs, engine FPS
 inline std::string Messages, Score;

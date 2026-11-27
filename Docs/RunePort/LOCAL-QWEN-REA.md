@@ -4,6 +4,7 @@ The Windows-local Qwen worker can collect small, read-only original-engine contr
 
 ## Setup and safe operation
 
+The Mac dispatcher and detailed setup/accuracy guides are in `/Users/rwillmore/Documents/Codex/2026-11-02/qwen-worker-setup/`. Windows worker instructions are `C:\Users\rwill\oa-worker\AGENTS.md`. Preserve their restrictions and existing configuration. Inference is Windows-local at `127.0.0.1:18180`; `rwill` must be logged in. Keep inference stopped during graphics benchmarks or playtesting.
 
 `rune-classic-engine` is a read-only snapshot of the authorized original `C:\OpenRune\work\rune-classic\System\Engine.dll`, SHA256 `41458bac7e717a57effbe45d9351664ab79d72d7b821c3103018d057b7c585d0`. It is separate from `vulkan-layer`, which belongs to another project and is not Rune. Configuration was backed up before registration; original binaries and live analysis databases are not modified.
 

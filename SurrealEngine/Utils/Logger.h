@@ -32,6 +32,13 @@ public:
 private:
 	float time = 0.0f;
 	std::list<LogMessageLine> Log;
+	// Bounded memory: keep startup lines (tests parse them from SE-Log-LastRun)
+	// and the newest lines; drop the middle once the cap is reached.
+	static constexpr size_t KeepHeadLines = 5000, MaxLines = 50000;
+	std::list<LogMessageLine>::iterator trimAt;
+	bool trimming = false;
+	size_t droppedLines = 0;
+	void Append(LogMessageLine line);
 	std::function<void(const LogMessageLine& line)> printLogDebugger;
 	static std::vector<std::string> SplitNewlines(const std::string& str);
 

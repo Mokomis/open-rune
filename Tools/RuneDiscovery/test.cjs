@@ -9,7 +9,7 @@ test('bounded control frames and strict invitation validation',async()=>{
   assert.equal(p.invitation(invite(1234))[4],'2')
   assert.equal(p.invitation(invite(1234))[13],'4095')
   assert.equal(p.invitation(invite(1234).replace('4095','8191'))[13],'8191')
-  assert.throws(()=>p.invitation(invite(1234).replace('4095','8192')))
+  assert.throws(()=>p.invitation(invite(1234).replace('4095','16384')))
   assert.throws(()=>p.invitation(invite(1234).replace('4095','-1')))
   for(const bad of [invite(0),invite(1234,4),invite(1234).replace('127.0.0.1','999.0.0.1'),invite(1234)+'extra'])assert.throws(()=>p.invitation(bad))
 })

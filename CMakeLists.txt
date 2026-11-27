@@ -2,7 +2,18 @@ cmake_minimum_required(VERSION 3.15)
 
 project(SurrealEngine)
 
+if(MSVC)
+	# CMake's RelWithDebInfo default is /Ob1 (inline-marked functions only). /Ob2 measured
+	# +23% FPS on the Windows walking benchmark (Nov 25 2026). Applies before any subdirectory.
+	foreach(lang C CXX)
+		string(REPLACE "/Ob1" "/Ob2" CMAKE_${lang}_FLAGS_RELWITHDEBINFO "${CMAKE_${lang}_FLAGS_RELWITHDEBINFO}")
+	endforeach()
+endif()
+
 if(ANDROID)
+	# 16 KB page devices (Android 15+) refuse 4 KB-aligned libraries; NDK r27 still defaults to 4 KB.
+	# Set before any subdirectory so SDL2, OpenAL and the rest are aligned too.
+	add_link_options("LINKER:-z,max-page-size=16384")
 	set(SURREAL_ANDROID_SDL_SOURCE "" CACHE PATH "SDL2 source directory for Android")
 	if(NOT EXISTS "${SURREAL_ANDROID_SDL_SOURCE}/CMakeLists.txt")
 		message(FATAL_ERROR "Set SURREAL_ANDROID_SDL_SOURCE to an SDL2 source checkout")
@@ -86,6 +97,7 @@ set(SURREALCOMMON_SOURCES
 	SurrealEngine/DebuggerApp.h
 	SurrealEngine/Engine.cpp
 	SurrealEngine/RuneKick.cpp
+	SurrealEngine/RuneFinisher.cpp
 	SurrealEngine/RuneLeg.cpp
 	SurrealEngine/RuneSpider.cpp
 	SurrealEngine/RuneBreath.cpp

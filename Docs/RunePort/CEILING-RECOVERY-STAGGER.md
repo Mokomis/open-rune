@@ -33,6 +33,7 @@ Both normal players and humanoid enemies/bots use the committed-damage hook. Exi
 - First Mac `--probe-vulkan` attempt failed in the existing R32_UINT hit-buffer probe/resolve path on MoltenVK. The world-only fixture completed after excluding that unrelated validation probe. Its existing blend warnings remain recorded, not silently labeled as a new physics failure or fixed here.
 - Android ARM native build and signed APK are ready; signing certificate and bundled license hashes verified. The user approved installation; see the device completion below.
 
+Artifacts: `/Users/rwillmore/OpenRuneArtifacts/CeilingStagger-20261109` and `C:/OpenRune/outputs/ceiling-stagger-20261109`. Prior qualified CharacterPhysics artifacts are preserved.
 
 
 ## Device completion

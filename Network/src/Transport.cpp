@@ -18,6 +18,21 @@ bool Transport::clock(uint64_t now)
     return true;
 }
 uint64_t Transport::timeout() const { return std::clamp(counters.rttMs*4, uint64_t(200), uint64_t(2000)); }
+uint64_t Transport::idleMs(uint64_t now, uint64_t cap) const
+{
+    if (stopped) return 0;
+    auto until = [&](uint64_t deadline) { return deadline > now ? deadline-now : uint64_t(0); };
+    uint64_t wait = cap;
+    for (const auto& lane : outgoing)
+        for (const auto& [id,p] : lane)
+        {
+            (void)id;
+            if (!p.lastSent) return 0;
+            wait = std::min(wait, until(*p.lastSent+timeout()));
+        }
+    if (ackDirty) wait = std::min(wait, until(nextAck));
+    return wait;
+}
 size_t Transport::pending() const
 {
     return outgoing[0].size()+outgoing[1].size()+outgoing[2].size()+outgoing[3].size();

@@ -1,9 +1,11 @@
 #include "RuneBattleLaws.h"
 #include "RuneSpider.h"
 #include "Precomp.h"
+#include "RuneFinisher.h"
 #include "RuneCorpse.h"
 #include "RuneSlam.h"
 #include "RuneBot.h"
+#include "Utils/CommandLine.h"
 #ifdef OPENRUNE_ENABLE_NETWORK
 #include "RuneTacticsPolicy.h"
 #include "RuneKick.h"
@@ -18,11 +20,82 @@
 #include "Packages/Engine/Resources/Level/ULevel.h"
 #include "Packages/Engine/Resources/Level/UModel.h"
 #include "Packages/Engine/Actors/Inventory/UWeapon.h"
+#include "Packages/Engine/Resources/Mesh/USkelModel.h"
+#include <map>
 #include <queue>
 #include <iostream>
 #include <chrono>
 #include <unordered_map>
 namespace RuneBot {
+bool ClassicRulesRequested(){return commandline->GetArg("","--rune-bot-brain","")=="classic";}
+namespace {
+// Guard long enough to cover an opponent's whole measured swing.
+uint64_t guardHold(const WeaponProfile& w){return w.valid?uint64_t(std::clamp(w.windup+w.duration*.5f+.15f,.4f,.8f)*1000):450;}
+mat4 affineInverse(const mat4& m) {
+    auto r=mat3::inverse(mat3(m));auto out=mat4::identity();
+    for(int c=0;c<3;++c)for(int row=0;row<3;++row)out[c*4+row]=r[c*3+row];
+    auto t=r*(-vec3(m[12],m[13],m[14]));out[12]=t.x;out[13]=t.y;out[14]=t.z;return out;
+}
+}
+// Measured from the weapon's own blade (SweepJoint1..SweepJoint2 + ExtendedLength)
+// carried through this pawn's authored attack animations. Cached per model/weapon.
+WeaponProfile ProfileWeapon(UPawn* p,UActor* weapon)
+{
+    static std::map<std::pair<const void*,const void*>,WeaponProfile> cache;
+    if(!p || !weapon || !weapon->IsA("Weapon"))return {};
+    auto* model=UObject::TryCast<USkelModel>(GetRuneDisplayMesh(p));
+    auto* blade=UObject::TryCast<USkelModel>(GetRuneDisplayMesh(weapon));
+    if(!model || !blade)return {};
+    auto key=std::make_pair(static_cast<const void*>(model),static_cast<const void*>(weapon->Class));
+    if(auto found=cache.find(key);found!=cache.end())return found->second;
+    WeaponProfile out;
+    const int j1=weapon->GetInt("SweepJoint1"),j2=weapon->GetInt("SweepJoint2");
+    const int attach=weapon->GetByte("AttachParentJoint");
+    auto weaponBones=blade->ActorJointMatrices(weapon);
+    if(j1<0 || j2<0 || size_t(j1)>=weaponBones.size() || size_t(j2)>=weaponBones.size() || attach<0 || size_t(attach)>=model->Joints.size()){cache[key]=out;return out;}
+    const auto pawnWorld=GetRuneMeshToWorld(p);
+    const auto liveGrip=RuneDualWield::Attachment(*model,p,weapon,model->ActorJointMatrices(p));
+    // Weapon mesh relative to its grip; constant while the hand animates.
+    const auto offset=affineInverse(pawnWorld*liveGrip)*GetRuneMeshToWorld(weapon);
+    vec3 base=(weaponBones[j1]*vec4(0,0,0,1)).xyz(),tip=(weaponBones[j2]*vec4(0,0,0,1)).xyz();
+    const float extended=weapon->GetFloat("ExtendedLength");
+    const auto origin=p->Location();const float yaw=p->Rotation().YawRadians();
+    const vec3 forward(std::cos(yaw),std::sin(yaw),0),side(-std::sin(yaw),std::cos(yaw),0);
+    std::vector<float> reaches,windups,durations;
+    for(const char* field:{"A_AttackA","A_AttackB","A_AttackC","A_AttackStandA","A_AttackStandB"}) {
+        if(!weapon->HasProperty(field))continue;
+        auto name=weapon->GetName(field);if(name.IsNone())continue;
+        int sequence=-1;
+        for(size_t s=0;s<model->Sequences.size();++s)if(model->Sequences[s].Info.Name==name){sequence=int(s);break;}
+        if(sequence<0)continue;
+        const auto& info=model->Sequences[sequence].Info;
+        const float frames=float(std::max(1,info.NumFrames)),seconds=frames/std::max(1.f,info.Rate);
+        std::vector<float> trace;float best=0;
+        for(int sample=0;sample<=30;++sample) {
+            // SampleFrame takes a 0..1 phase through the sequence.
+            auto bones=model->JointMatrices(model->SampleFrame(size_t(sequence),float(sample)/30.f,false));
+            const auto toWorld=pawnWorld*RuneDualWield::Attachment(*model,p,weapon,bones)*offset;
+            const auto worldBase=(toWorld*vec4(base,1)).xyz();auto worldTip=(toWorld*vec4(tip,1)).xyz();
+            if(extended>0 && length(worldTip-worldBase)>.01f)worldTip+=normalize(worldTip-worldBase)*extended;
+            float reach=0;
+            for(int step=0;step<=4;++step) {
+                const auto d=worldBase+(worldTip-worldBase)*(float(step)/4)-origin;
+                if(std::abs(dot(d,side))<=24.f && std::abs(d.z)<64.f)reach=std::max(reach,dot(d,forward));
+            }
+            trace.push_back(reach);best=std::max(best,reach);
+        }
+        if(best<=0)continue;
+        int first=0;while(first<int(trace.size()) && trace[first]<best*.85f)++first;
+        reaches.push_back(best);windups.push_back(seconds*float(first)/30.f);durations.push_back(seconds);
+    }
+    if(!reaches.empty()) {
+        auto median=[](std::vector<float> v){std::sort(v.begin(),v.end());return v[v.size()/2];};
+        out.reach=median(reaches);out.windup=median(windups);out.duration=median(durations);out.valid=true;
+    }
+    std::cout<<"OPEN_RUNE_BOT_WEAPON pawn="<<p->Class->Name.ToString()<<" weapon="<<weapon->Class->Name.ToString()<<" valid="<<out.valid
+        <<" reach="<<out.reach<<" windup="<<out.windup<<" duration="<<out.duration<<" sequences="<<reaches.size()<<std::endl;
+    cache[key]=out;return out;
+}
 using namespace openrune::net;
 namespace {
 vec3 position(const Entity& e){return vec3(float(e.position[0]),float(e.position[1]),float(e.position[2]))*.125f;}
@@ -54,6 +127,62 @@ bool swinging(UActor* actor)
     std::string name=body.ToString()+" "+torso.ToString();
     for(auto& c:name)c=char(std::tolower(static_cast<unsigned char>(c)));
     return name.find("kick")!=std::string::npos || name.find("bash")!=std::string::npos;
+}
+// Visible animation phase [0,1] of an active weapon swing, or -1 if not swinging a weapon.
+float swingPhase(UActor* actor)
+{
+    auto* pawn=UObject::TryCast<UPawn>(actor);
+    if(!pawn)return -1.f;
+    const auto body=pawn->AnimSequence();
+    auto* proxy=UObject::TryCast<UActor>(pawn->GetUObject("AnimProxy"));
+    const auto torso=proxy?proxy->AnimSequence():NameString("None");
+    for(auto* weapon:{pawn->Weapon(),pawn->Dual.offhand})if(weapon)for(const char* field:{"A_AttackA","A_AttackB","A_AttackC","A_AttackD",
+        "A_AttackStandA","A_AttackStandB","A_AttackBackupA","A_AttackBackupB","A_AttackStrafeLeft","A_AttackStrafeRight","A_JumpAttack"}) {
+        if(!weapon->HasProperty(field))continue;
+        auto animation=weapon->GetName(field);
+        if(!animation.IsNone()) {
+            if(proxy && animation==torso)return std::clamp(proxy->AnimFrame(),0.f,1.f);
+            if(animation==body)return std::clamp(pawn->AnimFrame(),0.f,1.f);
+        }
+    }
+    return -1.f;
+}
+// True while our own visible AnimProxy is still executing an attack or return animation,
+// so we do not waste an Attack action and lock out readyAt while the weapon is busy.
+bool ownAttackBusy(UPawn* pawn)
+{
+    if(!pawn)return false;
+    auto* proxy=UObject::TryCast<UActor>(pawn->GetUObject("AnimProxy"));
+    if(!proxy)return false;
+    const auto torso=proxy->AnimSequence();
+    for(auto* weapon:{pawn->Weapon(),pawn->Dual.offhand})if(weapon)for(const char* field:{
+        "A_AttackA","A_AttackB","A_AttackC","A_AttackD","A_AttackStandA","A_AttackStandB",
+        "A_AttackBackupA","A_AttackBackupB","A_AttackStrafeLeft","A_AttackStrafeRight","A_JumpAttack",
+        "A_AttackAReturn","A_AttackBReturn","A_AttackCReturn","A_AttackDReturn",
+        "A_AttackStandAReturn","A_AttackStandBReturn","A_AttackBackupAReturn","A_AttackBackupBReturn"}) {
+        if(!weapon->HasProperty(field))continue;
+        auto animation=weapon->GetName(field);
+        if(!animation.IsNone() && animation==torso)return true;
+    }
+    return false;
+}
+static bool guardBreaker(UActor* actor)
+{
+    auto* pawn=UObject::TryCast<UPawn>(actor);
+    if(!pawn)return false;
+    auto* proxy=UObject::TryCast<UActor>(pawn->GetUObject("AnimProxy"));
+    std::string name=pawn->AnimSequence().ToString()+" "+(proxy?proxy->AnimSequence().ToString():std::string());
+    for(auto& c:name)c=char(std::tolower(static_cast<unsigned char>(c)));
+    return name.find("kick")!=std::string::npos || name.find("bash")!=std::string::npos;
+}
+static bool kicking(UActor* actor)
+{
+    auto* pawn=UObject::TryCast<UPawn>(actor);
+    if(!pawn)return false;
+    auto* proxy=UObject::TryCast<UActor>(pawn->GetUObject("AnimProxy"));
+    std::string name=pawn->AnimSequence().ToString()+" "+(proxy?proxy->AnimSequence().ToString():std::string());
+    for(auto& c:name)c=char(std::tolower(static_cast<unsigned char>(c)));
+    return name.find("kick")!=std::string::npos;
 }
 }
 // Match walking collision, including solid scenery actors. Actor.Trace with
@@ -402,7 +531,7 @@ vec3 Brain::navigate(Engine& game, UPlayerPawn* p, vec3 goal, uint64_t now)
 Decision Brain::think(Engine& game,RuneNetworkReplica& replica,const World& world,const MatchStatus& status,EntityRef own,uint64_t now){
     const auto* self=find(world,own);auto* p=UObject::TryCast<UPlayerPawn>(replica.actor(own));
     if(!self || !p)return {};
-    if(life!=self->life){spiderAt=spiderRetry=0;ledgeSince=ledgeJumpAt=0;supplyTarget={};supplyTries=0;liftActive=-1;liftRetryAt=0;slamAt=slamCooldown=0;slamStage=0;life=self->life;lastHealth=self->health;searchUntil=0;equipmentUntil=now+25000;target={};nextThink=readyAt=guardUntil=kickAt=bashAt=useAt=routeAt=patrolAt=progressAt=jumpAt=woundedAt=leapAt=jumpUntil=unreachableAt=supportUntil=guardAt=powerAt=escapeUntil=trafficUntil=trafficWaitUntil=0;trafficBlocker={};seenAt=lastSeen=threatAt=blockedAt=0;wasThreat=false;route.clear();rejected.clear();searchedPatrols.clear();intent={};side=random()<.5f?-1:1;}
+    if(life!=self->life){spiderAt=spiderRetry=0;ledgeSince=ledgeJumpAt=0;supplyTarget={};supplyTries=0;liftActive=-1;liftRetryAt=0;slamAt=slamCooldown=0;slamStage=0;swingWindupUntil=0;life=self->life;lastHealth=self->health;searchUntil=0;equipmentUntil=now+25000;target={};nextThink=readyAt=guardUntil=kickAt=bashAt=useAt=routeAt=patrolAt=progressAt=jumpAt=woundedAt=leapAt=jumpUntil=unreachableAt=supportUntil=guardAt=powerAt=escapeUntil=trafficUntil=trafficWaitUntil=0;trafficBlocker={};seenAt=lastSeen=threatAt=blockedAt=0;wasThreat=false;route.clear();rejected.clear();searchedPatrols.clear();intent={};side=random()<.5f?-1:1;}
     if(self->health>0 && p->AnimSequence()==RuneShieldTaunt::Clip){Decision out;out.input.life=life;out.input.yaw=self->angles[1];intent=out;return out;}
     if(now<nextThink){auto out=intent;out.action.reset();out.input.life=life;return out;}
     const auto decisionStarted=std::chrono::steady_clock::now();
@@ -423,6 +552,9 @@ Decision Brain::think(Engine& game,RuneNetworkReplica& replica,const World& worl
         maxThinkUs=std::max(maxThinkUs,uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()-decisionStarted).count()));
         intent=out;return out;
     };
+    if(status.phase==MatchPhase::Playing && self->health>0 && p->finisherHeld && game.TotalTime-p->finisherPoseStart>.70 && now>=readyAt){
+        out.action=ActionKind::Attack;readyAt=now+450;return finish();
+    }
     auto act=[&](ActionKind a,uint64_t recovery){if(now>=readyAt){out.action=a;readyAt=now+recovery;return true;}return false;};
     if(self->physical.kind==1 || self->physical.kind==3){liftActive=-1;slamStage=0;intent=out;return out;}
     if(status.phase!=MatchPhase::Playing)return finish();
@@ -488,20 +620,133 @@ Decision Brain::think(Engine& game,RuneNetworkReplica& replica,const World& worl
     bool canFight=status.mode!=GameMode::Arena || (status.arenaPhase==1 && team(status,own)<2);
     if(status.mode==GameMode::HeadBall && !status.headBallStarted)canFight=false;
     const Entity* foe=nullptr;float best=1e9f;
-    if(canFight)for(const auto& e:world){if(e.kind!=EntityKind::Pawn || e.health<=0 || (e.flags&32) || !enemy(status,own,e.ref))continue;
-        if(rejectedAt(position(e),now) && length(position(e)-here)>160)continue;
-        auto d=position(e)-here;float distance=length(d);if(distance>1600 || (distance>110 && dot(yawDirection(self->angles[1]),direction(d))<-.15f))continue;
-        if(!p->FastTrace(position(e)+vec3(0,0,20),here+vec3(0,0,20)))continue;
-        float score=distance*(e.ref==target?.65f:1.f);
-        if(status.mode!=GameMode::Deathmatch)for(const auto& ally:world)
-            if(ally.kind==EntityKind::Pawn && ally.ref!=own && ally.health>0 && team(status,ally.ref)==team(status,own) &&
-               flat(position(ally)-position(e))<160 && p->FastTrace(position(ally),here))score+=180;
-        if(score<best){foe=&e;best=score;}}
+    if(canFight) {
+        if(classic) {
+            for(const auto& e:world){if(e.kind!=EntityKind::Pawn || e.health<=0 || (e.flags&32) || !enemy(status,own,e.ref))continue;
+                if(rejectedAt(position(e),now) && length(position(e)-here)>160)continue;
+                auto d=position(e)-here;float distance=length(d);if(distance>1600 || (distance>110 && dot(yawDirection(self->angles[1]),direction(d))<-.15f))continue;
+                if(!p->FastTrace(position(e)+vec3(0,0,20),here+vec3(0,0,20)))continue;
+                float score=distance*(e.ref==target?.65f:1.f);
+                if(status.mode!=GameMode::Deathmatch)for(const auto& ally:world)
+                    if(ally.kind==EntityKind::Pawn && ally.ref!=own && ally.health>0 && team(status,ally.ref)==team(status,own) &&
+                       flat(position(ally)-position(e))<160 && p->FastTrace(position(ally),here))score+=180;
+                if(score<best){foe=&e;best=score;}}
+        } else {
+            const auto selfFwd=yawDirection(self->angles[1]);
+            std::vector<const Entity*> visiblePawns,eligibleEnemies;
+            const Entity* classicFoe=nullptr;float classicBest=1e9f;
+            for(const auto& e:world){
+                if(e.kind!=EntityKind::Pawn || e.ref==own || e.health<=0 || (e.flags&32))continue;
+                auto d=position(e)-here;float distance=length(d);
+                if(distance>1600 || (distance>110 && dot(selfFwd,direction(d))<-.15f))continue;
+                if(!p->FastTrace(position(e)+vec3(0,0,20),here+vec3(0,0,20)))continue;
+                visiblePawns.push_back(&e);
+                if(!enemy(status,own,e.ref))continue;
+                if(rejectedAt(position(e),now) && distance>160)continue;
+                eligibleEnemies.push_back(&e);
+                float cScore=distance*(e.ref==target?.65f:1.f);
+                if(cScore<classicBest){classicBest=cScore;classicFoe=&e;}
+            }
+            bool chosenThirdParty=false;
+            for(const auto* c:eligibleEnemies){
+                const auto pos=position(*c);const auto d=pos-here;const float dist=length(d);
+                const auto dirToC=direction(d);const auto cFwd=yawDirection(c->angles[1]);
+                const float facingUs=dot(cFwd,-dirToC);
+                const bool cSwinging=swinging(replica.actor(c->ref));
+                const bool cBlocking=(c->flags&4)||(c->combat.flags&2);
+                float score=dist;
+                if(std::abs(d.z)>64.f)score+=std::abs(d.z)*1.1f;
+                // Third-party: prefer an enemy engaged with another visible pawn or swinging away from us.
+                bool engagedElsewhere=false;
+                for(const auto* o:visiblePawns){
+                    if(o->ref==c->ref)continue;
+                    auto toOther=position(*o)-pos;
+                    if(flat(toOther)<250.f && std::abs(toOther.z)<96.f && dot(cFwd,direction(toOther))>.45f){engagedElsewhere=true;break;}
+                }
+                if(!engagedElsewhere && cSwinging && facingUs<.2f)engagedElsewhere=true;
+                const bool isThirdParty=engagedElsewhere && facingUs<.35f;
+                if(isThirdParty){
+                    const float backFactor=std::clamp((.35f-facingUs)/1.35f,0.f,1.f);
+                    score-=110.f+backFactor*160.f;
+                }else if(facingUs<-.25f && dist<500.f){
+                    score-=75.f;
+                }
+                // Wounded: prefer low-health enemies within a short walk (especially 1-hit kills).
+                const float closeness=std::clamp(1.f-(dist-140.f)/600.f,.2f,1.f);
+                const float missingHealth=std::clamp((100.f-float(c->health))/100.f,0.f,1.f);
+                score-=missingHealth*210.f*closeness;
+                if(c->health<=35)score-=120.f*closeness;
+                if((c->flags&FinisherOpeningFlag) && dist<300.f)score-=85.f;
+                if(cBlocking && facingUs>.5f)score+=55.f;
+                // Avoid sandwiches and ignoring a closer attacker who is facing us.
+                for(const auto* o:eligibleEnemies){
+                    if(o->ref==c->ref)continue;
+                    auto od=position(*o)-here;const float oDist=length(od);const auto dirToO=direction(od);
+                    const float oFacingUs=dot(yawDirection(o->angles[1]),-dirToO);
+                    const float alignment=dot(dirToC,dirToO);
+                    if(oDist<420.f && alignment<-.15f){
+                        const float behind=(-.15f-alignment)/.85f;
+                        const float proximity=std::clamp(1.f-oDist/420.f,0.f,1.f);
+                        score+=behind*proximity*(oFacingUs>.35f?300.f:140.f);
+                    }
+                    if(oDist+40.f<dist && oDist<300.f && oFacingUs>.45f){
+                        const bool oSwing=swinging(replica.actor(o->ref));
+                        const float proximity=std::clamp(1.f-oDist/300.f,.25f,1.f);
+                        score+=(oSwing?220.f:130.f)*proximity;
+                    }
+                }
+                if(status.mode!=GameMode::Deathmatch)for(const auto* o:visiblePawns)
+                    if(team(status,o->ref)==team(status,own) && flat(position(*o)-pos)<160.f)score+=180.f;
+                // Hysteresis: switching targets costs a reaction pause, so hold current target unless clearly beaten.
+                if(c->ref==target)score-=std::max(140.f,dist*.30f);
+                if(score<best){foe=c;best=score;chosenThirdParty=isThirdParty;}
+            }
+            if(foe && target!=foe->ref){
+                if(chosenThirdParty)++thirdParty;
+                if(classicFoe && foe->ref!=classicFoe->ref){
+                    ++targetOverrides;
+                    if(foe->health<=50)++woundedTargets;
+                }
+            }
+        }
+    }
     if(self->health<lastHealth && !foe)searchUntil=now+700;
     lastHealth=self->health;
     if(foe){searchUntil=0;if(target!=foe->ref){target=foe->ref;seenAt=now;wasThreat=false;threatAt=blockedAt=0;}remembered=position(*foe);lastSeen=now;}
     else {wasThreat=false;threatAt=blockedAt=0;if(lastSeen && now-lastSeen>2200){target={};seenAt=lastSeen=0;}}
-    if(guardUntil){if(now<guardUntil){out.input.held=2;return finish();}out.action=ActionKind::LowerShield;guardUntil=0;readyAt=std::max(readyAt,now+250);return finish();}
+    // Weapon-aware rules: duel-style defence (holding a guard, keeping distance)
+    // only pays against a single engaged opponent; with a second enemy close by
+    // it just hands that enemy free hits.
+    bool crowded=false;
+    if(!classic && foe)for(const auto& e:world)if(e.kind==EntityKind::Pawn && e.ref!=foe->ref && e.ref!=own && e.health>0 && !(e.flags&32) &&
+        enemy(status,own,e.ref) && length(position(e)-here)<350.f){crowded=true;break;}
+    if(guardUntil && !classic && foe && now<guardUntil && crowded){
+        guardUntil=0;guardSawSwing=false;out.action=ActionKind::LowerShield;readyAt=std::max(readyAt,now+100);return finish();
+    }
+    if(guardUntil && !classic && foe && now<guardUntil){
+        // Hold the guard toward the attacker. A swing that ends on the guard
+        // opens a punish; kicks and bashes beat a guard, so leave their reach.
+        auto* attacker=replica.actor(foe->ref);auto gap=position(*foe)-here;
+        auto* attackerPawn=UObject::TryCast<UPawn>(attacker);
+        const auto attackerWeapon=(attackerPawn && foe->weapon.id)?ProfileWeapon(attackerPawn,replica.actor(foe->weapon)):WeaponProfile{};
+        const float reach=attackerWeapon.valid?attackerWeapon.reach+p->CollisionRadius()*.6f:120.f;
+        out.input.yaw=uint16_t(Rotator::FromVector(gap).Yaw);
+        if(guardBreaker(attacker) && flat(gap)<reach+20.f){
+            guardUntil=0;guardSawSwing=false;out.action=ActionKind::LowerShield;readyAt=std::max(readyAt,now+150);
+            auto back=here-direction(gap)*std::clamp(reach+24.f-flat(gap),48.f,110.f);
+            if(safe(p,here,back)){auto f=yawDirection(out.input.yaw);auto d=direction(back-here);out.input.forward=int16_t(dot(d,f)*850);out.input.strafe=int16_t(dot(d,vec3(-f.y,f.x,0))*850);}
+            ++guardEscapes;return finish();
+        }
+        const bool attacking=swinging(attacker);
+        if(attacking)guardSawSwing=true;
+        else if(guardSawSwing){
+            guardUntil=0;guardSawSwing=false;out.action=ActionKind::LowerShield;readyAt=std::max(readyAt,now+100);
+            foeRecoveredAt=now;++guardPunishes;return finish();
+        }
+        if(flat(gap)>reach+80.f){guardUntil=0;guardSawSwing=false;out.action=ActionKind::LowerShield;readyAt=std::max(readyAt,now+150);return finish();}
+        out.input.held=2;return finish();
+    }
+    if(guardUntil){if(now<guardUntil){out.input.held=2;return finish();}out.action=ActionKind::LowerShield;guardUntil=0;guardSawSwing=false;readyAt=std::max(readyAt,now+250);return finish();}
     if(!foe && now<searchUntil){out.input.yaw=uint16_t(self->angles[1]+4369);return finish();}
     if(!foe && now<escapeUntil && flat(escapeGoal-here)>16){
         // Retain the chosen escape tangent briefly. Re-aiming at the unreachable
@@ -632,7 +877,10 @@ Decision Brain::think(Engine& game,RuneNetworkReplica& replica,const World& worl
         }
     }
     // Seek useful visible supplies; never know a hidden pickup's live availability.
-    if((!goalSet || (status.mode==GameMode::Arena && team(status,own)>=2 && !self->weapon.id)) && (!foe || self->health<35 || !self->weapon.id || (status.mode==GameMode::HeadBall && status.headBallStarted))){
+    // Weapon-aware rules: a lone weapon has no guard, so arm up (shield or a second
+    // one-handed weapon for a crossed block) while the nearest enemy is still far.
+    const bool needGuard=!classic && self->weapon.id && !self->shield.id && !self->combat.offhand.id && (!foe || flat(position(*foe)-here)>450);
+    if((!goalSet || (status.mode==GameMode::Arena && team(status,own)>=2 && !self->weapon.id)) && (!foe || needGuard || self->health<35 || !self->weapon.id || (status.mode==GameMode::HeadBall && status.headBallStarted))){
         float closest=700;EntityRef chosenSupply{};
         for(const auto& e:world)if(!e.owner.id && !(e.flags&32) && (e.kind==EntityKind::Weapon || e.kind==EntityKind::Limb || e.kind==EntityKind::Shield || e.kind==EntityKind::Pickup)){
             auto* a=replica.actor(e.ref);if(!a)continue;
@@ -696,27 +944,105 @@ Decision Brain::think(Engine& game,RuneNetworkReplica& replica,const World& worl
     if(!goalSet && foe){
         auto delta=position(*foe)-here;float distance=flat(delta);aim(position(*foe));
         bool threat=(swinging(replica.actor(foe->ref)) || foe->combat.phase==6) && distance<(foe->combat.phase==6?220:180) && dot(yawDirection(foe->angles[1]),-direction(delta))>.35f;
+        if(!threat && wasThreat && !classic)foeRecoveredAt=now;
         if(threat && !wasThreat){threatAt=now;defenseRoll=random();}wasThreat=threat;
         bool blocking=(foe->flags&4)||(foe->combat.flags&2);if(blocking && !blockedAt)blockedAt=now;if(!blocking)blockedAt=0;
         if(now-seenAt<reaction)return finish();
         const bool recovering=now<readyAt;
         bool facing=dot(yawDirection(out.input.yaw),direction(delta))>.9f;
         auto* opponent=UObject::TryCast<UPawn>(replica.actor(foe->ref));
-        const float attackRange=p->CollisionRadius()+(opponent?opponent->CollisionRadius():18.f)+(self->combat.offhand.id?12.f:30.f);
+        float attackRange=p->CollisionRadius()+(opponent?opponent->CollisionRadius():18.f)+(self->combat.offhand.id?12.f:30.f);
+        // Weapon-aware rules: swing when the measured blade can reach the opponent's body.
+        const auto ownWeapon=classic?WeaponProfile{}:ProfileWeapon(p,p->Weapon());
+        if(ownWeapon.valid && !self->combat.offhand.id)attackRange=ownWeapon.reach+(opponent?opponent->CollisionRadius():18.f)*.6f;
+        // How close the opponent's own blade reaches into us (0 when unknown).
+        const auto foeWeapon=(classic || !opponent || !foe->weapon.id)?WeaponProfile{}:ProfileWeapon(opponent,replica.actor(foe->weapon));
+        const float danger=foeWeapon.valid?foeWeapon.reach+p->CollisionRadius()*.6f:0.f;
         const float bashReach=p->CollisionRadius()+(opponent?opponent->CollisionRadius():18.f)+32.f;
         bool inHeight=std::abs(delta.z)<std::min(42.f,p->CollisionHeight());
-        if(!recovering && threat && now-threatAt>=reaction && defenseRoll<temperament.blockChance){
-            if((self->shield.id || (RuneBattleLaws::Allowed(RuneBattleLaws::Cross)&&self->combat.offhand.id)) && facing){if(act(ActionKind::RaiseShield,650)){guardUntil=now+450;++defenses;if(self->combat.offhand.id)++crossBlocks;out.input.held=2;}return finish();}
-            auto back=here-direction(delta)*48.f;if(safe(p,here,back)){move(back,700);++defenses;return finish();}
+        // A sword swipe that meets a raised kicking leg can sever it (Kick law):
+        // answer a seen kick with a strike instead of a guard.
+        if(!classic && !recovering && threat && now-threatAt>=reaction && defenseRoll<temperament.blockChance && facing && inHeight &&
+           self->weapon.id && p->Weapon() && RuneFinisher::Style(p->Weapon())==RuneFinisher::Family::Sword &&
+           RuneBattleLaws::Allowed(RuneBattleLaws::Kick) && kicking(replica.actor(foe->ref)) && distance<attackRange+12.f){
+            if(act(ActionKind::Attack,650)){++attacks;++legCounters;}return finish();
         }
-        if(!recovering && !threat && facing && distance>80 && distance<175 &&
+        if(!recovering && threat && now-threatAt>=reaction && defenseRoll<temperament.blockChance){
+            if((self->shield.id || (RuneBattleLaws::Allowed(RuneBattleLaws::Cross)&&self->combat.offhand.id)) && facing){if(act(ActionKind::RaiseShield,650)){guardUntil=now+guardHold(foeWeapon);guardSawSwing=false;++defenses;if(self->combat.offhand.id)++crossBlocks;out.input.held=2;}return finish();}
+            // Without a guard, step far enough to leave the opponent's measured reach.
+            const float backStep=(!classic && danger>0)?std::clamp(danger+16.f-distance,48.f,110.f):48.f;
+            auto back=here-direction(delta)*backStep;if(safe(p,here,back)){move(back,700);++defenses;return finish();}
+        }
+        // Swing timing: compute closing-velocity pre-swing and opponent remaining wind-up
+        // before speculative guard/spacing so we take clean first strikes instead of hesitating.
+        bool foeWillBeatUs=false;
+        if(!classic && threat && ownWeapon.valid) {
+            const float foePhase=swingPhase(replica.actor(foe->ref));
+            const float foeRemain=foeWeapon.valid
+                ? (foePhase>=0.f ? std::max(0.f, foeWeapon.windup - foePhase*foeWeapon.duration)
+                                 : std::max(0.f, foeWeapon.windup - float(now-threatAt)*.001f))
+                : std::max(0.f, .20f - float(now-threatAt)*.001f);
+            // Only hold off and step out when we are near the edge of their reach and can actually evade;
+            // at point-blank with no block, trading beats walking backward into free hits.
+            if(!crowded && danger>0.f && distance>=danger-24.f && distance<danger+36.f && foeRemain+.04f<ownWeapon.windup)
+                foeWillBeatUs=true;
+        }
+        bool earlySwing=false;
+        if(!classic && !recovering && !ownAttackBusy(p) && !foeWillBeatUs && facing && inHeight && !blocking && self->weapon.id && ownWeapon.valid && ownWeapon.windup>.05f && distance>=attackRange) {
+            const vec3 selfVel(float(self->velocity[0])*.25f, float(self->velocity[1])*.25f, 0.f);
+            const vec3 foeVel(float(foe->velocity[0])*.25f, float(foe->velocity[1])*.25f, 0.f);
+            const vec3 relVel=foeVel-selfVel;
+            const vec3 dir=direction(delta);
+            const float closingSpeed=-dot(relVel, dir);
+            const float leadTime=std::clamp(ownWeapon.windup, .08f, .45f);
+            const float maxEarlyDist=attackRange+std::min(140.f, std::max(0.f, closingSpeed)*leadTime);
+            const vec3 predDelta=vec3(delta.x, delta.y, 0.f)+relVel*leadTime;
+            if(closingSpeed>35.f && distance<maxEarlyDist && length(predDelta)<attackRange*.98f)earlySwing=true;
+        }
+        const bool ownBusy=!classic && ownAttackBusy(p);
+        const bool attackReady=!recovering && !ownBusy;
+        const uint64_t attackRecovery=classic
+            ? (650+uint64_t(random()*250))
+            : uint64_t((std::max(ownWeapon.valid?ownWeapon.duration*.75f:temperament.recovery, temperament.recovery)+random()*.04f)*1000.f);
+        const bool readyStrike=!classic && attackReady && !threat && !blocking && facing && inHeight && self->weapon.id && (distance<attackRange || earlySwing);
+        if(!recovering && !threat && facing && !readyStrike &&
+           (classic?(distance>80 && distance<175):(!crowded && (distance<danger+24.f || (danger<=0 && distance>80 && distance<175)))) &&
            (self->shield.id || (RuneBattleLaws::Allowed(RuneBattleLaws::Cross)&&self->combat.offhand.id)) && now>=guardAt &&
            dot(yawDirection(foe->angles[1]),-direction(delta))>.65f){
             // A short prepared guard can catch a fast wind-up that a purely
             // reactive block cannot. One roll per opportunity, with a cooldown.
-            guardAt=now+1800;
-            if(random()<temperament.blockChance*.4f && act(ActionKind::RaiseShield,650)){
-                guardUntil=now+450;++defenses;if(self->combat.offhand.id)++crossBlocks;out.input.held=2;return finish();
+            // Weapon-aware rules guard inside the opponent's measured reach when not striking first.
+            guardAt=now+(classic?1800:1200);
+            if(random()<temperament.blockChance*(classic?.4f:.55f) && act(ActionKind::RaiseShield,650)){
+                guardUntil=now+(classic?450:guardHold(foeWeapon));guardSawSwing=false;++defenses;if(self->combat.offhand.id)++crossBlocks;out.input.held=2;return finish();
+            }
+        }
+        if(!classic && attackReady && !threat && !blocking && facing && inHeight && foeRecoveredAt && now-foeRecoveredAt<450 && self->weapon.id) {
+            // The opponent just finished a swing: step in and strike before they recover.
+            if(distance<attackRange || earlySwing){
+                if(act(ActionKind::Attack,attackRecovery)){
+                    ++attacks;++punishes;foeRecoveredAt=0;
+                    if(earlySwing){++earlySwings;swingWindupUntil=now+uint64_t(std::clamp(ownWeapon.windup,.08f,.45f)*1000.f);}
+                    auto forwardStep=here+direction(delta)*24.f;
+                    if(distance>attackRange*.65f && safe(p,here,forwardStep))move(position(*foe),850);
+                }
+                return finish();
+            }
+            if(distance<attackRange+56.f){move(position(*foe));return finish();}
+        }
+        if(!classic && !recovering && !threat && facing && self->weapon.id && p->Weapon() && now>=throwAt && (self->flags&2) &&
+           distance>220 && distance<650 && std::abs(delta.z)<96 && !(blocking && dot(yawDirection(foe->angles[1]),-direction(delta))>.5f) &&
+           foe->health>0 && float(foe->health)<=float(p->Weapon()->GetInt("Damage"))*1.6f && p->FastTrace(position(*foe),here)) {
+            // Finishing throw at a wounded opponent who is out of melee reach.
+            throwAt=now+2500;
+            float mass=std::max(1.f,p->Weapon()->Mass());
+            float ahead=std::min(750.f,7500.f/mass),up=std::min(200.f,2000.f/mass),speed2=ahead*ahead+up*up;
+            float gravity=currentZone?std::max(1.f,-currentZone->ZoneGravity().z):950.f;
+            float discriminant=speed2*speed2-gravity*(gravity*distance*distance+2*delta.z*speed2);
+            if(discriminant>=0 && random()<.6f) {
+                float angle=std::atan((speed2-std::sqrt(discriminant))/(gravity*distance))-std::atan2(up,ahead);
+                out.input.pitch=int16_t(std::clamp(angle*65536.f/6.2831853f,-16384.f,16384.f));
+                if(dot(yawDirection(out.input.yaw),direction(delta))>.995f && act(ActionKind::Throw,1500)){++specials;++throws;return finish();}
             }
         }
         if(!recovering && !threat && facing && distance<600 && now>=powerAt){
@@ -739,6 +1065,11 @@ Decision Brain::think(Engine& game,RuneNetworkReplica& replica,const World& worl
             }
         }
         if(!goalSet){
+        if(attackReady && !threat && !blocking && facing && inHeight && distance<attackRange && self->weapon.id &&
+           RuneFinisher::CanFinish(p->Weapon()) && RuneBattleLaws::Allowed(RuneBattleLaws::Finishers) && now-seenAt>=reaction && ((foe->flags&FinisherOpeningFlag) || RuneFinisher::Opening(p,opponent))){
+            if(act(ActionKind::Attack,attackRecovery))++attacks;
+            return finish();
+        }
         if(!recovering && facing && inHeight && distance<bashReach && ((blocking && blockedAt && now-blockedAt>=reaction)||(threat && now-threatAt>=reaction)) && self->shield.id && now>=bashAt && RuneBash::Compatible(p)){
             if(act(ActionKind::Bash,900)){bashAt=now+4200;++specials;++bashes;}return finish();}
         if(!recovering && facing && inHeight && distance<74 && (!blocking || !self->shield.id) && now>=kickAt && RuneKick::Compatible(p)){
@@ -772,12 +1103,50 @@ Decision Brain::think(Engine& game,RuneNetworkReplica& replica,const World& worl
             (self->flags&2) && !(self->combat.ready&1) && now>=slamCooldown && RuneBattleLaws::Allowed(RuneBattleLaws::Slam) && RuneSlam::Heavy(p->Weapon()) && safe(p,here,here) && random()<.12f) {
             if(act(ActionKind::Jump,100)){slamStage=1;slamAt=now+100;slamCooldown=now+6000;out.input.forward=400;}return finish();
         }
-        if(!recovering && facing && inHeight && distance<attackRange && !blocking && self->weapon.id){if(act(ActionKind::Attack,650+uint64_t(random()*250))){++attacks;}return finish();}
+        if(!classic && !readyStrike && !crowded && danger>0 && !recovering && !threat && inHeight && self->weapon.id) {
+            // Out-reached by a facing, ready opponent: briefly hold just beyond their blade
+            // when we don't have a clean pre-swing, waiting for a whiff.
+            const bool foeFacing=dot(yawDirection(foe->angles[1]),-direction(delta))>.5f;
+            const bool punishWindow=foeRecoveredAt && now-foeRecoveredAt<450;
+            if(attackRange+16.f<danger && foeFacing && !punishWindow && distance<danger+12.f && distance>attackRange+8.f) {
+                if(!spacingSince)spacingSince=now;
+                if(now-spacingSince<700) {
+                    auto tangent=direction(vec3(-delta.y,delta.x,0))*float(side);
+                    auto spot=position(*foe)-direction(delta)*(danger+20.f)+tangent*24.f;
+                    if(safe(p,here,spot)){move(spot,700);++spacing;return finish();}
+                    side=-side;
+                } else if(now-spacingSince>2400)spacingSince=0;
+            } else if(distance>danger+24.f)spacingSince=0;
+        }
+        if(!classic && !recovering && foeWillBeatUs && facing && inHeight && !blocking && self->weapon.id) {
+            const float backStep=std::clamp(danger+16.f-distance,48.f,100.f);
+            auto back=here-direction(delta)*backStep;
+            if(safe(p,here,back)){++swingHolds;move(back,750);return finish();}
+        }
+        if(attackReady && facing && inHeight && !blocking && self->weapon.id && (classic?(distance<attackRange):(!foeWillBeatUs && (distance<attackRange || earlySwing)))){
+            if(act(ActionKind::Attack,attackRecovery)){
+                ++attacks;
+                if(earlySwing){
+                    ++earlySwings;
+                    swingWindupUntil=now+uint64_t(std::clamp(ownWeapon.windup,.08f,.45f)*1000.f);
+                }
+                if(!classic && (earlySwing || distance>attackRange*.65f)){
+                    auto forwardStep=here+direction(delta)*24.f;
+                    if(safe(p,here,forwardStep))move(position(*foe),850);
+                }
+            }
+            return finish();
+        }
+        if(!classic && (recovering || ownBusy) && now<swingWindupUntil && inHeight && distance>attackRange*.65f && distance<attackRange+145.f){
+            // Keep closing momentum through an early swing's wind-up so the blade lands on target.
+            auto forwardStep=here+direction(delta)*24.f;
+            if(safe(p,here,forwardStep)){move(position(*foe),850);return finish();}
+        }
         if(inHeight && distance<130 && (blocking || (self->health<30 && now>=woundedAt))){
             auto tangent=vec3(-delta.y,delta.x,0);auto step=here+direction(tangent)*float(side)*48.f;
             if(safe(p,here,step)){move(step,650);if(!blocking)woundedAt=now+2200;return finish();}side=-side;
         }
-        if(recovering && inHeight && distance<attackRange+24){
+        if((recovering || ownBusy) && inHeight && distance<attackRange+24){
             auto tangent=direction(vec3(-delta.y,delta.x,0))*float(side);
             auto at=here+tangent*40.f;
             if(safe(p,here,at))move(at,350);

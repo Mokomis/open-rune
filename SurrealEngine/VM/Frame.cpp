@@ -9,6 +9,7 @@
 #include "RuneHud.h"
 #include "RuneKick.h"
 #include "RuneLeg.h"
+#include "RuneFinisher.h"
 #include "RuneSpider.h"
 #include "RuneBash.h"
 #include "RuneBloodlust.h"
@@ -317,7 +318,7 @@ ExpressionValue Frame::Call(UFunction* func, UObject* instance, const ArrayView<
 		return ExpressionValue::NothingValue();
 	}
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(_WIN32)
     // Replace only this viewport HUD's meter drawing. Its Tick, cinematic
     // state, scripted messages, fades and player PostRender still run normally.
     bool ownHud = RuneHud::LocalHud && instance == RuneHud::LocalHud;
@@ -360,6 +361,8 @@ ExpressionValue Frame::Call(UFunction* func, UObject* instance, const ArrayView<
     if(engine->NetworkCombatAuthority && engine->NetworkCombatAuthority->deferWeaponCall(instance,func->Name,args))
         return func->Name=="DoWeaponSwipe"?ExpressionValue::BoolValue(true):ExpressionValue::NothingValue();
 #endif
+    ExpressionValue finished;
+    if(RuneFinisher::Swipe(func,instance,args,finished))return finished;
     RuneLeg::WeaponScope legContact(func,instance,args);
 	if (AllFlags(func->FuncFlags, FunctionFlags::Native))
 	{
@@ -417,6 +420,7 @@ ExpressionValue Frame::Call(UFunction* func, UObject* instance, const ArrayView<
 				argindex++;
 		}
 
+        RuneFinisher::AfterCall(func,instance,args,result);
         RunePhysics::AfterScriptCall(func,instance,args);
         RuneLeg::AfterScriptCall(func,instance,args);
 		return result;

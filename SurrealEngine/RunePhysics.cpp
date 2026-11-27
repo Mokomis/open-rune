@@ -99,6 +99,13 @@ struct State {
   double lastImpact = -100;
   bool impactArmed = false, wallSlamDone = false;
   float stunUntil = 0;
+  UPawn *impaler = nullptr;
+  UActor *pinWeapon = nullptr, *pinOffhand = nullptr;
+  int pinnedPart = -1;
+  vec3 pinOrigin{0}, pinAim{0}, pinLastHolder{0};
+  float pullback=0, sidestep=0;
+  Transform pinTransform{};
+  float pinYaw = 0, pinLifeSpan = 0, pinTimerRate = 0;
   UPawn *carrier = nullptr;
   UActor *originalOwner = nullptr;
   float release = -1, carryHeight = 16;
@@ -294,11 +301,28 @@ void ensure(ULevel *level) {
   LogMessage("RUNE_PHYSICS_WORLD triangles=" +
              std::to_string(triangles.size()));
 }
+void unpin(State& s) {
+  if(!s.impaler)return;
+  s.impaler->finisherHeld=false;
+  s.impaler->finisherWithdraw=engine->TotalTime;
+  if(world){
+    world->motion(s.parts[s.pinnedPart].body,Motion::Dynamic);
+    for(auto& part:s.parts)world->wake(part.body);
+  }
+  if(!s.actor->bDeleteMe()){
+    if(s.pinLifeSpan>0 && s.actor->LifeSpan()==0)s.actor->LifeSpan()=s.pinLifeSpan;
+    if(s.pinTimerRate>0 && s.actor->TimerRate()==0)s.actor->TimerRate()=s.pinTimerRate;
+  }
+  s.impaler=nullptr;
+  s.pinWeapon=s.pinOffhand=nullptr;
+  s.pinnedPart=-1;
+}
 void erase(UActor *a, bool restore) {
   auto it = states.find(a);
   if (it == states.end())
     return;
   auto &s = it->second;
+  unpin(s);
   auto at = a->Location();
   if (restore && !s.replica && world && s.prop)
     at =
@@ -356,7 +380,7 @@ bool reserveBody(bool living) {
         ++awakePawns;
       else if (!s.prop) {
         ++corpses;
-        if (s.age > age) {
+        if (!s.impaler && s.age > age) {
           age = s.age;
           oldest = a;
         }
@@ -836,8 +860,10 @@ mat4 MeshToWorld(UActor *a) {
 }
 static bool makeRagdoll(UActor *a, vec3 velocity, UPawn *instigator,
                         bool living, const DeathSeed *seed, bool combatOnly = false, bool puppet = false) {
+  auto* rig=model(a);
+  const bool creature=rig && combatOnly && !living && a->IsA("Carcass") && !humanoid(rig) && rig->Joints.size()>=2 && rig->Joints.size()<=64;
   if ((!puppet && ((living&&!RuneBattleLaws::Allowed(RuneBattleLaws::Knockdown)) || (!applied && !combatOnly) || !authority(a))) || !a->XLevel() || Controls(a) ||
-      !humanoid(model(a)) || a->bCarriedItem())
+      (!creature && !humanoid(rig)) || a->bCarriedItem())
     return false;
   if(!finiteVector(velocity)){LogMessage("RUNE_PHYSICS_INVALID_SEED_VELOCITY actor="+a->Name.ToString());velocity=vec3(0);}
   ensure(a->XLevel());
@@ -890,7 +916,7 @@ static bool makeRagdoll(UActor *a, vec3 velocity, UPawn *instigator,
   uint32_t group = nextGroup++;
   std::map<int, int> indices;
   for (size_t i = 0; i < m->Joints.size() && s.parts.size() < 20; ++i) {
-    if (i && !physicalJoint(m->Joints[i].Name))
+    if (i && !physicalJoint(m->Joints[i].Name) && (!creature || std::none_of(std::begin(m->Joints[i].Children),std::end(m->Joints[i].Children),[&](int j){return j>int(i) && size_t(j)<m->Joints.size();})))
       continue;
     auto name = m->Joints[i].Name.ToString();
     if (name.starts_with("attach") || name.starts_with("attatch"))
@@ -968,7 +994,7 @@ static bool makeRagdoll(UActor *a, vec3 velocity, UPawn *instigator,
                        rotationOf(s.bindWorld * bones[i]), d.position, start});
     s.parts.back().current=s.parts.back().lastValid=world->get(body);
   }
-  if (s.parts.size() < 6) {
+  if (s.parts.size() < (creature?2u:6u)) {
     for (auto &p : s.parts)
       world->remove(p.body);
     return false;
@@ -1138,6 +1164,81 @@ bool React(UPawn* p,vec3 hit,vec3 momentum,int joint) {
   return true;
 }
 
+bool FinishCorpse(UActor* body,vec3 velocity) {
+  if(!body || !authority(body) || body->bHidden() || !body->IsA("Carcass"))return false;
+  auto it=pendingDeaths.find(body);
+  if(it==pendingDeaths.end())return makeRagdoll(body,velocity,nullptr,false,nullptr,true);
+  auto seed=std::move(it->second);
+  pendingDeaths.erase(it);
+  seed.resting=false;
+  return makeRagdoll(body,velocity,nullptr,false,&seed,true);
+}
+bool Impaled(UActor* corpse) {
+  auto it=states.find(corpse);
+  return it!=states.end() && it->second.impaler;
+}
+
+bool PinImpale(UPawn* holder,UActor* corpse) {
+  auto it=states.find(corpse);
+  if(!holder || !holder->Weapon() || holder->finisherHeld || !world || it==states.end())return false;
+  auto& s=it->second;
+  if(s.replica || s.living || s.prop || s.impaler)return false;
+  auto* rig=model(holder);
+  if(!humanoid(rig))return false;
+  // Support just the chest. Gravity and all the existing joint constraints
+  // continue to act on the pelvis, head, arms and legs from the death tick.
+  for(const char* name:{"chest","spinec","torso","base_torso","pelvis"}){
+    for(size_t i=0;i<s.parts.size();++i){
+      auto& part=s.parts[i];
+      if(s.model->Joints[part.joint].Name!=name)continue;
+      s.impaler=holder;s.pinnedPart=int(i);
+      s.pinWeapon=holder->Weapon();s.pinOffhand=holder->Dual.offhand;
+      s.pinOrigin=s.pinLastHolder=holder->Location();s.pinYaw=holder->Rotation().YawRadians();
+      s.pinTransform=world->get(part.body);s.pinAim=holder->finisherAimWorld;
+      holder->finisherHeld=true;holder->finisherWithdraw=-1;
+      world->motion(part.body,Motion::Kinematic);
+      return true;
+    }
+  }
+  return false;
+}
+
+bool ReleaseImpale(UPawn* holder) {
+  if(!holder || !holder->finisherHeld || holder->NetworkReplica)return false;
+  for(auto& [actor,s]:states)if(s.impaler==holder){unpin(s);return true;}
+  return false;
+}
+
+void driveImpale(State& s,float dt){
+  auto* p=s.impaler;
+  auto movement=p->Location()-s.pinLastHolder;
+  s.pinLastHolder=p->Location();
+  float heading=p->Rotation().YawRadians();
+  vec3 forward{std::cos(heading),std::sin(heading),0};
+  s.pullback=std::max(0.f,s.pullback-dot(movement,forward));
+  s.sidestep+=dot(movement,vec3(-forward.y,forward.x,0));
+  if(!live(p) || p->bHidden() || p->Weapon()!=s.pinWeapon || p->Dual.offhand!=s.pinOffhand ||
+     Controls(p) || std::hypot(s.pullback,s.sidestep)>10.f || std::abs(movement.z)>14.f || length(movement)>90.f || !RuneBattleLaws::Allowed(RuneBattleLaws::Finishers)){
+    unpin(s);return;
+  }
+  // A campaign enemy elects to withdraw after showing the hit; multiplayer
+  // bots send a normal Attack command through the same authority as players.
+  if(!p->IsA("RunePlayer") && s.age>.85f){unpin(s);return;}
+  // Keep the game's ordinary corpse cleanup clocks for after withdrawal.
+  if(s.actor->LifeSpan()>0){s.pinLifeSpan=s.actor->LifeSpan();s.actor->LifeSpan()=0;}
+  if(s.actor->TimerRate()>0){s.pinTimerRate=s.actor->TimerRate();s.actor->TimerRate()=0;}
+  float angle=p->Rotation().YawRadians()-s.pinYaw;
+  Rotation yaw{0,0,std::sin(angle*.5f),std::cos(angle*.5f)};
+  float rise=std::clamp((s.age-.055f)/.19f,0.f,1.f);
+  vec3 origin=p->Location()+vec3(0,0,12.f*rise*rise*(3.f-2.f*rise));
+  auto at=origin+rotate(yaw,s.pinTransform.position-s.pinOrigin);
+  // Let the torso tip over the support while the other rigid bodies settle.
+  float tilt=.14f*rise;
+  Rotation sag{-std::sin(heading)*std::sin(tilt),std::cos(heading)*std::sin(tilt),0,std::cos(tilt)};
+  auto turn=multiply(sag,yaw);
+  p->finisherAimWorld=at+rotate(turn,s.pinAim-s.pinTransform.position);
+  world->kinematic(s.parts[s.pinnedPart].body,at,multiply(turn,s.pinTransform.rotation),dt);
+}
 bool Ragdoll(UActor *a, vec3 velocity, UPawn *instigator, bool living) {
   return makeRagdoll(a, velocity, instigator, living, nullptr);
 }
@@ -1319,6 +1420,7 @@ void OnDestroy(UActor *a) {
   hazards.erase(a);
   retiredBodies.erase(a);
   for (auto &[item, s] : states) {
+    if (s.impaler == a || (s.impaler && (s.pinWeapon == a || s.pinOffhand == a)))unpin(s);
     if (s.instigator == a)
       s.instigator = nullptr;
     if (s.originalOwner == a)
@@ -1510,6 +1612,7 @@ void Tick(ULevel *level, float elapsed, bool paused) {
         s.previousBody = s.currentBody;
       }
     for(auto& [a,s]:states)if(!s.replica && s.recovering && puppetEnabled())DriveRecovery(s,dt);
+    for(auto& [actor,s]:states)if(s.impaler)driveImpale(s,dt);
     StepPuppets(dt,true);
     world->step(dt);
     StepPuppets(dt,false);

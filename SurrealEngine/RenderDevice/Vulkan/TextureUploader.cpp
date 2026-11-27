@@ -8,8 +8,18 @@
 #include <immintrin.h>
 #endif
 
+bool TextureUploader::DecodeBC = false;
+
 TextureUploader* TextureUploader::GetUploader(TextureFormat format)
 {
+	if (DecodeBC)
+	{
+		static TextureUploader_DecodeBC bc1(1), bc2(2), bc3(3);
+		if (format == TextureFormat::BC1 || format == TextureFormat::BC1_PA) return &bc1;
+		if (format == TextureFormat::BC2) return &bc2;
+		if (format == TextureFormat::BC3) return &bc3;
+	}
+
 	static std::map<TextureFormat, std::unique_ptr<TextureUploader>> Uploaders;
 	if (Uploaders.empty())
 	{
@@ -441,6 +451,114 @@ void TextureUploader_4x4Block::UploadRect(void* d, UnrealMipmap* mip, int x, int
 	}
 }
 
+/////////////////////////////////////////////////////////////////////////////
+
+static void DecodeBCColor(const uint8_t* b, bool allowPunchThrough, uint8_t rgba[64])
+{
+	const uint16_t c0 = uint16_t(b[0] | (b[1] << 8)), c1 = uint16_t(b[2] | (b[3] << 8));
+	uint8_t p[4][4];
+	auto expand = [](uint16_t c, uint8_t* out) {
+		// Bit replication, as GPUs expand 5:6:5.
+		const int r = (c >> 11) & 31, g = (c >> 5) & 63, bl = c & 31;
+		out[0] = uint8_t((r << 3) | (r >> 2));
+		out[1] = uint8_t((g << 2) | (g >> 4));
+		out[2] = uint8_t((bl << 3) | (bl >> 2));
+		out[3] = 255;
+	};
+	expand(c0, p[0]);
+	expand(c1, p[1]);
+	if (c0 > c1 || !allowPunchThrough)
+	{
+		for (int i = 0; i < 3; i++)
+		{
+			p[2][i] = uint8_t((2 * p[0][i] + p[1][i]) / 3);
+			p[3][i] = uint8_t((p[0][i] + 2 * p[1][i]) / 3);
+		}
+		p[2][3] = p[3][3] = 255;
+	}
+	else
+	{
+		for (int i = 0; i < 3; i++)
+			p[2][i] = uint8_t((p[0][i] + p[1][i]) / 2);
+		p[2][3] = 255;
+		p[3][0] = p[3][1] = p[3][2] = p[3][3] = 0; // BC1 transparent black
+	}
+	const uint32_t bits = uint32_t(b[4]) | (uint32_t(b[5]) << 8) | (uint32_t(b[6]) << 16) | (uint32_t(b[7]) << 24);
+	for (int t = 0; t < 16; t++)
+		memcpy(rgba + t * 4, p[(bits >> (t * 2)) & 3], 4);
+}
+
+void TextureUploader_DecodeBC::DecodeBlock(int bcVersion, const uint8_t* block, uint8_t rgba[64])
+{
+	if (bcVersion == 1)
+	{
+		DecodeBCColor(block, true, rgba);
+		return;
+	}
+	// BC2/BC3: 8 bytes of alpha, then a color block that is always 4-color.
+	DecodeBCColor(block + 8, false, rgba);
+	if (bcVersion == 2)
+	{
+		for (int t = 0; t < 16; t++)
+		{
+			int nibble = (block[t / 2] >> ((t & 1) * 4)) & 15;
+			rgba[t * 4 + 3] = uint8_t(nibble * 17);
+		}
+		return;
+	}
+	const int a0 = block[0], a1 = block[1];
+	int a[8] = { a0, a1 };
+	if (a0 > a1)
+	{
+		for (int i = 1; i < 7; i++) a[i + 1] = ((7 - i) * a0 + i * a1) / 7;
+	}
+	else
+	{
+		for (int i = 1; i < 5; i++) a[i + 1] = ((5 - i) * a0 + i * a1) / 5;
+		a[6] = 0;
+		a[7] = 255;
+	}
+	uint64_t bits = 0;
+	for (int i = 0; i < 6; i++) bits |= uint64_t(block[2 + i]) << (8 * i);
+	for (int t = 0; t < 16; t++)
+		rgba[t * 4 + 3] = uint8_t(a[(bits >> (t * 3)) & 7]);
+}
+
+int TextureUploader_DecodeBC::GetUploadSize(int x, int y, int w, int h)
+{
+	return w * h * 4;
+}
+
+void TextureUploader_DecodeBC::UploadRect(void* d, UnrealMipmap* mip, int x, int y, int w, int h, TextureColor* palette, bool masked)
+{
+	const int bytesPerBlock = Version == 1 ? 8 : 16;
+	const int blocksPerRow = (mip->Width + 3) / 4;
+	const size_t available = mip->Data.size();
+	uint8_t* dst = (uint8_t*)d;
+	uint8_t texels[64];
+	for (int by = y / 4; by <= (y + h - 1) / 4; by++)
+	{
+		for (int bx = x / 4; bx <= (x + w - 1) / 4; bx++)
+		{
+			const size_t offset = (size_t(by) * blocksPerRow + bx) * bytesPerBlock;
+			if (offset + bytesPerBlock <= available)
+				DecodeBlock(Version, mip->Data.data() + offset, texels);
+			else
+				memset(texels, 0, sizeof(texels)); // Truncated data: transparent instead of reading past the end.
+			for (int ty = 0; ty < 4; ty++)
+			{
+				const int py = by * 4 + ty;
+				if (py < y || py >= y + h) continue;
+				for (int tx = 0; tx < 4; tx++)
+				{
+					const int px = bx * 4 + tx;
+					if (px < x || px >= x + w) continue;
+					memcpy(dst + (size_t(py - y) * w + (px - x)) * 4, texels + (ty * 4 + tx) * 4, 4);
+				}
+			}
+		}
+	}
+}
 
 /////////////////////////////////////////////////////////////////////////////
 

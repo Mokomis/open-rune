@@ -24,6 +24,7 @@ public:
         for(const auto& bytes:session.takeDatagrams())sendDatagram(bytes,peer);
     }
     template<class F> void receive(F&& callback) {
+        rearmReadSignal();
         for(int i=0;i<64;++i) {
             std::array<uint8_t,1201> bytes{};sockaddr_in source{};
             int n=read(bytes,source);
@@ -32,11 +33,17 @@ public:
                 callback(source,std::span<const uint8_t>(bytes).first(size_t(n)));
         }
     }
+    // Block until any socket has a datagram or the timeout elapses. Callers must
+    // drain each socket with receive() before waiting again. Sub-millisecond
+    // timer precision is retained on Windows without changing global timer resolution.
+    static void waitAny(std::span<UdpSocket* const> sockets,uint64_t timeoutMicroseconds);
     uint64_t sendDrops=0;
 private:
     int read(std::span<uint8_t> bytes,sockaddr_in& source);
+    void rearmReadSignal() noexcept;
 #ifdef _WIN32
     SOCKET fd=INVALID_SOCKET;
+    WSAEVENT readEvent=WSA_INVALID_EVENT;
     bool winsock=false;
 #else
     int fd=-1;

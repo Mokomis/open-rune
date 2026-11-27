@@ -2,6 +2,7 @@
 #include "SecureChannel.h"
 #include "ClockSync.h"
 #include "Transport.h"
+#include <algorithm>
 
 namespace openrune::net
 {
@@ -30,6 +31,14 @@ public:
     const Stats* transportStats() const { return transport ? &transport->stats() : nullptr; }
     size_t snapshotPartsPending() const { return transport ? transport->snapshotPartsPending() : 0; }
     void discardSnapshotParts() { if (transport) transport->discardSnapshotParts(); }
+    // How long the owner may wait for a datagram before step() could have work.
+    // Handshake/resync keep the 1 ms cadence; clock probes (250 ms) are covered by cap.
+    uint64_t idleMs(uint64_t localNow, uint64_t cap) const
+    {
+        if (failed()) return 0;
+        if (!transport || !joined || !ready()) return std::min<uint64_t>(cap, 1);
+        return transport->idleMs(localNow, cap);
+    }
 private:
     SecureChannel channel;
     ClockSync clock;

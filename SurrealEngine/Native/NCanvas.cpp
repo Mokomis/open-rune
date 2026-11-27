@@ -115,7 +115,7 @@ void NCanvas::DrawPortal(UObject* Self, int X, int Y, int Width, int Height, UOb
 
 void NCanvas::DrawText(UObject* Self, const std::string& Text, std::optional<bool> CR)
 {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(_WIN32)
     if (RuneHud::Capture(Text)) return;
 #endif
 	UCanvas* SelfCanvas = UObject::Cast<UCanvas>(Self);
@@ -159,7 +159,7 @@ void NCanvas::DrawText(UObject* Self, const std::string& Text, std::optional<boo
 
 void NCanvas::DrawTextClipped(UObject* Self, const std::string& Text, std::optional<bool> bCheckHotKey)
 {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(_WIN32)
     if (RuneHud::Capture(Text)) return;
 #endif
 	UCanvas* SelfCanvas = UObject::Cast<UCanvas>(Self);

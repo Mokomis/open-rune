@@ -15,6 +15,13 @@ public:
     bool advance(uint64_t microseconds, const std::function<void(uint64_t,float)>& tick);
     uint64_t ticks() const { return count; }
     uint64_t droppedTicks() const { return dropped; }
+    // Microseconds from now until advance() will run at least one tick.
+    uint64_t untilNextTick(uint64_t now) const
+    {
+        if (!started || now < last) return 0;
+        const uint64_t due = last+(1000000-remainder+Hz-1)/Hz;
+        return due > now ? due-now : 0;
+    }
 private:
     uint64_t last = 0, remainder = 0, count = 0, dropped = 0;
     bool started = false;

@@ -44,9 +44,7 @@ void Logger::LogMessage(const std::string& message)
 			line.Time = time;
 			line.Source = name;
 			line.Text = text;
-			Log.push_back(std::move(line));
-			if (printLogDebugger)
-				printLogDebugger(Log.back());
+			Append(std::move(line));
 		}
 	}
 	else
@@ -56,10 +54,32 @@ void Logger::LogMessage(const std::string& message)
 			LogMessageLine line;
 			line.Time = time;
 			line.Text = text;
-			Log.push_back(std::move(line));
-			if (printLogDebugger)
-				printLogDebugger(Log.back());
+			Append(std::move(line));
 		}
+	}
+}
+
+void Logger::Append(LogMessageLine line)
+{
+	Log.push_back(std::move(line));
+	if (printLogDebugger)
+		printLogDebugger(Log.back());
+	if (Log.size() <= MaxLines)
+		return;
+	if (!trimming)
+	{
+		auto at = std::next(Log.begin(), KeepHeadLines);
+		LogMessageLine marker;
+		marker.Time = at->Time;
+		marker.Text = "OPEN_RUNE_LOG_TRIMMED older lines after the first " + std::to_string(KeepHeadLines) + " were dropped to bound memory";
+		Log.insert(at, std::move(marker));
+		trimAt = at;
+		trimming = true;
+	}
+	while (Log.size() > MaxLines && trimAt != std::prev(Log.end()))
+	{
+		trimAt = Log.erase(trimAt);
+		++droppedLines;
 	}
 }
 
@@ -128,6 +148,8 @@ void Logger::SaveLogAsPlaintext(const std::string& filename) const
 		const auto source = line.Source.empty() ? "<Surreal Engine>" : line.Source;
 		finalLog += "[" + std::to_string(line.Time) + "] " + source + ": " + line.Text + "\n";
 	}
+	if (droppedLines)
+		finalLog += "OPEN_RUNE_LOG_TRIMMED dropped_lines=" + std::to_string(droppedLines) + "\n";
 
 	File::write_all_text(filename, finalLog);
 }

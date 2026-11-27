@@ -176,7 +176,7 @@ vec3 InteractionPoint(UActor* body) {
     return count?center/float(count)+vec3(0,0,3):body->Location();
 }
 bool Throwable(UActor* a) {
-    if(!a || a->bDeleteMe() || a->bHidden() || !a->IsA("RuneCarcass") || (!a->NetworkReplica && a->GetBool("bDecorative")) || !Model(a))return false;
+    if(!a || a->bDeleteMe() || a->bHidden() || !a->IsA("RuneCarcass") || RunePhysics::Impaled(a) || (!a->NetworkReplica && a->GetBool("bDecorative")) || !Model(a))return false;
     auto* m=Model(a);unsigned joints=0;
     // Goblins use Weapon/Shield joints; human weapon-joint names are not a
     // reliable body-type test. Require a head, torso and both articulated arms.

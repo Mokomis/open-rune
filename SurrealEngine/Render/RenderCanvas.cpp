@@ -27,6 +27,9 @@
 #include "VM/ScriptCall.h"
 #include "Engine.h"
 #include "RuneHud.h"
+#ifdef _WIN32
+#include "WindowsRuneHud.h"
+#endif
 #include "RenderDevice/VisualComparison.h"
 #include "Packages/Engine/Actors/UHUD.h"
 #include "Packages/Engine/Actors/Info/UZoneInfo.h"
@@ -126,10 +129,13 @@ void RenderSubsystem::PostRender()
     {
         Device->SetSceneNode(&Canvas.Frame);
         if(engine->NetworkOverlay)engine->NetworkOverlay();
+#ifdef _WIN32
+        if (RuneHud::Enabled) WindowsRuneHud::draw(*this,Canvas.Frame.X,Canvas.Frame.Y,RuneHud::Values,RuneHud::Messages,RuneDesktopMenu::StatusText(*engine),RuneHud::Score);
+#endif
         return;
     }
 #endif
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(_WIN32)
     auto player = engine->viewport->Actor();
     RuneHud::LocalHud = RuneHud::Enabled.load() && engine->LaunchInfo.IsRune() && player ? player->myHUD() : nullptr;
     RuneHud::Mask = 0;
@@ -139,8 +145,10 @@ void RenderSubsystem::PostRender()
 	Device->SetSceneNode(&Canvas.Frame);
 	if (engine->viewport->Actor())
 		CallEvent(engine->viewport->Actor(), EventName::PostRender, { ExpressionValue::ObjectValue(engine->canvas) });
+#ifndef _WIN32
 	CallEvent(engine->console, EventName::PostRender, { ExpressionValue::ObjectValue(engine->canvas) });
-#ifdef __ANDROID__
+#endif
+#if defined(__ANDROID__) || defined(_WIN32)
     if (RuneHud::Enabled.load() && engine->LaunchInfo.IsRune()) {
         std::array<float,12> values{};
         if (player && RuneHud::LocalHud) {
@@ -159,12 +167,19 @@ void RenderSubsystem::PostRender()
             if (!submerged) values[0] = (float)((unsigned)values[0] & ~16u);
         }
         values[11] = VisualComparison::EngineFps.load();
+#ifdef _WIN32
+        if (RuneHud::LocalHud) WindowsRuneHud::draw(*this,Canvas.Frame.X,Canvas.Frame.Y,values,RuneHud::FrameMessages,RuneDesktopMenu::StatusText(*engine),RuneHud::FrameScore);
+#else
         std::lock_guard<std::mutex> lock(RuneHud::Mutex);
         RuneHud::Values = values;
         RuneHud::Messages = RuneHud::FrameMessages;
         RuneHud::Score = RuneHud::FrameScore;
+#endif
     }
     RuneHud::LocalHud = nullptr;
+#endif
+#ifdef _WIN32
+	CallEvent(engine->console, EventName::PostRender, { ExpressionValue::ObjectValue(engine->canvas) });
 #endif
 	DrawTimedemoStats();
 	
@@ -613,7 +628,7 @@ void RenderSubsystem::DrawTimedemoStats()
 	}
 
     const auto desktopStatus=RuneDesktopMenu::StatusText(*engine);
-    if(!desktopStatus.empty()) {
+    if(!desktopStatus.empty() && !(RuneHud::Enabled && engine->LaunchInfo.IsRune())) {
         auto* font=engine->canvas->MedFont();
         if(font){float x=engine->viewport->ViewportWidth()/(float)Canvas.uiscale-GetTextSize(font,desktopStatus).x-16,y=12,xl=0,yl=0;
             float sx=x+1,sy=y+1;DrawText(font,vec4(0,0,0,1),0,0,sx,sy,xl,yl,false,desktopStatus,PF_Masked,false);

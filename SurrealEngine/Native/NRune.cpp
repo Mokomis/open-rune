@@ -583,7 +583,7 @@ void FrameSweep(UObject* self, int frame, const vec3& weaponVector, vec3& lastBe
 		// FrameSweep samples the entire parent skeleton at this exact frame of
 		// the attack, independently of the current render interpolation.
 		auto pose=model->DecodeFrame(sequence,frame);
-        RuneDualWield::ApplyPose(*model,parent,pose);
+        RuneDualWield::ApplyPose(*model,parent,pose,frame);
 		for (size_t i=0;i<pose.size() && i<50;i++) pose[i].Rotation+=parent->RuneJointOffsets[i];
 		auto bones=model->JointMatrices(pose);
 		mat4 transform=GetRuneMeshToWorld(parent)*RuneDualWield::Attachment(*model,parent,weapon,bones);

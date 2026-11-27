@@ -63,6 +63,12 @@ void codecs()
     auto dual=s;dual.world[2].kind=EntityKind::Weapon;dual.world[0].shield={};dual.world[2].attachmentJoint=13;
     dual.world[0].combat={dual.world[2].ref,3,255,0,0,0,0,0};
     CHECK(encodeSnapshot(dual,nullptr,b));CHECK(decodeSnapshot(b,nullptr,decoded) && decoded==dual);
+    auto held=dual;held.world[0].flags|=1;held.world[0].health=100;
+    held.world[0].combat.flags=192;held.world[0].combat.impaleAim=std::array<int16_t,3>{-320,121,80};
+    CHECK(encodeSnapshot(held,nullptr,b));CHECK(decodeSnapshot(b,nullptr,decoded)&&decoded==held);
+    held.world[0].health=0;CHECK(!validWorld(held.world));held.world[0].health=100;
+    held.world[0].combat.flags=128;CHECK(!validWorld(held.world));held.world[0].combat.flags=192;
+    (*held.world[0].combat.impaleAim)[1]=3000;CHECK(!validWorld(held.world));
     auto powered=dual;powered.world[0].combat.runeCapacity=100;powered.world[0].combat.runePower=75;
     powered.world[1].flags|=128;
     CHECK(encodeSnapshot(powered,nullptr,b));CHECK(decodeSnapshot(b,nullptr,decoded) && decoded==powered);
@@ -110,6 +116,9 @@ void codecs()
     auto spider=s;spider.world[0].flags=1;spider.world[0].combat.flags=16;CHECK(encodeSnapshot(spider,nullptr,b));CHECK(decodeSnapshot(b,nullptr,decoded)&&decoded==spider);
     spider.world[0].flags=3;CHECK(!validWorld(spider.world)); // A wall climber is not grounded.
     spider.world[0].flags=0;CHECK(!validWorld(spider.world)); // A dead/unknown life cannot climb.
+    auto exposed=s;exposed.world[0].flags=1|FinisherOpeningFlag;exposed.world[0].health=100;
+    CHECK(encodeSnapshot(exposed,nullptr,b));CHECK(decodeSnapshot(b,nullptr,decoded)&&decoded==exposed);
+    exposed.world[0].health=0;CHECK(!validWorld(exposed.world));
     auto bad=w; bad.push_back(w.back()); CHECK(!validWorld(bad));
     bad=w; bad[1].ref=bad[0].ref; CHECK(!validWorld(bad));
     bad=w; bad[0].shield.generation=2; CHECK(!validWorld(bad));

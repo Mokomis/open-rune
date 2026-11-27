@@ -106,6 +106,7 @@ struct ClientDiagnostics {
     uint64_t lastWorld=0,nextReport=0,previousAt=0;
     Stats previous;
     std::vector<std::string> lines;
+    std::string position;
     void reset(){*this=ClientDiagnostics{};}
     void world(uint64_t now){if(lastWorld && now>=lastWorld)gaps.add(now,double(now-lastWorld));lastWorld=now;}
     void report(uint64_t now,const Stats* stats,const PresentationTimeline::Stats* smoothing)
@@ -127,6 +128,7 @@ struct ClientDiagnostics {
         }
         if(stats){previous=*stats;previousAt=now;}else previousAt=0;
         lines.push_back(smoothing?"Smoothing: Adaptive / target "+number(smoothing->targetDelayMs)+" ms / buffered "+number(smoothing->bufferedMs)+" ms":"Smoothing: Original");
+        if(!position.empty())lines.push_back(position);
         std::string log="OPEN_RUNE_CLIENT_DIAGNOSTICS";for(auto& line:lines)log+=" | "+line;LogMessage(log);
     }
 };
@@ -497,9 +499,12 @@ void RunRuneMultiplayerServer(Engine& game,const std::string& directory)
     const bool discoverable=commandline->HasArg("","--rune-net-discovery");
     uint64_t lastDiscoveryStatus=0;
     RuneMultiplayer::HostReady.store(true);
+    std::vector<UdpSocket*> waitSockets;waitSockets.reserve(slots.size());
+    const bool idleWait=commandline->GetArgInt("","--rune-net-idle-wait",1)!=0; // 0: previous fixed 1 ms poll.
     while(!game.quit && !RuneMultiplayer::HostStop.load() && (!seconds || nowMs()-started<uint64_t(seconds)*1000))
     {
         auto now=nowMs();
+        bool hostActivity=false;const auto ticksBefore=simulation.ticks();
         if(discoverable && (!lastDiscoveryStatus || now-lastDiscoveryStatus>=1000)) {
             lastDiscoveryStatus=now;
             const auto file=std::filesystem::path(directory)/"discovery-status.json";
@@ -520,6 +525,7 @@ void RunRuneMultiplayerServer(Engine& game,const std::string& directory)
         {
             slot->socket.receive([&](const sockaddr_in& source,std::span<const uint8_t> bytes)
             {
+                hostActivity=true;
                 if(!slot->session)
                 {
                     if(bytes.size()<25 || bytes[0]!=22 || bytes[13]!=1)return; // Only a DTLS ClientHello may claim a vacant slot.
@@ -623,19 +629,33 @@ void RunRuneMultiplayerServer(Engine& game,const std::string& directory)
             }
             travelAt=0;
         }
-        uint64_t released=0;
-        for(const auto& event:authority->pendingActors())
+        // Each peer drains reliable actor events at its own pace. A full queue on
+        // one slow link (a relayed public player) must not withhold spawns from
+        // the others: their snapshots would wait on actors they never receive.
+        for(auto& slot:slots)if(slot->joined && slot->bootstrap.empty())
+            for(const auto& event:authority->pendingActors()) {
+                if(slot->actorCursor>=event.id)continue;
+                auto local=event;local.id=slot->peer->lastActorPublished()+1;
+                if(!slot->peer->publishActor(local))break;
+                slot->actorCursor=event.id;
+            }
         {
-            bool accepted=true;
-            for(auto& slot:slots)
-                if(slot->joined && slot->actorCursor<event.id) {
-                    auto local=event;local.id=slot->peer->lastActorPublished()+1;
-                    if(!slot->bootstrap.empty() || !slot->peer->publishActor(local))accepted=false;
-                    else slot->actorCursor=event.id;
-                }
-            if(!accepted)break;released=event.id;
+            // Retain events until every joined peer has queued them.
+            uint64_t floor=UINT64_MAX,released=0;
+            for(const auto& slot:slots)if(slot->joined)floor=std::min(floor,slot->actorCursor);
+            for(const auto& event:authority->pendingActors())if(event.id<=floor)released=event.id;else break;
+            if(released)require(authority->releaseActorsThrough(released),"actor retention failed");
         }
-        if(released)require(authority->releaseActorsThrough(released),"actor retention failed");
+        // Drop only a peer that has fallen far behind, before the shared retention
+        // limits (1024 actor events, 64 combat results) would fault the match.
+        for(size_t i=0;i<slots.size();++i)if(slots[i]->joined && authority) {
+            const auto actorLag=authority->actorWatermark()-std::min(authority->actorWatermark(),slots[i]->actorCursor);
+            const auto combatLag=authority->combatWatermark()-std::min(authority->combatWatermark(),slots[i]->combatCursor);
+            if(actorLag>768 || combatLag>48) {
+                std::cout<<"OPEN_RUNE_PLAYER_LAG_DROP id="<<i+1<<" actor_lag="<<actorLag<<" combat_lag="<<combatLag<<std::endl;
+                retire(i);
+            }
+        }
         if(!running && std::count_if(slots.begin(),slots.end(),[](const auto& s){return s->joined;})>=(testMatch || testHeadBall || testArenaMode || testTeam || testArena || commandline->HasArg("","--rune-net-tag-fixture") || commandline->HasArg("","--rune-net-character-fixture")?playerCount:mode==GameMode::Arena?arenaTeamSize*2:teamMode(mode)?teamCount:2) &&
             std::all_of(slots.begin(),slots.end(),[](const auto& s){return !s->joined || (s->bootstrap.empty() && s->peer->matchAgreed() && s->peer->snapshots.baselineId()>0);}))
         {for(size_t i=0;i<slots.size();++i)if(!slots[i]->joined && !slots[i]->session && slots[i]->pawn)retire(i);
@@ -847,16 +867,23 @@ void RunRuneMultiplayerServer(Engine& game,const std::string& directory)
             }
             for(auto cancelled:authority->drainCancelledActions())
                 if(auto& slot=slots.at(cancelled.peer-1);slot->joined)require(slot->peer->decideAction(cancelled.id,Admission::Cancelled),"cancel decision overflow");
-            uint64_t delivered=0;
-            for(const auto& result:authority->pendingCombat())
-            {
-                bool accepted=true;
-                for(auto& slot:slots)if(slot->joined && slot->combatCursor<result.id) {
+            // Same per-peer delivery as actor events; release what every joined peer has.
+            for(auto& slot:slots)if(slot->joined)
+                for(const auto& result:authority->pendingCombat()) {
+                    if(slot->combatCursor>=result.id)continue;
                     auto local=result;local.id=slot->peer->lastCombatPublished()+1;
-                    if(!slot->peer->publishCombat(local))accepted=false;else slot->combatCursor=result.id;
+                    if(!slot->peer->publishCombat(local))break;
+                    slot->combatCursor=result.id;
                 }
-                if(!accepted)break;delivered=result.id;++contacts;
-                std::cout<<"OPEN_RUNE_CONTACT move="<<int(result.move)<<" contact="<<int(result.contact)<<" health="<<result.targetHealth<<std::endl;
+            uint64_t delivered=0,combatFloor=UINT64_MAX;
+            for(const auto& slot:slots)if(slot->joined)combatFloor=std::min(combatFloor,slot->combatCursor);
+            for(const auto& result:authority->pendingCombat()) {
+                if(result.id>combatFloor)break;
+                delivered=result.id;++contacts;
+                int attackerSlot=0,targetSlot=0;
+                for(size_t s=0;s<slots.size();++s)if(slots[s]->pawn){auto ref=authority->identity(slots[s]->pawn);if(ref==result.attacker)attackerSlot=int(s+1);if(ref==result.target)targetSlot=int(s+1);}
+                std::cout<<"OPEN_RUNE_CONTACT move="<<int(result.move)<<" contact="<<int(result.contact)<<" health="<<result.targetHealth
+                    <<" attacker="<<attackerSlot<<" target="<<targetSlot<<std::endl;
             }
             if(delivered)require(authority->releaseCombatThrough(delivered),"combat retention failed");
             require(!authority->combatFaulted(),"combat stream fault");
@@ -930,10 +957,26 @@ void RunRuneMultiplayerServer(Engine& game,const std::string& directory)
                 std::cout<<"OPEN_RUNE_PEER_DIAGNOSTICS player="<<i+1<<" rtt_ms="<<stats->observedRttMs<<" rtt_samples="<<stats->rttSamples
                     <<" tx_timeouts="<<stats->losses<<" in_flight="<<stats->inFlight<<" pending="<<slots[i]->session->pending()
                     <<" snapshot_bytes="<<snapshot.latestBytes<<" snapshot_max_bytes="<<snapshot.maximumBytes
-                    <<" snapshot_parts="<<snapshot.parts<<" snapshot_retries="<<snapshot.retries<<" snapshot_replaced="<<snapshot.replacements<<std::endl;
+                    <<" snapshot_parts="<<snapshot.parts<<" snapshot_retries="<<snapshot.retries<<" snapshot_replaced="<<snapshot.replacements
+                    <<" actor_lag="<<authority->actorWatermark()-slots[i]->actorCursor<<" actor_queue="<<authority->pendingActors().size()<<" bootstrap="<<slots[i]->bootstrap.size()<<std::endl;
             }
         }
-        networkPause(1);
+        if(!idleWait)networkPause(1);
+        else {
+            // Sleep until a datagram, the next 60 Hz tick or a transport deadline.
+            // Transport::poll sends one packet per step, so fresh datagrams, ticks
+            // and queued sends keep the previous 1 ms cadence; only idle time grows.
+            const auto after=nowMs();
+            uint64_t waitMs=(hostActivity || simulation.ticks()!=ticksBefore)?1:10;
+            waitSockets.clear();
+            for(auto& slot:slots) {
+                waitSockets.push_back(&slot->socket);
+                if(slot->session)waitMs=std::min(waitMs,std::max<uint64_t>(1,slot->session->idleMs(after,waitMs)));
+            }
+            uint64_t waitUs=waitMs*1000;
+            if(running && !endedAt)waitUs=std::min(waitUs,std::max<uint64_t>(250,simulation.untilNextTick(after*1000)));
+            UdpSocket::waitAny(waitSockets,waitUs);
+        }
     }
     for(size_t i=0;i<slots.size();++i)
     {authority->unbind(i+1);if(slots[i]->peer)slots[i]->peer->close(CloseReason::MatchEnded);}
@@ -1122,24 +1165,41 @@ void RunRuneMultiplayerClient(Engine& game,const std::string& invitationFile)
             }
         }
 
-#ifdef __ANDROID__
-        std::array<float,12> values{};
-        if(player) {
-            values[0]=1;values[1]=player->Health();values[2]=player->GetInt("MaxHealth");
-            if(auto* shield=player->GetUObject("Shield");shield && !RuneDualWield::Equipped(player)) {
-                values[0]=3;values[3]=int32_t(shield->GetInt("Health"));
-                values[4]=shield->Class->GetDefaultObject<UObject>()->GetInt("Health");
+#if defined(__ANDROID__) || defined(_WIN32)
+        // Android also publishes these values to its overlay when Original is selected.
+#ifdef _WIN32
+        if (RuneHud::Enabled)
+#endif
+        {
+            std::array<float,12> values{};
+            if(player) {
+                values[0]=1;values[1]=player->Health();values[2]=player->GetInt("MaxHealth");
+                if(auto* shield=player->GetUObject("Shield");shield && !RuneDualWield::Equipped(player)) {
+                    values[0]=3;values[3]=int32_t(shield->GetInt("Health"));
+                    values[4]=shield->Class->GetDefaultObject<UObject>()->GetInt("Health");
+                }
             }
+            if(player && player->GetInt("MaxPower")>0){
+                values[0]=float(unsigned(values[0])|4u);values[5]=player->GetInt("RunePower");values[6]=player->GetInt("MaxPower");
+            }
+            if(player && player->Health()>0) {
+                values[0]=float(unsigned(values[0])|8u);values[7]=player->Bloodlust.rage;values[8]=100;
+            }
+            values[11]=VisualComparison::EngineFps.load();
+            std::string message=status;
+#ifdef _WIN32
+            if(player && player->Health()<=0)message+="\nYou died — Enter to respawn after three seconds";
+            if(mouseReleased)message+="\nControls released — Escape to resume";
+            if(nowMs()<feedbackUntil)message+="\n"+feedbackText;
+            if(game.window->GetKeyState(IK_Tab) || (peer->status() && peer->status()->phase==MatchPhase::Intermission))
+                message+="\n"+scoreboard;
+#endif
+            std::lock_guard<std::mutex> lock(RuneHud::Mutex);
+            RuneHud::Values=values;
+            RuneHud::Messages=std::move(message);
+            RuneHud::Score=scoreText;
+            return;
         }
-        if(player && player->GetInt("MaxPower")>0){
-            values[0]=float(unsigned(values[0])|4u);values[5]=player->GetInt("RunePower");values[6]=player->GetInt("MaxPower");
-        }
-        if(player && player->Health()>0) {
-            values[0]=float(unsigned(values[0])|8u);values[7]=player->Bloodlust.rage;values[8]=100;
-        }
-        values[11]=VisualComparison::EngineFps.load();
-        {std::lock_guard<std::mutex> lock(RuneHud::Mutex);RuneHud::Values=values;RuneHud::Messages=status;RuneHud::Score=scoreText;}
-        return;
 #endif
         auto draw=[&](float y,const std::string& text,vec4 color)
         {float x=20,dx=0,dy=0;game.render->DrawText(game.canvas->SmallFont(),color,0,0,x,y,dx,dy,false,text,0,false);};
@@ -1165,6 +1225,9 @@ void RunRuneMultiplayerClient(Engine& game,const std::string& invitationFile)
 #endif
     bool menuWasOpen=false,ended=false,handshakeAgreed=false;int targetFps=120;bool pacing=true;
     uint64_t fpsStart=started,fpsFrames=0,pendingSince=0,retryAt=0;
+    // A world can arrive between a new actor's Spawn and Appearance events (separate lanes).
+    // Validation precedes writes, so retry it, request a full world after 1 s, fail after 5 s.
+    uint64_t installFailSince=0,installResyncAt=0;
     auto* device=game.window->GetRenderDevice();
     int clarity=embedded?VisualComparison::AppliedClarity.load():commandline->GetArgInt("","--clarity",0);
     int upscale=embedded?VisualComparison::AppliedUpscale.load():commandline->GetArgInt("","--upscale",0);
@@ -1366,9 +1429,19 @@ void RunRuneMultiplayerClient(Engine& game,const std::string& invitationFile)
                     if(replica.referencesRetired(*candidate))peer->world.discardObsolete();else peer->world.resync();pendingSince=0;
                 }
             } else pendingSince=0;
-            if(ready)
+            bool installed=false;
+            if(ready) {
+                installed=replica.install(*candidate);
+                if(installed) installFailSince=0;
+                else {
+                    if(!installFailSince){installFailSince=now;std::cout<<"OPEN_RUNE_WORLD_DEFERRED snapshot="<<candidate->id<<" reason="<<replica.rejection<<std::endl;}
+                    require(now-installFailSince<=5000,"snapshot installation failed: "+replica.rejection);
+                    if(now-installFailSince>1000 && now>=installResyncAt){std::cout<<"OPEN_RUNE_WORLD_RESYNC snapshot="<<candidate->id<<" reason=install"<<std::endl;peer->world.resync();installResyncAt=now+1000;}
+                }
+            }
+            if(installed)
             {
-                require(replica.install(*candidate) && peer->world.commit(candidate->id),"snapshot installation failed");++worlds;
+                require(peer->world.commit(candidate->id),"snapshot commit failed");++worlds;
                 if(diagnosticsOn)diagnostics.world(now);
                 candidate=peer->world.installed(); // commit moves and destroys the pending candidate.
                 if(smoothingWasOn)require(presentation.push(*candidate,now),"presentation timeline rejected installed world");
@@ -1756,6 +1829,16 @@ void RunRuneMultiplayerClient(Engine& game,const std::string& invitationFile)
             game.UpdateAudio();
         }
         auto renderStart=std::chrono::steady_clock::now();
+        if(diagnosticsOn && now>=diagnostics.nextReport) {
+            // Map position and the step in front, for reporting places that need a jump.
+            diagnostics.position.clear();
+            if(player) {
+                auto step=ProbeRuneStepAhead(game,player);std::ostringstream text;text<<std::fixed<<std::setprecision(0);
+                text<<"Position "<<invite.map<<" "<<step.x<<" "<<step.y<<" "<<step.z<<std::setprecision(1)<<" / step ahead ";
+                if(step.found)text<<step.ahead;else text<<"—";
+                text<<" (limit "<<step.limit<<")";diagnostics.position=text.str();
+            }
+        }
         if(diagnosticsOn)diagnostics.report(now,session->transportStats(),smoothingWasOn?&presentation.stats():nullptr);
         // Keep receiving snapshots and updating the match while the native UI
         // covers it, without rendering a hidden native-resolution world at 144 Hz.
@@ -1872,11 +1955,37 @@ void RunRuneMultiplayerBot(Engine& game,const std::string& invitationFile)
     require(seconds>=0 && seconds<=86400 && (!scripted || seconds>0),"scripted test clients need a bounded duration");
     std::ofstream poseTrace;
     if(commandline->HasArg("","--rune-net-pose-trace")) {poseTrace.open(commandline->GetArg("","--rune-net-pose-trace",""));poseTrace<<"now,snapshot,tick,entity,life,health,x,y,z,vz,body,phase,rate,torso,torso_phase,flags\n";}
+    const bool idleWait=commandline->GetArgInt("","--rune-net-idle-wait",1)!=0; // 0: previous fixed 2 ms poll.
+    uint64_t loops=0;
+    // Same Spawn/Appearance lane race as the client: retry, resync after 1 s, fail after 5 s.
+    uint64_t botInstallFailSince=0,botInstallResyncAt=0,botUnboundSince=0,botUnboundReport=0;
+    uint64_t botStallStart=0,botStallSeconds=0;bool botStalled=false;
+    if(auto stall=commandline->GetArg("","--rune-net-bot-stall","");!stall.empty()) {
+        const auto comma=stall.find(',');require(comma!=std::string::npos,"--rune-net-bot-stall=START,SECONDS");
+        botStallStart=std::stoull(stall.substr(0,comma));botStallSeconds=std::stoull(stall.substr(comma+1));
+        require(botStallSeconds>0 && botStallSeconds<=25,"bot stall must be 1..25 seconds");
+    }
+    auto botInstall=[&](const Snapshot& candidate,uint64_t now) {
+        if(replica.install(candidate)){botInstallFailSince=0;return true;}
+        if(!botInstallFailSince){botInstallFailSince=now;std::cout<<"OPEN_RUNE_BOT_WORLD_DEFERRED snapshot="<<candidate.id<<" reason="<<replica.rejection<<std::endl;}
+        require(now-botInstallFailSince<=5000,"bot snapshot install: "+replica.rejection);
+        if(now-botInstallFailSince>1000 && now>=botInstallResyncAt){peer.world.resync();botInstallResyncAt=now+1000;}
+        return false;
+    };
     uint64_t worlds=0,hbStartedAt=0,joinedAt=0,maxWorldGap=0,activeWorlds=0,activeMs=0,activeMaxGap=0;std::array<uint64_t,8> worldGaps{},activeGaps{};bool joined=false,thrown=false,lastWorldPlaying=false,selectedSkinSeen=false;std::optional<MatchStatus> prior;
     while(!seconds || nowMs()-start<uint64_t(seconds)*1000) {
-        auto now=nowMs();
+        auto now=nowMs();bool botActivity=false;++loops;
         const int leaveAfter=commandline->GetArgInt("","--rune-net-leave-after",0);
         if(leaveAfter>0 && joinedAt && now-joinedAt>=uint64_t(leaveAfter)*1000)break;
+        // Test only: --rune-net-bot-stall=START,SECONDS stops reading and acknowledging
+        // the host for SECONDS, START seconds after joining, like a congested relayed link.
+        if(botStallSeconds>0 && joinedAt && now>=joinedAt+botStallStart*1000) {
+            if(now<joinedAt+(botStallStart+botStallSeconds)*1000) {
+                if(!botStalled){botStalled=true;std::cout<<"OPEN_RUNE_BOT_STALL_BEGIN seconds="<<botStallSeconds<<std::endl;}
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));continue;
+            }
+            if(botStalled){botStalled=false;botStallSeconds=0;lastWorld=lastNonPlaying=now;std::cout<<"OPEN_RUNE_BOT_STALL_END"<<std::endl;}
+        }
         socket.receive([&](const sockaddr_in& source,std::span<const uint8_t> bytes){if(sameAddress(source,remote))session.receiveDatagram(bytes);});
         session.step(now);peer.step();
         if(peer.status())for(const auto& score:peer.status()->scores)if(score.player==ownedSlot && score.pawn.id)invite.owned=score.pawn;
@@ -1885,7 +1994,7 @@ void RunRuneMultiplayerBot(Engine& game,const std::string& invitationFile)
         if(peer.remoteClosed())break;
         if(peer.requestedTravel()) {
             auto travel=*peer.requestedTravel();invite.map=travel.match.map;
-            replica=RuneNetworkReplica{};brain=RuneBot::Brain(botSeed,commandline->GetArgInt("","--rune-bot-difficulty",1));brain.debug=commandline->HasArg("","--rune-bot-debug");brain.limbsScore=invite.limbsScore;load();joined=false;thrown=false;hbStartedAt=0;prior.reset();lastWorld=now;
+            replica=RuneNetworkReplica{};{auto previous=brain;brain=RuneBot::Brain(botSeed,commandline->GetArgInt("","--rune-bot-difficulty",1));brain.carryCounters(previous);}brain.debug=commandline->HasArg("","--rune-bot-debug");brain.limbsScore=invite.limbsScore;load();joined=false;thrown=false;hbStartedAt=0;prior.reset();lastWorld=now;
             require(peer.acceptTravel(MakeRuneMatchContract(game,invite.map,invite.players,invite.mode,invite.teams,invite.arenaTeamSize,invite.limbsScore)),"bot travel contract");
             std::cout<<"OPEN_RUNE_BOT_TRAVEL epoch="<<peer.mapEpoch()<<" map="<<invite.map<<std::endl;
         }
@@ -1896,9 +2005,16 @@ void RunRuneMultiplayerBot(Engine& game,const std::string& invitationFile)
             else require(replica.unbind(e.ref),"bot actor despawn");
         }
         if(auto* candidate=peer.world.candidate()) {
+            // A snapshot waits until every entity's reliable spawn has arrived. Name a long wait.
+            size_t unbound=0;const Entity* firstUnbound=nullptr;
+            for(const auto& e:candidate->world)if(!replica.actor(e.ref)){if(!unbound++)firstUnbound=&e;}
+            if(!unbound)botUnboundSince=0;
+            else if(!botUnboundSince){botUnboundSince=now;botUnboundReport=now+2000;}
+            else if(now>=botUnboundReport && (botUnboundReport=now+2000))
+                std::cout<<"OPEN_RUNE_BOT_WORLD_WAITING snapshot="<<candidate->id<<" unbound="<<unbound<<" first="<<firstUnbound->ref.id<<" kind="<<int(firstUnbound->kind)<<" waited_ms="<<now-botUnboundSince<<std::endl;
             if(replica.referencesRetired(*candidate))peer.world.discardObsolete();
-            else if(peer.status() && std::any_of(peer.status()->scores.begin(),peer.status()->scores.end(),[&](const PlayerScore& score){return score.player==ownedSlot && score.pawn.id;}) && std::all_of(candidate->world.begin(),candidate->world.end(),[&](const Entity& e){return replica.actor(e.ref)!=nullptr;})) {
-                require(replica.install(*candidate) && peer.world.commit(candidate->id),"bot snapshot install");
+            else if(peer.status() && std::any_of(peer.status()->scores.begin(),peer.status()->scores.end(),[&](const PlayerScore& score){return score.player==ownedSlot && score.pawn.id;}) && std::all_of(candidate->world.begin(),candidate->world.end(),[&](const Entity& e){return replica.actor(e.ref)!=nullptr;}) && botInstall(*candidate,now)) {
+                require(peer.world.commit(candidate->id),"bot snapshot commit");
                 if(joined) {
                     const auto gap=now-lastWorld;maxWorldGap=std::max(maxWorldGap,gap);
                     const std::array<uint64_t,7> limits={100,250,500,1000,2000,5000,15000};
@@ -1966,7 +2082,7 @@ void RunRuneMultiplayerBot(Engine& game,const std::string& invitationFile)
                 auto decision=brain.think(game,replica,snapshot->world,*peer.status(),invite.owned,now);
                 input=decision.input;action=decision.action;
             }
-            require(peer.inputs.capture(input,now).has_value(),"bot input queue");lastInput=now;
+            require(peer.inputs.capture(input,now).has_value(),"bot input queue");lastInput=now;botActivity=true;
             if(action){require(peer.inputs.act(*action,now).has_value(),"bot action queue");lastAction=now;}
             for(auto c:peer.drainCombat())require(replica.queueCombat(c,now),"bot combat queue");
             auto applied=replica.flushCombat(now);require(applied!=RuneNetworkReplica::CombatQueue::Fault,"bot combat dependencies");
@@ -1978,7 +2094,22 @@ void RunRuneMultiplayerBot(Engine& game,const std::string& invitationFile)
             for(const auto& s:prior->scores)std::cout<<" p"<<s.player<<"="<<s.frags<<","<<s.deaths;
             std::cout<<std::endl;
         }
-        socket.send(session,remote);networkPause(2);
+        socket.send(session,remote);
+        if(!idleWait)networkPause(2);
+        else {
+            // Bots do not need human-grade latency. Waking on every datagram measured
+            // ~590 loops/s versus ~420 for the fixed 2 ms poll, so use timed waits
+            // only: the old 2 ms floor while work is queued or input was just
+            // captured, otherwise sleep to the next ACK/retransmit/input deadline
+            // (<=10 ms) and let arriving datagrams batch in the socket buffer.
+            const auto after=nowMs();
+            uint64_t waitMs=botActivity?2:std::clamp<uint64_t>(session.idleMs(after,10),2,10);
+            // Joining receives a reliable bootstrap burst; keep the 2 ms drain until joined
+            // (a 10 ms wait measured transmit timeouts there, none afterwards).
+            if(joined)waitMs=std::min<uint64_t>(waitMs,std::max<uint64_t>(2,lastInput+20>after?lastInput+20-after:0));
+            else waitMs=2;
+            networkPause(unsigned(waitMs));
+        }
     }
     require(worlds>0,"bot received no world");
     peer.close(CloseReason::Leave);
@@ -1988,7 +2119,7 @@ void RunRuneMultiplayerBot(Engine& game,const std::string& invitationFile)
         session.step(nowMs());peer.step();socket.send(session,remote);networkPause(2);
     }
     require(selectedSkinSeen,"selected skin never arrived");
-    std::cout<<"OPEN_RUNE_BOT_AI decisions="<<brain.decisions<<" attacks="<<brain.attacks<<" defenses="<<brain.defenses<<" specials="<<brain.specials<<" objectives="<<brain.objectives<<" routes="<<brain.routes<<" bashes="<<brain.bashes<<" crossed_blocks="<<brain.crossBlocks<<" leaps="<<brain.leaps<<" charges="<<brain.charges<<" powers="<<brain.powers<<" max_think_us="<<brain.maxThinkUs<<std::endl;
-    std::cout<<"OPEN_RUNE_BOT_OK worlds="<<worlds<<" max_world_gap_ms="<<maxWorldGap<<" gap_buckets=";for(auto count:worldGaps)std::cout<<count<<",";
+    std::cout<<"OPEN_RUNE_BOT_AI decisions="<<brain.decisions<<" punishes="<<brain.punishes<<" leg_counters="<<brain.legCounters<<" throws="<<brain.throws<<" spacing="<<brain.spacing<<" guard_punishes="<<brain.guardPunishes<<" guard_escapes="<<brain.guardEscapes<<" third_party="<<brain.thirdParty<<" wounded_targets="<<brain.woundedTargets<<" target_overrides="<<brain.targetOverrides<<" early_swings="<<brain.earlySwings<<" swing_holds="<<brain.swingHolds<<" attacks="<<brain.attacks<<" defenses="<<brain.defenses<<" specials="<<brain.specials<<" objectives="<<brain.objectives<<" routes="<<brain.routes<<" bashes="<<brain.bashes<<" crossed_blocks="<<brain.crossBlocks<<" leaps="<<brain.leaps<<" charges="<<brain.charges<<" powers="<<brain.powers<<" max_think_us="<<brain.maxThinkUs<<std::endl;
+    std::cout<<"OPEN_RUNE_BOT_OK loops="<<loops<<" worlds="<<worlds<<" max_world_gap_ms="<<maxWorldGap<<" gap_buckets=";for(auto count:worldGaps)std::cout<<count<<",";
     std::cout<<" active_updates="<<activeWorlds<<" active_ms="<<activeMs<<" active_max_gap_ms="<<activeMaxGap<<" active_gap_buckets=";for(auto count:activeGaps)std::cout<<count<<",";std::cout<<std::endl;
 }

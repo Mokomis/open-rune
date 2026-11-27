@@ -14,6 +14,7 @@
 
 namespace RuneDualWield {
 namespace {
+constexpr int FollowupStarted=-2;
 int Joint(const USkelModel* m,const NameString& name) {
     if(m)for(size_t i=0;i<m->Joints.size() && i<50;++i)if(m->Joints[i].Name==name)return (int)i;
     return -1;
@@ -84,6 +85,14 @@ bool OneHanded(UWeapon* w) {
     return w && !w->bDeleteMe() && (w->IsA("VikingShortSword") || w->IsA("RomanSword") ||
         w->IsA("HandAxe") || w->IsA("GoblinAxe") || w->IsA("RustyMace"));
 }
+FollowupDamageScope::FollowupDamageScope(UWeapon* value):weapon(value) {
+    if(!weapon)return;
+    originalDamage=weapon->GetInt("Damage");
+    weapon->SetInt("Damage",(originalDamage+1)/2);
+}
+FollowupDamageScope::~FollowupDamageScope() {
+    if(weapon)weapon->SetInt("Damage",originalDamage);
+}
 bool Eligible(UPawn* p) {
     if(!engine || !engine->LaunchInfo.IsRune() || !p || p->bDeleteMe() || p->NetworkReplica)return false;
 #ifdef OPENRUNE_ENABLE_NETWORK
@@ -124,6 +133,9 @@ bool Equip(UPawn* p,UWeapon* w) {
 void Unequip(UPawn* p,bool drop) {
     auto* w=p->Dual.offhand;
     if(w && p->Dual.left)if(auto* proxy=p->GetUObject("AnimProxy");proxy && proxy->GetStateName()=="Attacking")CallEvent(proxy,"StopAttack");
+    p->Dual.followPrimed=false;
+    p->Dual.followAvailable=false;
+    p->Dual.followStartFrame=-1;
     p->Dual.lastWholeBody=-1;
     p->Dual.offhand=nullptr;p->Dual.guard=false;p->Dual.guardBlend=0;p->Dual.left=false;
     if(!w)return;
@@ -152,6 +164,11 @@ void BeginSwing(UPawn* p) {
     if(!Equipped(p))return;
     Cold(p->Weapon());Cold(p->Dual.offhand);
     p->Dual.guard=false;p->Dual.left=p->Dual.nextLeft;p->Dual.nextLeft=!p->Dual.nextLeft;
+    // The opening right attack is single. Subsequent right attacks can
+    // carry a trailing offhand cut after a left strike has been committed.
+    p->Dual.followAvailable=!p->Dual.left && p->Dual.followPrimed;
+    if(p->Dual.left)p->Dual.followPrimed=true;
+    p->Dual.followStartFrame=-1;
     if(!p->Dual.left)p->Dual.lastWholeBody=-1;
     if(p->Dual.left)p->Dual.leftSwings++;else p->Dual.rightSwings++;
 }
@@ -242,18 +259,18 @@ void Tick(UPawn* p,float dt) {
         }
     }
     if(!Equipped(p))return;
-    if(!SafeState(p)) {s.lastWholeBody=-1;s.guard=false;s.guardBlend=0;s.left=false;Cold(s.offhand);return;}
+    if(!SafeState(p)) {s.lastWholeBody=-1;s.guard=false;s.guardBlend=0;s.left=false;s.followAvailable=false;Cold(s.offhand);return;}
     if(UObject::TryCast<UPlayerPawn>(p))Guard(p,p->GetByte("bAltFire")!=0);
     else if(Busy(p))s.guard=false;
     s.guardBlend=std::clamp(s.guardBlend+(s.guard?1.f:-1.f)*dt/0.12f,0.f,1.f);
-    if(!Busy(p)) { s.left=false;Cold(s.offhand); }
+    if(!Busy(p)) { s.left=false;s.followAvailable=false;Cold(s.offhand); }
     UpdatePoseState(p);
 }
 bool ScriptCall(UFunction* f,UObject* object,const ArrayView<ExpressionValue>& args,ExpressionValue& result) {
     auto name=f->Name;
     static const NameString intercepted[]={"LimbSevered","PostBeginPlay","Died","Destroyed","PlayAttack","AcquireInventory","SwitchWeapon",
         "DropShield","Throw","ThrowWeapon","DropWeapon","DeleteInventory","InstantStow","Attack","Defend","ActivateShield","JointDamaged","WeaponActivate","WeaponDeactivate",
-        "SwipeEffectStart","SwipeEffectEnd","ClearSwipeArray","FrameNotify"};
+        "SwipeEffectStart","SwipeEffectEnd","ClearSwipeArray","FrameNotify","StopAttack"};
     if(std::find(std::begin(intercepted),std::end(intercepted),name)==std::end(intercepted))return false;
     auto* p=Pawn(object);if(!p || !Eligible(p))return false;
     if(name=="DeleteInventory" && args.size()) {
@@ -292,8 +309,30 @@ bool ScriptCall(UFunction* f,UObject* object,const ArrayView<ExpressionValue>& a
             p->Dual.blocks++;result=Frame::Call(f,object,{adjusted.data(),adjusted.size()});return true;
         }
     }
-    if(!p->Dual.left)return false;
     auto* w=p->Dual.offhand;
+    if(!p->Dual.left) {
+        if(name=="WeaponDeactivate" || name=="StopAttack") {
+            p->Dual.followAvailable=false;
+            Cold(w);
+        }
+        if(name=="FrameNotify" && args.size() && p->Dual.followAvailable &&
+           (proxy || !p->IsA("RunePlayer")) && p->Weapon()->GetStateName()=="Swinging") {
+            int frame=args[0].ToInt();
+            if(p->Dual.followStartFrame==-1)p->Dual.followStartFrame=frame;
+            if(p->Dual.followStartFrame==FollowupStarted || frame>=p->Dual.followStartFrame+2) {
+                if(p->Dual.followStartFrame!=FollowupStarted) {
+                    p->Dual.followStartFrame=FollowupStarted;
+                    CallEvent(w,"StartAttack");
+                    CallEvent(w,"EnableSwipeTrail");
+                }
+                if(w->GetStateName()=="Swinging") {
+                    FollowupDamageScope damage(w);
+                    CallEvent(w,"FrameNotify",{args[0]});
+                }
+            }
+        }
+        return false; // The primary hand still receives its normal notify.
+    }
     if(name=="WeaponActivate") { CallEvent(w,"StartAttack");return true; }
     if(name=="WeaponDeactivate") {Cold(w);return true;}
     if(name=="SwipeEffectStart") {CallEvent(w,"EnableSwipeTrail");return true;}
@@ -302,7 +341,7 @@ bool ScriptCall(UFunction* f,UObject* object,const ArrayView<ExpressionValue>& a
     if(name=="FrameNotify" && args.size()) {CallEvent(w,"FrameNotify",{args[0]});return true;}
     return false;
 }
-void ApplyPose(const USkelModel& model,UActor* actor,Array<RuneJointPose>& pose) {
+void ApplyPose(const USkelModel& model,UActor* actor,Array<RuneJointPose>& pose,int sweepFrame) {
     auto* p=UObject::TryCast<UPawn>(actor);if(!p || !Equipped(p) || (!p->NetworkReplica && !SafeState(p)))return;
     auto source=pose;
     // Original scripts play standing/spinning attacks on both animation groups.
@@ -358,6 +397,39 @@ void ApplyPose(const USkelModel& model,UActor* actor,Array<RuneJointPose>& pose)
             target.Rotation=RunePoseEuler(corrected);
         }
         pose[j]=body?BlendRunePose(source[j],target,bodyBlend):target;
+    }
+    // On a right-hand swing, trail the left arm by two authored frames.
+    // Use the same sample for exact-frame collision and interpolated display.
+    auto* clock=UObject::TryCast<UActor>(p->GetUObject("AnimProxy"));
+    if(!clock)clock=p;
+    if(!p->Dual.left && p->Dual.followAvailable) {
+        for(size_t seq=0;seq<model.Sequences.size();++seq) {
+            const auto& info=model.Sequences[seq].Info;
+            if(info.Name!=clock->AnimSequence() || info.NumFrames<3)continue;
+            float phase=sweepFrame>=0?float(sweepFrame)/info.NumFrames:clock->AnimFrame();
+            auto delayed=model.SampleFrame(seq,std::max(0.f,phase-2.f/info.NumFrames),false);
+            const auto delayedBones=model.JointMatrices(delayed);
+            const auto currentBones=model.JointMatrices(pose);
+            const auto mirror=mat4::scale(-1,1,1);
+            for(auto leftName:{"lclav","lshoulda","lshouldb","lelbow","lwrist","lhand"}) {
+                int left=Joint(&model,leftName);
+                int right=Joint(&model,std::string("r")+std::string(leftName+1));
+                if(left<0 || right<0)continue;
+                pose[left]=Mirror(delayed[right]);
+                const auto parent=model.Joints[left].Parent;
+                if(parent>0 && !model.Joints[parent].Name.ToString().starts_with("l")) {
+                    // Both arms share one animated torso. Rebase the trailing
+                    // shoulder into that torso to keep the cut in front of the pawn.
+                    auto local=InverseAffine(currentBones[parent])*mirror*delayedBones[right]*mirror;
+                    for(int c=0;c<3;++c) {
+                        float scale=length(vec3(local[c*4],local[c*4+1],local[c*4+2]));
+                        if(scale>.001f)for(int r=0;r<3;++r)local[c*4+r]/=scale;
+                    }
+                    pose[left].Rotation=RunePoseEuler(local);
+                }
+            }
+            break;
+        }
     }
     const float visualGuard=p->NetworkReplica && p->RuneCombatPreviewGuard>=0?p->RuneCombatPreviewGuard:p->Dual.guardBlend;
     if(visualGuard>0) {

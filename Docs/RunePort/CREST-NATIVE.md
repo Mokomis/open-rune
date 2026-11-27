@@ -1,5 +1,6 @@
 # Native Crest water — Android qualification, November 9, 2026
 
+Crest is integrated into `C:/OpenRune/work/OpenRune-main`; the development worktree is `C:/OpenRune/work/OpenRune-crest-20261108`. Android source builds on Windows and the OPPO has the signed `crest-android-refraction.apk` from `/Users/rwillmore/OpenRuneArtifacts/CrestAndroid-20261108`. The installed APK hash matches that artifact, and its original signing certificate is retained. No commit or push was performed.
 
 ## Implementation
 
@@ -37,3 +38,4 @@ Independent inverse-DFT checks against actual Adreno GPU readbacks pass all 16 c
 
 The current wind/choppiness/height preset is shared, with depth attenuation; there is no automatic calm-pool/storm classification. Gameplay water volumes remain flat. This is an adapted Crest 4 simulation/material, not complete Crest: buoyancy, full underwater volume scattering/total internal reflection and reflected rooms/actors/SSR are not provided. Mac Crest qualification remains outstanding. Native beach performance is still costly; the 50% option is retained and useful. Ocean-foam improvements are explicitly deferred in `IDEAS.md`.
 
+Evidence: controller `/Users/rwillmore/OpenRuneArtifacts/CrestAndroid-20261108`, Windows `C:/OpenRune/outputs/crest-native-20261108`. Exact arguments, profiles, captures, readbacks, source stages, merge receipts, signing and preservation checks are saved there. Original game data and normal saves were not replaced.

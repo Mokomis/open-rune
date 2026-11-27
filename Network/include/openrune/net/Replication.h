@@ -5,12 +5,16 @@
 #include <map>
 #include <deque>
 #include <functional>
+#include <optional>
 #include <string>
 
 namespace openrune::net
 {
 constexpr size_t MaxEntities = 512, SnapshotPartBytes = 640, MaxSnapshotBytes = 40960;
 constexpr uint64_t InputMaxAge = 250, SnapshotTransferTimeout = 10000;
+// Server-observed recovery from a missed swing or a shield-bash stun on a living pawn.
+// On weapon entities this bit retains its original powered-weapon meaning.
+constexpr uint8_t FinisherOpeningFlag=128;
 struct EntityRef
 {
     uint32_t id = 0, generation = 0;
@@ -30,6 +34,8 @@ struct NativeCombat
     uint16_t age=0, cooldown=0; // milliseconds
     uint8_t ready=0; // leap=1, charge=2; server evaluated
     uint8_t runePower=0, runeCapacity=0; // original Rune Power, 0..200
+    // Relative to the holder in 1/8 units, only while a corpse is on the blade.
+    std::optional<std::array<int16_t,3>> impaleAim;
     bool operator==(const NativeCombat&) const = default;
 };
 // Host-authored physical presentation, never accepted from a client.

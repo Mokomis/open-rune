@@ -256,11 +256,16 @@ void TraceTester::TraceActor(UActor* actor, const dvec3& origin, double tmin, co
 
 		float jointFraction;
 		vec3 jointNormal;
+		int joint = -1;
 		if (RuneJointCollision::Trace(actor, vec3(origin), vec3(origin + dirNormalized * tmax),
-			vec3((float)radius, (float)radius, (float)height), jointFraction, jointNormal))
+			vec3((float)radius, (float)radius, (float)height), jointFraction, jointNormal, &joint))
 		{
 			if (jointFraction < 1)
-				hits.push_back({ (float)(jointFraction * tmax), jointNormal, actor, nullptr, nullptr });
+			{
+				CollisionHit hit((float)(jointFraction * tmax), jointNormal, actor, nullptr, nullptr);
+				hit.Joint = joint;
+				hits.push_back(hit);
+			}
 			return;
 		}
 		double t = CylinderActorTrace(origin, tmin, dirNormalized, tmax, height, radius, actor);

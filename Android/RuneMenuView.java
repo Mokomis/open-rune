@@ -966,6 +966,7 @@ final class RuneMenuView extends FrameLayout {
             case 8:glyph(c,RuneTouchLayout.USE,39,39,.88f,0);break;
             case 9:glyph(c,RuneTouchLayout.DIVE,39,39,.88f,0);break;
             case 10:glyph(c,RuneTouchLayout.ATTACK,39,39,.88f,0);break;
+            case 13:glyph(c,RuneTouchLayout.ATTACK,39,39,.92f,0);break;
             case 12:glyph(c,RuneTouchLayout.USE,30,32,.65f,0);glyph(c,RuneTouchLayout.JUMP,57,54,.45f,0);break;
             default:glyph(c,RuneTouchLayout.POWER,39,39,.88f,0);break;
             }

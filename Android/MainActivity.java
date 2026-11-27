@@ -37,6 +37,7 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
     private static native String nativeMultiplayerStatus();
     private static native void nativeMultiplayerAction(int action);
     private boolean wasMultiplayer, respawning, networkWasDead, bloodlustTouchScheduled,slamTouchScheduled;
+    private Button respawnButton;private long respawnRequestedAt;
     private RuneHosting hosting;
     private RuneDiscovery discovery;
     private String discoveryKey(){return getSharedPreferences("multiplayer",0).getString("discoveryKey","");}
@@ -79,7 +80,10 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
         return value;
     }
     public void leaveMultiplayer(){releaseKeys();nativeMultiplayerAction(1);if(discovery!=null)menu.postDelayed(()->discovery.command("leave",null),1000);if(hosting!=null)hosting.stop();}
-    public void respawnMultiplayer(){nativeMultiplayerAction(2);respawning=true;menu.setNotice("Respawning when ready…");}
+    public void respawnMultiplayer(){
+        nativeMultiplayerAction(2);respawning=true;respawnRequestedAt=android.os.SystemClock.elapsedRealtime();menu.setNotice("Respawning when ready…");
+        if(respawnButton!=null){respawnButton.setText("Respawning…");respawnButton.setEnabled(false);}
+    }
     public void chooseInvitation(){
         android.content.Intent picker=new android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT);
         picker.addCategory(android.content.Intent.CATEGORY_OPENABLE);picker.setType("*/*");
@@ -386,8 +390,103 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
         double v=Math.toDegrees(2*Math.atan(Math.tan(Math.toRadians(h)/2)/aspect));
         return String.format(java.util.Locale.ROOT,"Current camera: %.1f° horizontal · %.1f° vertical",h,v);
     }
+    // Startup guard. The renderer can fail on GPUs/drivers missing required features, or because of
+    // the experimental Crest water / Turnip driver options. Native code writes the reason to
+    // launch-error.txt; finish() shows it instead of closing silently. launch-pending counts starts
+    // that never rendered a frame (including hard crashes); two in a row turn the risky options off.
+    private boolean startupConfirmed,launchErrorShown;
+    private String startupNotice;
+    private File launchError(){return new File(getFilesDir(),"launch-error.txt");}
+    private File launchPending(){return new File(getFilesDir(),"launch-pending");}
+    private boolean riskyGraphics(){return getPreferences(MODE_PRIVATE).getInt("menu.water",1)==3||new File(getFilesDir(),"turnip-enabled").exists();}
+    private void resetRiskyGraphics(){
+        getPreferences(MODE_PRIVATE).edit().putInt("menu.water",1).apply();
+        new File(getFilesDir(),"turnip-enabled").delete();
+    }
+    private void beginStartupGuard(){
+        launchError().delete();
+        if(getIntent().hasExtra("saveTest"))return; // Diagnostic launches are force-stopped by design.
+        int failures=0;
+        try{failures=Integer.parseInt(new String(java.nio.file.Files.readAllBytes(launchPending().toPath())).trim());}catch(Exception ignored){}
+        if(failures>=2){
+            if(riskyGraphics()){resetRiskyGraphics();startupNotice="Open Rune didn't finish starting twice in a row, so Crest water and the experimental Turnip driver were turned off.";}
+            failures=0;
+        }
+        try{java.nio.file.Files.write(launchPending().toPath(),String.valueOf(failures+1).getBytes());}catch(Exception ignored){}
+    }
+    private void confirmStartup(){
+        if(startupConfirmed||nativeGetEngineFps()<=0)return;
+        startupConfirmed=true;launchPending().delete();
+        // A dialog, not the HUD: the title menu covers the HUD on a normal start.
+        if(startupNotice!=null){
+            new android.app.AlertDialog.Builder(this).setTitle("Graphics options reset").setMessage(startupNotice)
+                .setPositiveButton("OK",null).show();
+            startupNotice=null;
+        }
+    }
+    // SDL calls finish() from its main thread when the native game returns.
+    @Override public void finish(){
+        File error=launchError();
+        if(launchErrorShown||!error.exists()){super.finish();return;}
+        launchErrorShown=true;
+        String reason;
+        try{reason=new String(java.nio.file.Files.readAllBytes(error.toPath()),java.nio.charset.StandardCharsets.UTF_8).trim();}catch(Exception e){reason="";}
+        error.delete();
+        final boolean risky=riskyGraphics();
+        final String detail=reason.isEmpty()?"No details were recorded.":reason;
+        final String intro=detail.contains("bindless")||detail.contains("No vulkan")||detail.contains("RUNE_VULKAN_LOADER")
+            ?"This device's graphics driver is missing a feature Open Rune needs, so the game can't run on it."
+            :"Open Rune had to close because of this error:";
+        runOnUiThread(()->{
+            android.app.AlertDialog.Builder dialog=new android.app.AlertDialog.Builder(this)
+                .setTitle("Open Rune stopped")
+                .setMessage(intro+"\n\n"+detail+(risky?"\n\nExperimental graphics options (Crest water or the Turnip driver) are on and may be the cause.":""))
+                .setCancelable(false)
+                .setNegativeButton("Close",(d,w)->super.finish());
+            if(risky)dialog.setPositiveButton("Turn them off and close",(d,w)->{resetRiskyGraphics();super.finish();});
+            dialog.show();
+        });
+    }
+    // First-run performance tuning. Defaults (50% resolution, 4x MSAA) are tuned on the Adreno 829
+    // test device. On a fresh install, measure live gameplay once and step MSAA down (4x, 2x, off)
+    // while the engine stays below 85% of 60 FPS (or the chosen target, if lower). Resolution is
+    // never lowered automatically. Installs with saved graphics choices are never tuned.
+    private static final String AUTO_TUNED="menu.autoTunedV1";
+    private boolean tuneActive;
+    private int tuneWarmup,tuneSamples,tuneSteps;
+    private final float[] tuneFps=new float[10];
+    private String tuneStart;
+    private void beginAutoTune(){
+        android.content.SharedPreferences p=getPreferences(MODE_PRIVATE);
+        // Test hook: saveTest launches may force a measurement against a chosen goal.
+        if(getIntent().hasExtra("saveTest")){tuneActive=getIntent().hasExtra("autoTuneGoal");return;}
+        if(p.getBoolean(AUTO_TUNED,false))return;
+        if(p.contains("menu.aa")||p.contains("menu.resolution")){p.edit().putBoolean(AUTO_TUNED,true).apply();return;}
+        tuneActive=true;
+    }
+    private void autoTuneTick(){
+        if(!tuneActive||menuOpen||busySession||!nativeCombatReady())return;
+        if(tuneStart==null)tuneStart=options.items.get("aa").label();
+        if(tuneWarmup<6){tuneWarmup++;return;} // 3 s to settle after start or after a change
+        tuneFps[tuneSamples++]=nativeGetEngineFps();
+        if(tuneSamples<tuneFps.length)return;
+        float[] sorted=tuneFps.clone();java.util.Arrays.sort(sorted);
+        float median=sorted[sorted.length/2];
+        float goal=getIntent().hasExtra("autoTuneGoal")?getIntent().getIntExtra("autoTuneGoal",60):Math.min(60,options.frameTarget());
+        tuneSamples=0;tuneWarmup=0;
+        boolean slow=median<goal*0.85f;
+        android.util.Log.i("OpenRune","AUTO_TUNE median_fps="+median+" goal="+goal+" aa="+options.get("aa")+" slow="+slow);
+        if(slow&&options.get("aa")>0&&tuneSteps<2){options.set("aa",options.get("aa")-1);tuneSteps++;return;}
+        tuneActive=false;
+        getPreferences(MODE_PRIVATE).edit().putBoolean(AUTO_TUNED,true).apply();
+        String result=options.items.get("aa").label();
+        android.util.Log.i("OpenRune","AUTO_TUNE done steps="+tuneSteps+" aa="+result);
+        if(tuneSteps>0)android.widget.Toast.makeText(this,"Anti-aliasing set to "+result+" for smoother play on this device (was "+tuneStart+"). You can change it in Video settings.",android.widget.Toast.LENGTH_LONG).show();
+    }
     private final Runnable updateStatus=new Runnable(){public void run(){
+        confirmStartup();
         if(!controlsVisible||fpsLabel==null||frameBenchmark())return;
+        autoTuneTick();
         hosting().poll();
         String networkInvite=getIntent().getStringExtra("networkInvite");
         if(networkInvite!=null&&nativeCombatReady()){
@@ -424,8 +523,16 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
             if(deathObservedAt==0)deathObservedAt=now;
             // Let the death animation begin, then offer recovery without a
             // keyboard command or the legacy UWindow menu.
-            if(!menuOpen&&now-deathObservedAt>=1500)openMenu();
+            if(network) {
+                if(respawning&&now-respawnRequestedAt>=1000){nativeMultiplayerAction(2);respawnRequestedAt=now;}
+            }
+            else if(!menuOpen&&now-deathObservedAt>=1500)openMenu();
             else if(menuOpen&&menu.screen.equals("pause"))menu.showHome();
+        }
+        if(respawnButton!=null) {
+            boolean show=network&&dead&&!menuOpen&&!busySession&&deathObservedAt>0&&android.os.SystemClock.elapsedRealtime()-deathObservedAt>=1500;
+            if(show&&respawnButton.getVisibility()!=View.VISIBLE&&!respawning){respawnButton.setText("Respawn");respawnButton.setEnabled(true);}
+            respawnButton.setVisibility(show?View.VISIBLE:View.GONE);
         }
         syncFeedback();
         if(!initializedAudio&&nativeGetVisualMode()>=0){
@@ -460,6 +567,12 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
         FrameLayout.LayoutParams fpsPos=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.RIGHT);fpsPos.topMargin=dp(12);fpsPos.rightMargin=dp(12);controls.addView(fpsLabel,fpsPos);
         mLayout.addView(controls,new RelativeLayout.LayoutParams(-1,-1));
         hud=new RuneHudView(this,getPreferences(MODE_PRIVATE),this);mLayout.addView(hud,new RelativeLayout.LayoutParams(-1,-1));
+        respawnButton=new Button(this);respawnButton.setText("Respawn");respawnButton.setAllCaps(false);respawnButton.setTextSize(22);
+        respawnButton.setTextColor(RuneMenuView.GOLD);respawnButton.setVisibility(View.GONE);
+        {android.graphics.drawable.GradientDrawable face=new android.graphics.drawable.GradientDrawable();face.setColor(0xdd101314);face.setStroke(dp(2),RuneMenuView.GOLD);face.setCornerRadius(dp(6));respawnButton.setBackground(face);}
+        respawnButton.setOnClickListener(v->{if(multiplayer()&&dead()&&!respawning)respawnMultiplayer();});
+        RelativeLayout.LayoutParams respawnPos=new RelativeLayout.LayoutParams(dp(240),dp(64));respawnPos.addRule(RelativeLayout.CENTER_HORIZONTAL);respawnPos.addRule(RelativeLayout.ALIGN_PARENT_BOTTOM);respawnPos.bottomMargin=dp(110);
+        mLayout.addView(respawnButton,respawnPos);
         menuLayer=new FrameLayout(this);menu=new RuneMenuView(this,this);menuLayer.addView(menu,new FrameLayout.LayoutParams(-1,-1));mLayout.addView(menuLayer,new RelativeLayout.LayoutParams(-1,-1));
         options.listener=this::applySettings;applySettings("initial");
         if(getIntent().getBooleanExtra("touchProbe",false)&&getIntent().hasExtra("saveTest"))controls.post(()->RuneTouchProbe.run(this,getPreferences(MODE_PRIVATE)));
@@ -487,6 +600,9 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
             if(k==KeyEvent.KEYCODE_DPAD_UP||k==KeyEvent.KEYCODE_DPAD_DOWN||k==KeyEvent.KEYCODE_DPAD_LEFT||k==KeyEvent.KEYCODE_DPAD_RIGHT||k==KeyEvent.KEYCODE_DPAD_CENTER||k==KeyEvent.KEYCODE_ENTER||k==KeyEvent.KEYCODE_TAB||k==KeyEvent.KEYCODE_BUTTON_A)
                 { menu.controllerKey(event); return true; }
             return true;
+        }
+        if(respawnButton!=null&&respawnButton.getVisibility()==View.VISIBLE&&(k==KeyEvent.KEYCODE_BUTTON_A||k==KeyEvent.KEYCODE_ENTER||k==KeyEvent.KEYCODE_DPAD_CENTER)){
+            if(down&&event.getRepeatCount()==0&&!respawning)respawnMultiplayer();return true;
         }
         if(controller!=null&&controller.key(event))return true;
         return super.dispatchKeyEvent(event);
@@ -585,6 +701,7 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
     @Override public void setOrientationBis(int width,int height,boolean resizable,String hint){super.setOrientationBis(width,height,resizable,getIntent().getBooleanExtra("reverseLandscape",false)?"LandscapeRight":"LandscapeLeft LandscapeRight");}
     @Override protected void onCreate(Bundle state){
         try(InputStream in=getAssets().open("SurrealEngine.pk3");FileOutputStream out=new FileOutputStream(new File(getFilesDir(),"SurrealEngine.pk3"))){byte[] b=new byte[65536];int n;while((n=in.read(b))!=-1)out.write(b,0,n);}catch(Exception e){throw new RuntimeException("Could not prepare game resources",e);}
+        beginStartupGuard();
         options=new RuneSettings(getPreferences(MODE_PRIVATE),initialClarity(),initialWorldFeatures(),initialEnhanced(),initialUpscale());
         options.items.get("texturePack").value=initialTexturePack();
         if(getIntent().hasExtra("fireEffects"))options.items.get("fireEffects").value=getIntent().getBooleanExtra("fireEffects",true)?1:0;
@@ -601,6 +718,7 @@ public class MainActivity extends SDLActivity implements RuneMenuView.Host, Rune
         }
         if(getIntent().hasExtra("msaa"))options.items.get("aa").value=Math.max(0,Math.min(2,getIntent().getIntExtra("msaa",2)));
         if(getIntent().hasExtra("pacing"))options.items.get("pacing").value=getIntent().getIntExtra("pacing",1)!=0?1:0;
+        beginAutoTune();
         super.onCreate(state);getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         if(getIntent().hasExtra("aspectPreview")) {
             // App-only layout diagnostic: never change Android display settings.

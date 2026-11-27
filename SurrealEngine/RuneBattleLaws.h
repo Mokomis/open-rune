@@ -5,9 +5,9 @@
 
 // A match owns one immutable ruleset. Campaign preferences never overwrite it.
 namespace RuneBattleLaws {
-enum Law : uint32_t { Kick=1u<<0, Bash=1u<<1, Dual=1u<<2, Cross=1u<<3, Leap=1u<<4, Rush=1u<<5, Slam=1u<<6, Corpse=1u<<7, Props=1u<<8, Knockdown=1u<<9, Tactics=1u<<10, Normal=1u<<11, Spider=1u<<12 };
-inline constexpr std::array<const char*,13> Keys={"kick","bash","dual-wield","crossed-block","giant-leap","shield-rush","aerial-slam","corpses","props","knockdowns","tactics","normal-moves","spider-monkeys"};
-inline constexpr uint32_t All=(1u<<13)-1;
+enum Law : uint32_t { Kick=1u<<0, Bash=1u<<1, Dual=1u<<2, Cross=1u<<3, Leap=1u<<4, Rush=1u<<5, Slam=1u<<6, Corpse=1u<<7, Props=1u<<8, Knockdown=1u<<9, Tactics=1u<<10, Normal=1u<<11, Spider=1u<<12, Finishers=1u<<13 };
+inline constexpr std::array<const char*,14> Keys={"kick","bash","dual-wield","crossed-block","giant-leap","shield-rush","aerial-slam","corpses","props","knockdowns","tactics","normal-moves","spider-monkeys","finishers"};
+inline constexpr uint32_t All=(1u<<14)-1;
 inline constexpr uint32_t DefaultCampaign=All & ~(Leap|Spider);
 inline std::atomic<uint32_t> Campaign{DefaultCampaign}, Multiplayer{All};
 inline std::atomic<bool> InMatch{false};
@@ -22,7 +22,7 @@ struct MatchScope {
  ~MatchScope(){Multiplayer=mask;InMatch=previous;}
 };
 struct Entry {Law bit;const char* name;const char* description;};
-inline constexpr std::array<Entry,13> Entries={{
+inline constexpr std::array<Entry,14> Entries={{
 {Kick,"Kick","F / right-stick click / Kick button. Faster close-range kick; raised shields absorb most force. A strong sword strike to an exposed kicking leg can sever it; survivors hop and bleed."},
 {Bash,"Shield bash","Double-tap Block with a shield. Shield swipe, brief stun and head recoil on a clean hit."},
 {Dual,"Dual wield","Pick up a second compatible one-handed weapon with Use; Attack alternates weapons. Shields stay stowed."},
@@ -36,5 +36,6 @@ inline constexpr std::array<Entry,13> Entries={{
 {Tactics,"Tactical campaign enemies","Eligible campaign humanoids use spacing, defense and permitted special moves. Multiplayer bots always obey the selected laws."},
 {Normal,"Special moves without rage","Leap and shield rush need no bloodlust. Uncheck to require bloodlust; their cooldowns and individual checkboxes still apply."},
 {Spider,"Spider Monkeys","Jump toward a wall, then Use (Ctrl / left-stick click / Use button) to grab. Move to climb or traverse; Jump pushes away; Use or Crouch drops. Original pull-up motion. Bots need a clear exit. Campaign default: Off."},
+{Finishers,"Weapon finishers","Attack or throw a weapon at an exposed back, or punish a missed swing or shield-bash stun. A clean hit can kill at full health. One or two swords can hold a defeated enemy. Press Attack again or step away to pull free. Kicks deal ordinary damage."},
 }};
 }
